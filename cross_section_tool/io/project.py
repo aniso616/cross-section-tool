@@ -9,6 +9,7 @@ from typing import Any
 import h5py
 import numpy as np
 
+from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
 from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
@@ -78,6 +79,7 @@ class Project:
         self.horizon_picks: list[HorizonPick] = []
         self.wells: list[Well] = []
         self.seismic_refs: list[SeismicRef] = []
+        self.polygons: list[SectionPolygon] = []
 
     # ------------------------------------------------------------------
     # Persistence
@@ -95,6 +97,7 @@ class Project:
             _save_horizon_picks(f, self.horizon_picks)
             _save_wells(f, self.wells)
             _save_seismic_refs(f, self.seismic_refs)
+            _save_polygons(f, self.polygons)
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> "Project":
@@ -109,6 +112,7 @@ class Project:
             proj.horizon_picks = _load_horizon_picks(f)
             proj.wells = _load_wells(f)
             proj.seismic_refs = _load_seismic_refs(f)
+            proj.polygons = _load_polygons(f)
         return proj
 
     def __repr__(self) -> str:
@@ -336,6 +340,35 @@ def _load_seismic_refs(f: h5py.File) -> list[SeismicRef]:
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
+def _save_polygons(f: h5py.File, polygons: list[SectionPolygon]) -> None:
+    grp = f.create_group("polygons")
+    for i, poly in enumerate(polygons):
+        sg = grp.create_group(str(i))
+        sg.attrs["name"] = poly.name
+        sg.attrs["fill_color"] = poly.fill_color
+        sg.attrs["fill_alpha"] = poly.fill_alpha
+        sg.attrs["edge_color"] = poly.edge_color
+        sg.attrs["edge_width"] = poly.edge_width
+        sg.create_dataset("vertices", data=poly._vertices, dtype="float64")
+
+
+def _load_polygons(f: h5py.File) -> list[SectionPolygon]:
+    if "polygons" not in f:
+        return []
+    grp = f["polygons"]
+    return [
+        SectionPolygon(
+            vertices=grp[k]["vertices"][:],
+            name=_str(grp[k].attrs.get("name", "")),
+            fill_color=_str(grp[k].attrs.get("fill_color", "#9467bd")),
+            fill_alpha=float(grp[k].attrs.get("fill_alpha", 0.6)),
+            edge_color=_str(grp[k].attrs.get("edge_color", "#555555")),
+            edge_width=float(grp[k].attrs.get("edge_width", 1.0)),
+        )
+        for k in _sorted_keys(grp)
+    ]
+
 
 def _str(value: Any) -> str:
     """Coerce h5py attribute / dataset values to plain Python str."""

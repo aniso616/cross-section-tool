@@ -12,6 +12,7 @@ from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick
 from cross_section_tool.views.map_view import MapView
 from cross_section_tool.views.section_view import SectionView
+from cross_section_tool.views.tool_palette import ToolPalette
 from cross_section_tool.views.viewer_3d import Viewer3D
 
 
@@ -63,6 +64,9 @@ class TestConstruction:
 
     def test_has_splitter(self, win):
         assert isinstance(win._splitter, QSplitter)
+
+    def test_has_tool_palette(self, win):
+        assert isinstance(win._tool_palette, ToolPalette)
 
     def test_has_tab_widget(self, win):
         assert isinstance(win._tabs, QTabWidget)
@@ -313,10 +317,29 @@ class TestPickingWorkflow:
         assert pytest.approx(pick.depths[0]) == 800.0
 
     def test_pick_action_toggles_picking_in_section_view(self, win):
-        win._pick_action.setChecked(True)
+        # Picking is now driven by the tool palette; the menu pick_action syncs to it
+        win._tool_palette.set_active_tool("horizon_pick")
         assert win._section_view._picking_active
-        win._pick_action.setChecked(False)
+        win._tool_palette.set_active_tool("select")
         assert not win._section_view._picking_active
+
+    def test_tool_palette_default_tool_is_select(self, win):
+        assert win._tool_palette.active_tool == "select"
+
+    def test_tool_palette_horizon_enables_picking(self, win):
+        win._tool_palette.set_active_tool("horizon_pick")
+        assert win._section_view._picking_active
+
+    def test_tool_palette_select_disables_picking(self, win):
+        win._tool_palette.set_active_tool("horizon_pick")
+        win._tool_palette.set_active_tool("select")
+        assert not win._section_view._picking_active
+
+    def test_pick_menu_action_syncs_palette(self, win):
+        win._pick_action.setChecked(True)
+        assert win._tool_palette.active_tool == "horizon_pick"
+        win._pick_action.setChecked(False)
+        assert win._tool_palette.active_tool == "select"
 
 
 # ---------------------------------------------------------------------------

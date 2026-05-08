@@ -17,12 +17,16 @@ from cross_section_tool.core.section import Section
 # Constants
 # ---------------------------------------------------------------------------
 
-_HIT_PX = 10              # node / line pick tolerance in display pixels
+_HIT_PX = 8               # line pick tolerance in display pixels
+_NODE_HIT_PX = 8          # node selection radius in screen pixels
+_DRAG_MIN_PX = 4          # minimum pixel movement before drag activates
 _ACTIVE_COLOR = "#1f77b4"
 _INACTIVE_COLOR = "#999999"
 _ACTIVE_LW = 2.0
 _INACTIVE_LW = 1.0
 _NODE_MS = 7              # marker size (points)
+_SELECTED_COLOR = "#ff7f0e"
+_SELECTED_MS = 11
 _WELL_COLOR = "#8B4513"
 _SURFACE_COLOR = "darkorange"
 _SEISMIC_COLOR = "#888888"
@@ -52,7 +56,11 @@ class MapView(QWidget):
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
-        self._drag: dict | None = None  # keys: sec_idx, node_idx, section_copy
+        self._selected_node: tuple[int, int] | None = None  # (sec_idx, node_idx)
+        self._mouse_pressed: bool = False
+        self._press_px: tuple[float, float] | None = None
+        self._drag_active: bool = False
+        self._drag_section_copy: Section | None = None
         self._setup_ui()
         self._connect_signals()
 
@@ -115,28 +123,71 @@ class MapView(QWidget):
     def render(self, *_args) -> None:
         """Full redraw of the map view."""
         self._ax.clear()
-        self._ax.set_xlabel("Easting (m)")
-        self._ax.set_ylabel("Northing (m)")
         self._ax.set_aspect("equal", adjustable="datalim")
 
         self._render_seismic_coverage()
         self._render_surfaces()
         self._render_sections()
         self._render_wells()
+        self._render_graticule()
         self._canvas.draw_idle()
+
+    def _render_graticule(self) -> None:
+        """Draw a labelled coordinate grid with auto-scaled intervals."""
+        xmin, xmax = self._ax.get_xlim()
+        ymin, ymax = self._ax.get_ylim()
+        span_x = xmax - xmin
+        span_y = ymax - ymin
+        if span_x <= 0 or span_y <= 0:
+            self._ax.set_xlabel("Easting (m)")
+            self._ax.set_ylabel("Northing (m)")
+            return
+
+        interval = _nice_interval(max(span_x, span_y) / 5)
+        unit = "m"
+
+        import numpy as np
+
+        xs = np.arange(
+            math.floor(xmin / interval) * interval,
+            xmax + interval, interval,
+        )
+        ys = np.arange(
+            math.floor(ymin / interval) * interval,
+            ymax + interval, interval,
+        )
+
+        grid_kw = dict(color="#cccccc", linewidth=0.5, linestyle="--", zorder=0)
+        for x in xs:
+            self._ax.axvline(x, **grid_kw)
+        for y in ys:
+            self._ax.axhline(y, **grid_kw)
+
+        # Axis labels with units
+        self._ax.set_xlabel(f"Easting ({unit})")
+        self._ax.set_ylabel(f"Northing ({unit})")
+
+        # Format tick labels at grid interval, no scientific notation
+        from matplotlib.ticker import MultipleLocator
+        self._ax.xaxis.set_major_locator(MultipleLocator(interval))
+        self._ax.yaxis.set_major_locator(MultipleLocator(interval))
+        self._ax.ticklabel_format(style="plain", axis="both")
 
     def _render_sections(self) -> None:
         active = self._state.active_section
         for i, section in enumerate(self._state.project.sections):
             # During a drag, substitute the live-updated copy
-            if self._drag and self._drag["sec_idx"] == i:
-                display_sec = self._drag["section_copy"]
+            if (self._drag_active
+                    and self._selected_node is not None
+                    and self._selected_node[0] == i):
+                display_sec = self._drag_section_copy
             else:
                 display_sec = section
 
             is_active = (display_sec is section and section is active) or (
-                self._drag
-                and self._drag["sec_idx"] == i
+                self._drag_active
+                and self._selected_node is not None
+                and self._selected_node[0] == i
                 and active is self._state.project.sections[i]
             )
             color = _ACTIVE_COLOR if is_active else _INACTIVE_COLOR
@@ -157,6 +208,22 @@ class MapView(QWidget):
                 linestyle="none",
                 zorder=4,
             )
+            # Selected-node highlight
+            if (self._selected_node is not None
+                    and self._selected_node[0] == i):
+                nj = self._selected_node[1]
+                hn = display_sec.nodes
+                self._ax.plot(
+                    hn[nj, 0], hn[nj, 1],
+                    marker="o",
+                    markersize=_SELECTED_MS,
+                    color=_SELECTED_COLOR,
+                    markeredgecolor="white",
+                    markeredgewidth=1.5,
+                    linestyle="none",
+                    zorder=6,
+                )
+
             # Label at midpoint
             mid = len(nodes) // 2
             label = display_sec.name or f"Section {i}"
@@ -226,6 +293,28 @@ class MapView(QWidget):
     # Mouse interaction
     # ------------------------------------------------------------------
 
+    def _to_screen_px(self, xdata: float, ydata: float) -> tuple[float, float]:
+        """Convert data coordinates to canvas pixel coordinates."""
+        pt = self._ax.transData.transform([[xdata, ydata]])
+        return float(pt[0, 0]), float(pt[0, 1])
+
+    def _find_nearest_node_px(
+        self, event_x: float, event_y: float
+    ) -> tuple[int, int] | None:
+        """Hit-test section nodes in screen pixels. Returns (sec_idx, node_idx) or None."""
+        ex, ey = self._to_screen_px(event_x, event_y)
+        best: tuple[int, int] | None = None
+        best_dist = float("inf")
+        for i, section in enumerate(self._state.project.sections):
+            nodes = section.nodes
+            for j in range(len(nodes)):
+                nx, ny = self._to_screen_px(nodes[j, 0], nodes[j, 1])
+                d = math.hypot(ex - nx, ey - ny)
+                if d <= _NODE_HIT_PX and d < best_dist:
+                    best_dist = d
+                    best = (i, j)
+        return best
+
     def _pixel_threshold(self) -> float:
         """Return the hit-test threshold in data units (adapts to zoom)."""
         try:
@@ -272,47 +361,75 @@ class MapView(QWidget):
         if event.xdata is None or event.ydata is None:
             return
 
+        import copy
         x, y = float(event.xdata), float(event.ydata)
+        px, py = self._to_screen_px(x, y)
 
-        # --- Try to start a node drag ---
-        hit = self._find_nearest_node(x, y)
+        self._mouse_pressed = True
+        self._press_px = (px, py)
+
+        # --- Try to select a node (screen-pixel hit test) ---
+        hit = self._find_nearest_node_px(x, y)
         if hit is not None:
-            sec_idx, node_idx = hit
-            import copy
-            sec_copy = copy.deepcopy(self._state.project.sections[sec_idx])
-            self._drag = {
-                "sec_idx": sec_idx,
-                "node_idx": node_idx,
-                "section_copy": sec_copy,
-            }
+            self._selected_node = hit
+            self._drag_section_copy = copy.deepcopy(
+                self._state.project.sections[hit[0]]
+            )
+            self._drag_active = False
+            self.render()
             return
 
-        # --- Otherwise select the nearest section ---
+        # --- No node hit — try section line selection ---
         sec_idx = self._find_nearest_section(x, y)
         if sec_idx is not None:
             self._state.set_active_section(
                 self._state.project.sections[sec_idx]
             )
+            self._selected_node = None
+            self._drag_section_copy = None
+            self._drag_active = False
+            return
+
+        # --- Click on empty space — deselect ---
+        self._selected_node = None
+        self._drag_section_copy = None
+        self._drag_active = False
+        self.render()
 
     def _on_canvas_motion(self, event) -> None:
-        if self._drag is None:
+        if not self._mouse_pressed or self._selected_node is None:
             return
         if event.xdata is None or event.ydata is None:
             return
+
         x, y = float(event.xdata), float(event.ydata)
-        self._drag["section_copy"].move_node(self._drag["node_idx"], x, y)
+        px, py = self._to_screen_px(x, y)
+
+        if not self._drag_active:
+            ppx, ppy = self._press_px
+            if math.hypot(px - ppx, py - ppy) < _DRAG_MIN_PX:
+                return
+            self._drag_active = True
+
+        self._drag_section_copy.move_node(self._selected_node[1], x, y)
         self.render()
 
     def _on_canvas_release(self, event) -> None:
-        if self._drag is None:
-            return
         if event.button != 1:
             return
 
-        sec_idx = self._drag["sec_idx"]
-        node_idx = self._drag["node_idx"]
-        sec_copy = self._drag["section_copy"]
-        self._drag = None
+        self._mouse_pressed = False
+        self._press_px = None
+
+        if not self._drag_active:
+            return
+
+        sec_idx, node_idx = self._selected_node
+        sec_copy = self._drag_section_copy
+
+        self._drag_active = False
+        self._drag_section_copy = None
+        # Keep _selected_node — node stays highlighted after drag
 
         self._state.update_section(sec_idx, sec_copy)
         new_pos = sec_copy.nodes[node_idx]
@@ -335,6 +452,24 @@ class MapView(QWidget):
 
     def _on_seismic_changed(self, *_args) -> None:
         self.render()
+
+
+# ---------------------------------------------------------------------------
+# Grid / graticule helpers
+# ---------------------------------------------------------------------------
+
+def _nice_interval(raw: float) -> float:
+    """Round *raw* up to the nearest 'nice' number (1, 2, 5 × 10^n)."""
+    if raw <= 0:
+        return 1.0
+    import math as _math
+    exp = _math.floor(_math.log10(raw))
+    base = 10 ** exp
+    for step in (1.0, 2.0, 5.0, 10.0):
+        candidate = step * base
+        if candidate >= raw:
+            return candidate
+    return 10.0 * base
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import os
 
 from PySide6.QtCore import QObject, Signal
 
+from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
 from cross_section_tool.core.wells import Well
@@ -74,6 +75,11 @@ class AppState(QObject):
     # Seismic refs
     seismic_ref_added = Signal(object)
     seismic_ref_removed = Signal(object)
+
+    # Section polygons
+    polygon_added = Signal(object)
+    polygon_removed = Signal(object)
+    polygon_modified = Signal(int, object)
 
     # ------------------------------------------------------------------
 
@@ -268,6 +274,25 @@ class AppState(QObject):
         self._project.seismic_refs.remove(ref)
         self._set_modified()
         self.seismic_ref_removed.emit(ref)
+
+    # ------------------------------------------------------------------
+    # Section polygons
+    # ------------------------------------------------------------------
+
+    def add_polygon(self, polygon: SectionPolygon) -> None:
+        self._project.polygons.append(polygon)
+        self._set_modified()
+        self.polygon_added.emit(polygon)
+
+    def remove_polygon(self, polygon: SectionPolygon) -> None:
+        self._project.polygons.remove(polygon)
+        self._set_modified()
+        self.polygon_removed.emit(polygon)
+
+    def update_polygon(self, index: int, polygon: SectionPolygon) -> None:
+        self._project.polygons[index] = polygon
+        self._set_modified()
+        self.polygon_modified.emit(index, polygon)
 
     # ------------------------------------------------------------------
     # Internal

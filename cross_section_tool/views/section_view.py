@@ -36,12 +36,16 @@ class SectionView(QWidget):
     """
 
     horizon_pick_requested = Signal(float, float)
+    polygon_vertex_added = Signal(float, float)   # distance, depth during drawing
+    polygon_finished = Signal(object)             # SectionPolygon when complete
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._seismic_cache: dict[str, SeismicDataset] = {}
         self._picking_active: bool = False
+        self._polygon_drawing: bool = False
+        self._polygon_vertices: list[tuple[float, float]] = []
         self._display_mode: Literal["variable_density", "wiggle"] = "variable_density"
         self._setup_ui()
         self._connect_signals()
@@ -79,6 +83,9 @@ class SectionView(QWidget):
         s.surface_modified.connect(self._on_surfaces_changed)
         s.seismic_ref_added.connect(self._on_seismic_refs_changed)
         s.seismic_ref_removed.connect(self._on_seismic_refs_changed)
+        s.polygon_added.connect(self._on_polygons_changed)
+        s.polygon_removed.connect(self._on_polygons_changed)
+        s.polygon_modified.connect(self._on_polygons_changed)
 
     # ------------------------------------------------------------------
     # Public API
@@ -110,6 +117,31 @@ class SectionView(QWidget):
     def set_picking_active(self, active: bool) -> None:
         """Enable or disable interactive horizon pick mode."""
         self._picking_active = active
+        if active:
+            self._polygon_drawing = False
+            self._polygon_vertices.clear()
+
+    def set_polygon_drawing(self, active: bool) -> None:
+        """Enable or disable polygon drawing mode."""
+        self._polygon_drawing = active
+        if active:
+            self._picking_active = False
+        self._polygon_vertices.clear()
+        self.render()
+
+    def finish_polygon(self) -> None:
+        """Close and commit the polygon currently being drawn."""
+        if len(self._polygon_vertices) >= 3:
+            from cross_section_tool.core.polygons import SectionPolygon
+            poly = SectionPolygon(
+                self._polygon_vertices,
+                name=f"Polygon {len(self._state.project.polygons) + 1}",
+            )
+            self._polygon_vertices.clear()
+            self.polygon_finished.emit(poly)
+        else:
+            self._polygon_vertices.clear()
+        self.render()
 
     def clear_seismic_cache(self) -> None:
         """Evict all cached :class:`SeismicDataset` objects."""
@@ -134,8 +166,10 @@ class SectionView(QWidget):
         self._setup_axes(section)
         self._render_seismic(section)
         self._render_surfaces(section)
+        self._render_polygons(section)
         self._render_horizon_picks(section)
         self._render_wells(section)
+        self._render_polygon_in_progress()
         self._canvas.draw_idle()
 
     def _setup_axes(self, section: Section) -> None:
@@ -291,6 +325,46 @@ class SectionView(QWidget):
                 return None
         return self._seismic_cache.get(ref.path)
 
+    def _render_polygons(self, section: Section) -> None:
+        """Render committed polygons as filled shapes behind picks."""
+        from matplotlib.patches import Polygon as MplPolygon
+        for poly in self._state.project.polygons:
+            verts = poly.vertices  # shape (N, 2): distance, depth
+            if len(verts) < 3:
+                continue
+            patch = MplPolygon(
+                verts,
+                closed=True,
+                facecolor=poly.fill_color,
+                alpha=poly.fill_alpha,
+                edgecolor=poly.edge_color,
+                linewidth=poly.edge_width,
+                zorder=2,
+            )
+            self._ax.add_patch(patch)
+            # Label at centroid
+            cx = float(verts[:, 0].mean())
+            cy = float(verts[:, 1].mean())
+            if poly.name:
+                self._ax.text(cx, cy, poly.name, fontsize=6,
+                               ha="center", va="center", zorder=3,
+                               color=poly.edge_color)
+
+    def _render_polygon_in_progress(self) -> None:
+        """Render the polygon currently being drawn (open polyline + preview)."""
+        if not self._polygon_drawing or not self._polygon_vertices:
+            return
+        xs = [v[0] for v in self._polygon_vertices]
+        ys = [v[1] for v in self._polygon_vertices]
+        self._ax.plot(xs, ys, "o-", color="#9467bd", linewidth=1.5,
+                      markersize=5, zorder=10)
+        # Closing line back to first vertex (dashed preview)
+        if len(xs) >= 2:
+            self._ax.plot(
+                [xs[-1], xs[0]], [ys[-1], ys[0]],
+                "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10,
+            )
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -311,10 +385,21 @@ class SectionView(QWidget):
         self._seismic_cache.clear()
         self.render()
 
+    def _on_polygons_changed(self, *_args) -> None:
+        self.render()
+
     def _on_canvas_click(self, event) -> None:
-        if not self._picking_active:
-            return
         if event.inaxes is not self._ax:
             return
-        if event.button == 1 and event.xdata is not None and event.ydata is not None:
-            self.horizon_pick_requested.emit(float(event.xdata), float(event.ydata))
+        if event.xdata is None or event.ydata is None:
+            return
+        if event.button == 1:
+            if self._picking_active:
+                self.horizon_pick_requested.emit(float(event.xdata), float(event.ydata))
+            elif self._polygon_drawing:
+                self._polygon_vertices.append((float(event.xdata), float(event.ydata)))
+                self.polygon_vertex_added.emit(float(event.xdata), float(event.ydata))
+                self.render()
+        elif event.button == 3 and self._polygon_drawing:
+            # Right-click finishes polygon
+            self.finish_polygon()

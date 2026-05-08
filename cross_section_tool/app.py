@@ -3,15 +3,17 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QSplitter,
+    QStyle,
     QTabWidget,
     QToolBar,
     QWidget,
@@ -21,7 +23,9 @@ from cross_section_tool.app_state import AppState
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick
 from cross_section_tool.views.map_view import MapView
+from cross_section_tool.views.project_panel import ProjectPanel
 from cross_section_tool.views.section_view import SectionView
+from cross_section_tool.views.tool_palette import ToolPalette
 from cross_section_tool.views.viewer_3d import Viewer3D
 
 
@@ -70,15 +74,30 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._section_view, "Section")
         self._tabs.addTab(self._viewer_3d, "3D View")
 
-        # Horizontal splitter
+        # Horizontal splitter (map | section/3D)
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.addWidget(self._map_view)
         self._splitter.addWidget(self._tabs)
         self._splitter.setSizes([320, 960])
-        self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 3)
+        self._splitter.setStretchFactor(0, 0)   # map panel stays fixed
+        self._splitter.setStretchFactor(1, 1)   # section panel takes all extra space
+        self._map_view.setMinimumWidth(300)
+        self._splitter.setCollapsible(0, False)
 
-        self.setCentralWidget(self._splitter)
+        # Tool palette + splitter as the central widget
+        self._tool_palette = ToolPalette(self)
+        content = QWidget()
+        hbox = QHBoxLayout(content)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(0)
+        hbox.addWidget(self._tool_palette)
+        hbox.addWidget(self._splitter)
+
+        self.setCentralWidget(content)
+
+        # Dockable project panel
+        self._project_panel = ProjectPanel(self._state, self)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_panel)
 
         # Status bar
         self._status_label = QLabel("New project")
@@ -167,16 +186,25 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._about_action)
 
     def _build_toolbar(self) -> None:
+        style = self.style()
+        self._new_action.setIcon(
+            style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        )
+        self._open_action.setIcon(
+            style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        )
+        self._save_action.setIcon(
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
+        )
+
         tb: QToolBar = self.addToolBar("Main")
         tb.setObjectName("MainToolBar")
         tb.setMovable(False)
+        tb.setIconSize(QSize(20, 20))
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         tb.addAction(self._new_action)
         tb.addAction(self._open_action)
         tb.addAction(self._save_action)
-        tb.addSeparator()
-        tb.addAction(self._new_section_action)
-        tb.addSeparator()
-        tb.addAction(self._pick_action)
 
     def _connect_signals(self) -> None:
         s = self._state
@@ -192,6 +220,14 @@ class MainWindow(QMainWindow):
         s.well_added.connect(lambda _: self._update_status())
         s.well_removed.connect(lambda _: self._update_status())
         self._section_view.horizon_pick_requested.connect(self._on_pick_requested)
+        self._section_view.polygon_finished.connect(self._state.add_polygon)
+        self._tool_palette.tool_changed.connect(self._on_tool_changed)
+        # Keep menu pick-action in sync with palette
+        self._pick_action.toggled.connect(self._on_pick_action_toggled)
+        # Project panel → AppState mutations
+        self._project_panel.object_deleted.connect(self._on_panel_delete)
+        self._project_panel.object_renamed.connect(self._on_panel_rename)
+        self._project_panel.add_requested.connect(self._on_panel_add)
 
     # ------------------------------------------------------------------
     # Title / status helpers
@@ -374,6 +410,50 @@ class MainWindow(QMainWindow):
             "A desktop geoscience cross-section interpretation tool.<br>"
             "Built with PySide6, Matplotlib, and PyVista.",
         )
+
+    def _on_panel_delete(self, category: str, index: int) -> None:
+        proj = self._state.project
+        try:
+            if category == "Sections" and index < len(proj.sections):
+                self._state.remove_section(proj.sections[index])
+            elif category == "Horizons" and index < len(proj.horizon_picks):
+                self._state.remove_horizon_pick(proj.horizon_picks[index])
+        except Exception:
+            pass
+
+    def _on_panel_rename(self, category: str, index: int, name: str) -> None:
+        import copy
+        proj = self._state.project
+        try:
+            if category == "Sections" and index < len(proj.sections):
+                sec = copy.deepcopy(proj.sections[index])
+                sec.name = name
+                self._state.update_section(index, sec)
+            elif category == "Horizons" and index < len(proj.horizon_picks):
+                pick = copy.deepcopy(proj.horizon_picks[index])
+                pick.name = name
+                self._state.update_horizon_pick(index, pick)
+        except Exception:
+            pass
+
+    def _on_panel_add(self, category: str) -> None:
+        if category == "Sections":
+            self._on_new_section()
+
+    def _on_tool_changed(self, tool_id: str) -> None:
+        """Route palette tool activation to the appropriate view modes."""
+        self._section_view.set_picking_active(tool_id == "horizon_pick")
+        self._section_view.set_polygon_drawing(tool_id == "polygon")
+        # Keep menu action in sync without triggering a re-entry loop
+        self._pick_action.blockSignals(True)
+        self._pick_action.setChecked(tool_id == "horizon_pick")
+        self._pick_action.blockSignals(False)
+
+    def _on_pick_action_toggled(self, checked: bool) -> None:
+        """Sync the View-menu pick action back to the tool palette."""
+        target = "horizon_pick" if checked else "select"
+        if self._tool_palette.active_tool != target:
+            self._tool_palette.set_active_tool(target)
 
     # ------------------------------------------------------------------
     # Close event
