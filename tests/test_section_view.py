@@ -1,0 +1,468 @@
+"""Tests for cross_section_tool.views.section_view.SectionView."""
+
+import sys
+
+import numpy as np
+import pytest
+from PySide6.QtWidgets import QApplication
+
+from cross_section_tool.app_state import AppState
+from cross_section_tool.core.section import Section
+from cross_section_tool.core.surfaces import HorizonPick, Surface
+from cross_section_tool.core.wells import Well
+from cross_section_tool.io.project import SeismicRef
+from cross_section_tool.views.section_view import SectionView
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped QApplication (QWidget requires one)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def qapp():
+    return QApplication.instance() or QApplication(sys.argv[:1])
+
+
+# ---------------------------------------------------------------------------
+# Per-test fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def state():
+    return AppState()
+
+
+@pytest.fixture
+def view(qapp, state):
+    return SectionView(state)
+
+
+def _east_section(name="L1", length=1000.0):
+    return Section([(0.0, 0.0), (length, 0.0)], name=name)
+
+
+def _horizon_pick(name="TopSand"):
+    return HorizonPick([0.0, 500.0, 1000.0], [100.0, 200.0, 150.0],
+                       name=name, color="#ff0000")
+
+
+def _surface(name="Horizon"):
+    xc = np.linspace(0, 1000, 5)
+    yc = np.linspace(-50, 50, 5)
+    xx, yy = np.meshgrid(xc, yc)
+    return Surface.from_grid(xc, yc, xx * 0.1 + 300, name=name)
+
+
+def _well(name="W1"):
+    return Well(name=name, x=500.0, y=0.0, kb=10.0)
+
+
+# ---------------------------------------------------------------------------
+# Construction
+# ---------------------------------------------------------------------------
+
+class TestConstruction:
+    def test_is_qwidget(self, view):
+        assert view.isWidgetType()
+
+    def test_has_canvas(self, view):
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        assert isinstance(view.canvas, FigureCanvasQTAgg)
+
+    def test_has_figure(self, view):
+        from matplotlib.figure import Figure
+        assert isinstance(view.figure, Figure)
+
+    def test_has_axes(self, view):
+        assert view.axes is not None
+
+    def test_has_toolbar(self, view):
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+        assert isinstance(view._toolbar, NavigationToolbar2QT)
+
+    def test_picking_off_by_default(self, view):
+        assert not view._picking_active
+
+    def test_display_mode_default(self, view):
+        assert view.display_mode == "variable_density"
+
+    def test_seismic_cache_empty(self, view):
+        assert view._seismic_cache == {}
+
+
+# ---------------------------------------------------------------------------
+# render() — no crash guarantee
+# ---------------------------------------------------------------------------
+
+class TestRenderNoCrash:
+    def test_render_no_active_section(self, view):
+        view.render()  # must not raise
+
+    def test_render_with_section(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.render()
+
+    def test_render_with_horizon_pick(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_horizon_pick(_horizon_pick())
+        view.render()
+
+    def test_render_with_surface(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_surface(_surface())
+        view.render()
+
+    def test_render_with_well(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_well(_well())
+        view.render()
+
+    def test_render_with_well_and_formation_tops(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        well = _well()
+        well.add_formation_top("TopA", 500.0)
+        state.add_well(well)
+        view.render()
+
+    def test_render_with_bad_seismic_ref_no_crash(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_seismic_ref(SeismicRef(path="/nonexistent/file.segy", name="Bad"))
+        view.render()  # _get_or_load_seismic must catch the error
+
+    def test_render_all_types(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_horizon_pick(_horizon_pick())
+        state.add_surface(_surface())
+        state.add_well(_well())
+        view.render()
+
+    def test_render_dogleg_section(self, view, state):
+        sec = Section([(0, 0), (500, 0), (500, 500)], name="Dogleg")
+        state.add_section(sec)
+        state.set_active_section(sec)
+        state.add_horizon_pick(_horizon_pick())
+        view.render()
+
+    def test_render_twice_no_crash(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.render()
+        view.render()
+
+
+# ---------------------------------------------------------------------------
+# Axes state after render
+# ---------------------------------------------------------------------------
+
+class TestAxesState:
+    def test_axes_cleared_on_no_section(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.render()
+        state.set_active_section(None)
+        view.render()
+        # After clearing active section, axes should have no lines
+        assert len(view.axes.lines) == 0
+
+    def test_title_set_to_section_name(self, view, state):
+        state.add_section(_east_section(name="Dip Line"))
+        state.set_active_section(state.project.sections[0])
+        view.render()
+        assert "Dip Line" in view.axes.get_title()
+
+    def test_xlabel_set(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.render()
+        assert "Distance" in view.axes.get_xlabel()
+
+    def test_ylabel_twt(self, view, state):
+        sec = Section([(0, 0), (1000, 0)], depth_domain="twt")
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.render()
+        assert "time" in view.axes.get_ylabel().lower() or "ms" in view.axes.get_ylabel().lower()
+
+    def test_ylabel_depth(self, view, state):
+        sec = Section([(0, 0), (1000, 0)], depth_domain="depth", depth_units="m")
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.render()
+        assert "depth" in view.axes.get_ylabel().lower() or "m" in view.axes.get_ylabel()
+
+    def test_xlim_matches_section_length(self, view, state):
+        state.add_section(_east_section(length=2500.0))
+        state.set_active_section(state.project.sections[0])
+        view.render()
+        xmin, xmax = view.axes.get_xlim()
+        assert pytest.approx(xmin) == 0.0
+        assert pytest.approx(xmax) == 2500.0
+
+    def test_horizon_pick_adds_line(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        n_lines_before = len(view.axes.lines)
+        state.add_horizon_pick(_horizon_pick())
+        view.render()
+        assert len(view.axes.lines) > n_lines_before
+
+    def test_well_adds_track_line(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_well(_well())
+        view.render()
+        assert len(view.axes.lines) > 0
+
+    def test_surface_adds_line(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        state.add_surface(_surface())
+        view.render()
+        assert len(view.axes.lines) > 0
+
+
+# ---------------------------------------------------------------------------
+# State-change → auto-render
+# ---------------------------------------------------------------------------
+
+class TestAutoRender:
+    def test_active_section_change_triggers_render(self, view, state):
+        """Setting active section should trigger a re-render (title changes)."""
+        sec1 = _east_section(name="First")
+        sec2 = _east_section(name="Second")
+        state.add_section(sec1)
+        state.add_section(sec2)
+        state.set_active_section(sec1)
+        assert "First" in view.axes.get_title()
+        state.set_active_section(sec2)
+        assert "Second" in view.axes.get_title()
+
+    def test_project_changed_triggers_render(self, view, state):
+        state.add_section(_east_section(name="Before"))
+        state.set_active_section(state.project.sections[0])
+        # new_project emits project_changed → view re-renders (no active section)
+        state.new_project()
+        assert view.axes.get_title() in ("", "Section View")
+
+    def test_horizon_pick_added_triggers_render(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        n_before = len(view.axes.lines)
+        state.add_horizon_pick(_horizon_pick())
+        assert len(view.axes.lines) > n_before
+
+    def test_horizon_pick_removed_triggers_render(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        pick = _horizon_pick()
+        state.add_horizon_pick(pick)
+        n_with = len(view.axes.lines)
+        state.remove_horizon_pick(pick)
+        assert len(view.axes.lines) < n_with
+
+    def test_well_added_triggers_render(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        n_before = len(view.axes.lines)
+        state.add_well(_well())
+        assert len(view.axes.lines) > n_before
+
+    def test_surface_added_triggers_render(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        n_before = len(view.axes.lines)
+        state.add_surface(_surface())
+        assert len(view.axes.lines) > n_before
+
+    def test_seismic_ref_removed_clears_cache(self, view, state):
+        ref = SeismicRef(path="/fake.segy", name="Fake")
+        state.add_seismic_ref(ref)
+        view._seismic_cache["/fake.segy"] = None  # fake cached entry
+        state.remove_seismic_ref(ref)
+        assert "/fake.segy" not in view._seismic_cache
+
+
+# ---------------------------------------------------------------------------
+# Picking mode
+# ---------------------------------------------------------------------------
+
+class TestPickingMode:
+    def test_set_picking_active(self, view):
+        view.set_picking_active(True)
+        assert view._picking_active
+
+    def test_set_picking_inactive(self, view):
+        view.set_picking_active(True)
+        view.set_picking_active(False)
+        assert not view._picking_active
+
+    def test_click_outside_axes_does_not_emit(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.set_picking_active(True)
+
+        received = []
+        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
+
+        # Simulate a click outside axes (inaxes=None)
+        class FakeEvent:
+            button = 1
+            inaxes = None
+            xdata = 500.0
+            ydata = 200.0
+
+        view._on_canvas_click(FakeEvent())
+        assert len(received) == 0
+
+    def test_click_in_axes_emits_signal_when_active(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.set_picking_active(True)
+
+        received = []
+        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
+
+        class FakeEvent:
+            button = 1
+            inaxes = view.axes
+            xdata = 300.0
+            ydata = 500.0
+
+        view._on_canvas_click(FakeEvent())
+        assert len(received) == 1
+        assert pytest.approx(received[0][0]) == 300.0
+        assert pytest.approx(received[0][1]) == 500.0
+
+    def test_click_does_not_emit_when_inactive(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.set_picking_active(False)
+
+        received = []
+        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
+
+        class FakeEvent:
+            button = 1
+            inaxes = view.axes
+            xdata = 300.0
+            ydata = 500.0
+
+        view._on_canvas_click(FakeEvent())
+        assert len(received) == 0
+
+    def test_right_click_does_not_emit(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.set_picking_active(True)
+
+        received = []
+        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
+
+        class FakeEvent:
+            button = 3  # right click
+            inaxes = view.axes
+            xdata = 300.0
+            ydata = 500.0
+
+        view._on_canvas_click(FakeEvent())
+        assert len(received) == 0
+
+    def test_click_with_none_coords_does_not_emit(self, view, state):
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        view.set_picking_active(True)
+
+        received = []
+        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
+
+        class FakeEvent:
+            button = 1
+            inaxes = view.axes
+            xdata = None
+            ydata = None
+
+        view._on_canvas_click(FakeEvent())
+        assert len(received) == 0
+
+
+# ---------------------------------------------------------------------------
+# Display mode
+# ---------------------------------------------------------------------------
+
+class TestDisplayMode:
+    def test_set_wiggle_mode(self, view):
+        view.set_display_mode("wiggle")
+        assert view.display_mode == "wiggle"
+
+    def test_set_variable_density_mode(self, view):
+        view.set_display_mode("wiggle")
+        view.set_display_mode("variable_density")
+        assert view.display_mode == "variable_density"
+
+    def test_set_mode_triggers_render(self, view, state):
+        state.add_section(_east_section(name="Wiggle Test"))
+        state.set_active_section(state.project.sections[0])
+        view.set_display_mode("wiggle")
+        assert "Wiggle Test" in view.axes.get_title()
+
+
+# ---------------------------------------------------------------------------
+# Seismic cache
+# ---------------------------------------------------------------------------
+
+class TestSeismicCache:
+    def test_cache_cleared_by_method(self, view):
+        view._seismic_cache["/a.segy"] = None
+        view._seismic_cache["/b.segy"] = None
+        view.clear_seismic_cache()
+        assert view._seismic_cache == {}
+
+    def test_bad_path_returns_none(self, view):
+        ref = SeismicRef(path="/does_not_exist.segy")
+        result = view._get_or_load_seismic(ref)
+        assert result is None
+
+    def test_bad_path_not_cached(self, view):
+        ref = SeismicRef(path="/also_missing.segy")
+        view._get_or_load_seismic(ref)
+        assert "/also_missing.segy" not in view._seismic_cache
+
+
+# ---------------------------------------------------------------------------
+# Wiggle rendering helper
+# ---------------------------------------------------------------------------
+
+class TestWiggleRendering:
+    def test_wiggle_render_no_crash(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.set_display_mode("wiggle")
+        # no seismic data — just check it doesn't crash
+        view.render()
+
+    def test_wiggle_with_synthetic_data(self, view, state):
+        sec = _east_section()
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.set_display_mode("wiggle")
+
+        # Manually call the wiggle renderer with synthetic data
+        n_traces, n_samples = 5, 20
+        distances = np.linspace(0, 1000, n_traces)
+        data = np.random.default_rng(0).standard_normal((n_traces, n_samples)).astype(np.float32)
+        samples = np.linspace(0, 400, n_samples)
+        view._render_seismic_wiggle(distances, data, samples)
+        # Should have added lines
+        assert len(view.axes.lines) > 0
