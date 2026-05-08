@@ -119,6 +119,8 @@ class DeviationSurvey:
         self._x = x
         self._y = y
         self._tvd = tvd
+        self._inc_deg = np.degrees(inc_rad)
+        self._azi_deg = np.degrees(azi_rad)
         self.surface_x = float(surface_x)
         self.surface_y = float(surface_y)
 
@@ -154,6 +156,16 @@ class DeviationSurvey:
     def tvd_track(self) -> np.ndarray:
         """TVD (depth below surface/KB) at each deviation station."""
         return self._tvd.copy()
+
+    @property
+    def inc_deg(self) -> np.ndarray:
+        """Inclination from vertical (degrees) at each station."""
+        return self._inc_deg.copy()
+
+    @property
+    def azi_deg(self) -> np.ndarray:
+        """Azimuth clockwise from north (degrees) at each station."""
+        return self._azi_deg.copy()
 
     @property
     def max_md(self) -> float:
