@@ -11,7 +11,8 @@
       "PowerShell(Start-Sleep -Seconds 60; \\(Get-Item \"C:\\\\Users\\\\prkbr\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-prkbr-Projects-cross-section-tool\\\\04f6df0a-caf6-43f7-a01c-6ae2cf3626dc\\\\tasks\\\\bl3hjygc7.output\"\\).Length)",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py::TestConstruction tests/test_app.py::TestTitleBar tests/test_app.py::TestStatusBar tests/test_app.py::TestMenuActions -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py::TestFileOperations -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
-      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py tests/test_viewer_3d.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
     ]
   }
 }

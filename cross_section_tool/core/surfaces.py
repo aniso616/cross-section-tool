@@ -166,6 +166,8 @@ class HorizonPick:
         name: str = "",
         z_units: Literal["m", "ft", "ms"] = "m",
         color: str = "#1f77b4",
+        line_width: float = 1.5,
+        line_style: str = "solid",
     ) -> None:
         distances = np.asarray(distances, dtype=float)
         depths = np.asarray(depths, dtype=float)
@@ -181,6 +183,8 @@ class HorizonPick:
         self.name = name
         self.z_units: Literal["m", "ft", "ms"] = z_units
         self.color = color
+        self.line_width: float = float(line_width)
+        self.line_style: str = str(line_style)
 
     # ------------------------------------------------------------------
     # Properties
@@ -268,6 +272,8 @@ class HorizonPick:
             name=self.name,
             z_units=self.z_units,
             color=self.color,
+            line_width=self.line_width,
+            line_style=self.line_style,
         )
 
     # ------------------------------------------------------------------
@@ -278,14 +284,18 @@ class HorizonPick:
         name: str = "",
         z_units: Literal["m", "ft", "ms"] = "m",
         color: str = "#1f77b4",
+        line_width: float = 1.5,
+        line_style: str = "solid",
     ) -> "HorizonPick":
         """Create a HorizonPick with no picks (for a newly-added horizon/fault)."""
         obj = object.__new__(cls)
         obj._distances = np.array([], dtype=float)
         obj._depths    = np.array([], dtype=float)
-        obj.name    = name
-        obj.z_units = z_units
-        obj.color   = color
+        obj.name       = name
+        obj.z_units    = z_units
+        obj.color      = color
+        obj.line_width = float(line_width)
+        obj.line_style = str(line_style)
         return obj
 
     # ------------------------------------------------------------------

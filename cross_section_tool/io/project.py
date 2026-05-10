@@ -167,9 +167,11 @@ def _save_horizon_picks_group(
     grp = f.create_group(group_name)
     for i, hp in enumerate(picks):
         sg = grp.create_group(str(i))
-        sg.attrs["name"]    = hp.name
-        sg.attrs["z_units"] = hp.z_units
-        sg.attrs["color"]   = hp.color
+        sg.attrs["name"]       = hp.name
+        sg.attrs["z_units"]    = hp.z_units
+        sg.attrs["color"]      = hp.color
+        sg.attrs["line_width"] = float(getattr(hp, "line_width", 1.5))
+        sg.attrs["line_style"] = str(getattr(hp, "line_style", "solid"))
         sg.create_dataset("distances", data=hp._distances, dtype="float64")
         sg.create_dataset("depths",    data=hp._depths,    dtype="float64")
 
@@ -275,16 +277,25 @@ def _load_horizon_picks_group(
     if group_name not in f:
         return []
     grp = f[group_name]
-    return [
-        HorizonPick(
-            distances=grp[k]["distances"][:],
-            depths=grp[k]["depths"][:],
-            name=_str(grp[k].attrs.get("name", "")),
-            z_units=_str(grp[k].attrs.get("z_units", "m")),
-            color=_str(grp[k].attrs.get("color", default_color)),
-        )
-        for k in _sorted_keys(grp)
-    ]
+    result = []
+    for k in _sorted_keys(grp):
+        sg = grp[k]
+        distances  = sg["distances"][:]
+        depths     = sg["depths"][:]
+        name       = _str(sg.attrs.get("name", ""))
+        z_units    = _str(sg.attrs.get("z_units", "m"))
+        color      = _str(sg.attrs.get("color", default_color))
+        line_width = float(sg.attrs.get("line_width", 1.5))
+        line_style = _str(sg.attrs.get("line_style", "solid"))
+        if len(distances) == 0:
+            hp = HorizonPick.empty(name=name, z_units=z_units, color=color,
+                                   line_width=line_width, line_style=line_style)
+        else:
+            hp = HorizonPick(distances=distances, depths=depths, name=name,
+                             z_units=z_units, color=color,
+                             line_width=line_width, line_style=line_style)
+        result.append(hp)
+    return result
 
 
 def _load_horizon_picks(f: h5py.File) -> list[HorizonPick]:

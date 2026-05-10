@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -111,7 +112,7 @@ class SectionView(QWidget):
         self._toolbar = NavigationToolbar2QT(self._canvas, self)
         self._toolbar.hide()
 
-        # Header bar: section name + VE spinbox
+        # Header bar: section name + VE spinbox + VE lock
         self._header = QWidget()
         self._header.setFixedHeight(28)
         self._header.setStyleSheet("background: #f5f5f5; border-bottom: 1px solid #ddd;")
@@ -133,6 +134,18 @@ class SectionView(QWidget):
         )
         self._ve_spin.valueChanged.connect(self._on_ve_changed)
         hl.addWidget(self._ve_spin)
+        self._ve_lock_btn = QPushButton("\U0001F512")   # 🔒
+        self._ve_lock_btn.setCheckable(True)
+        self._ve_lock_btn.setFixedSize(24, 22)
+        self._ve_lock_btn.setToolTip(
+            "Lock VE — when checked, the same vertical exaggeration\n"
+            "applies to all sections (switching sections keeps this value)."
+        )
+        self._ve_lock_btn.setStyleSheet(
+            "QPushButton { border: 1px solid #bbb; border-radius: 3px; font-size: 11px; }"
+            "QPushButton:checked { background: #d0e8ff; border-color: #5599cc; }"
+        )
+        hl.addWidget(self._ve_lock_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -249,14 +262,16 @@ class SectionView(QWidget):
 
         self._section_name_label.setText(section.name or "Unnamed section")
         self._ve_spin.setEnabled(True)
-        # Sync spinbox to section without triggering _on_ve_changed loop
-        self._ve_spin.blockSignals(True)
-        self._ve_spin.setValue(section.vertical_exaggeration)
-        self._ve_spin.blockSignals(False)
+        # Sync spinbox to section only when VE is not locked
+        if not self._ve_lock_btn.isChecked():
+            self._ve_spin.blockSignals(True)
+            self._ve_spin.setValue(section.vertical_exaggeration)
+            self._ve_spin.blockSignals(False)
 
         self._setup_axes(section)
         self._render_seismic(section)
         self._render_grid(section)
+        self._render_section_ends(section)
         self._render_polygons(section)
         self._render_surfaces(section)
         self._render_faults(section)
@@ -333,21 +348,35 @@ class SectionView(QWidget):
         self._ax.yaxis.set_major_locator(MultipleLocator(interval))
         self._ax.ticklabel_format(style="plain", axis="both")
 
+    def _render_section_ends(self, section: Section) -> None:
+        """Draw vertical end-cap lines at x=0 and x=total_length."""
+        total = section.total_length()
+        yl    = self._ax.get_ylim()
+        ylo, yhi = min(yl), max(yl)
+        kw = dict(color="#666666", linewidth=1.5, alpha=0.7, zorder=2,
+                  solid_capstyle="butt")
+        self._ax.plot([0, 0],         [ylo, yhi], **kw)
+        self._ax.plot([total, total], [ylo, yhi], **kw)
+
     # ------------------------------------------------------------------
     # Object renderers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _mpl_linestyle(style: str) -> str:
+        return {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}.get(style, "-")
 
     def _render_horizons(self, section: Section) -> None:
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
             if hp.n_picks == 0:
                 continue
-            # Line through picks (already sorted by distance)
+            lw = getattr(hp, "line_width", 1.5)
+            ls = self._mpl_linestyle(getattr(hp, "line_style", "solid"))
             self._ax.plot(
                 hp.distances, hp.depths,
-                color=hp.color, linewidth=1.5, zorder=3,
+                color=hp.color, linewidth=lw, linestyle=ls, zorder=3,
                 label=hp.name or "_nolegend_",
             )
-            # Pick-point circles
             for pt_idx in range(hp.n_picks):
                 d, z = hp.distances[pt_idx], hp.depths[pt_idx]
                 ms, fc, ec, ew = self._pick_point_style("Horizons", obj_idx, pt_idx)
@@ -359,9 +388,11 @@ class SectionView(QWidget):
         for obj_idx, fp in enumerate(self._state.project.fault_picks):
             if fp.n_picks == 0:
                 continue
+            lw = getattr(fp, "line_width", 1.5)
+            ls = self._mpl_linestyle(getattr(fp, "line_style", "dashed"))
             self._ax.plot(
                 fp.distances, fp.depths,
-                color=fp.color, linewidth=1.5, linestyle="--", zorder=3,
+                color=fp.color, linewidth=lw, linestyle=ls, zorder=3,
                 label=fp.name or "_nolegend_",
             )
             for pt_idx in range(fp.n_picks):
@@ -454,16 +485,34 @@ class SectionView(QWidget):
                           "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10)
 
     def _render_rubber_band(self, section: Section) -> None:
-        """Dashed preview line from the last pick to the cursor."""
+        """V-shaped dashed ghost line connecting cursor to its neighbouring picks."""
+        if not (self._picking_active or self._fault_picking):
+            return
         if self._cursor_data is None:
             return
-        cx, cy = self._cursor_data
-        pick, last_d, last_z = self._get_active_pick_last_point()
-        if pick is None or last_d is None:
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        if cat is None or idx is None:
             return
-        color = "#2ca02c" if self._picking_active else "#d62728"
-        self._ax.plot([last_d, cx], [last_z, cy],
-                      "--", color=color, linewidth=1.0, alpha=0.7, zorder=8)
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if idx >= len(picks):
+            return
+        hp = picks[idx]
+        if hp.n_picks == 0:
+            return
+        cx, cy   = self._cursor_data
+        d, z     = hp.distances, hp.depths
+        color    = hp.color
+        rb_kw    = dict(linestyle="--", color=color, linewidth=1.0, alpha=0.6, zorder=8)
+        left     = d < cx
+        right    = d > cx
+        if left.any():
+            li = int(np.where(left)[0][-1])
+            self._ax.plot([d[li], cx], [z[li], cy], **rb_kw)
+        if right.any():
+            ri = int(np.where(right)[0][0])
+            self._ax.plot([cx, d[ri]], [cy, z[ri]], **rb_kw)
 
     def _render_wells(self, section: Section) -> None:
         for well in self._state.project.wells:
@@ -582,13 +631,21 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _on_ve_changed(self, value: float) -> None:
-        section = self._state.active_section
-        if section is None:
-            return
-        idx = self._state.project.sections.index(section)
-        sec_copy = copy.deepcopy(section)
-        sec_copy.vertical_exaggeration = value
-        self._state.update_section(idx, sec_copy)
+        if self._ve_lock_btn.isChecked():
+            # Apply to every section
+            for i, sec in enumerate(self._state.project.sections):
+                if abs(getattr(sec, "vertical_exaggeration", 1.0) - value) > 0.001:
+                    sec_copy = copy.deepcopy(sec)
+                    sec_copy.vertical_exaggeration = value
+                    self._state.update_section(i, sec_copy)
+        else:
+            section = self._state.active_section
+            if section is None:
+                return
+            idx = self._state.project.sections.index(section)
+            sec_copy = copy.deepcopy(section)
+            sec_copy.vertical_exaggeration = value
+            self._state.update_section(idx, sec_copy)
 
     # ------------------------------------------------------------------
     # Event handlers

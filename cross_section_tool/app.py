@@ -319,6 +319,9 @@ class MainWindow(QMainWindow):
         # Project panel → AppState mutations
         self._project_panel.object_deleted.connect(self._on_panel_delete)
         self._project_panel.object_renamed.connect(self._on_panel_rename)
+        self._project_panel.object_color_changed.connect(self._on_panel_color)
+        self._project_panel.object_line_width_changed.connect(self._on_panel_line_width)
+        self._project_panel.object_line_style_changed.connect(self._on_panel_line_style)
         self._project_panel.add_requested.connect(self._on_panel_add)
         # Status bar from map view drag
         self._map_view.status_message.connect(self._on_map_status)
@@ -534,6 +537,8 @@ class MainWindow(QMainWindow):
                 self._state.remove_section(proj.sections[index])
             elif category == "Horizons" and index < len(proj.horizon_picks):
                 self._state.remove_horizon_pick(proj.horizon_picks[index])
+            elif category == "Faults" and index < len(proj.fault_picks):
+                self._state.remove_fault_pick(proj.fault_picks[index])
         except Exception:
             pass
 
@@ -549,6 +554,55 @@ class MainWindow(QMainWindow):
                 pick = copy.deepcopy(proj.horizon_picks[index])
                 pick.name = name
                 self._state.update_horizon_pick(index, pick)
+            elif category == "Faults" and index < len(proj.fault_picks):
+                pick = copy.deepcopy(proj.fault_picks[index])
+                pick.name = name
+                self._state.update_fault_pick(index, pick)
+        except Exception:
+            pass
+
+    def _on_panel_color(self, category: str, index: int, color: str) -> None:
+        import copy
+        proj = self._state.project
+        try:
+            if category == "Horizons" and index < len(proj.horizon_picks):
+                pick = copy.deepcopy(proj.horizon_picks[index])
+                pick.color = color
+                self._state.update_horizon_pick(index, pick)
+            elif category == "Faults" and index < len(proj.fault_picks):
+                pick = copy.deepcopy(proj.fault_picks[index])
+                pick.color = color
+                self._state.update_fault_pick(index, pick)
+        except Exception:
+            pass
+
+    def _on_panel_line_width(self, category: str, index: int, width: float) -> None:
+        import copy
+        proj = self._state.project
+        try:
+            if category == "Horizons" and index < len(proj.horizon_picks):
+                pick = copy.deepcopy(proj.horizon_picks[index])
+                pick.line_width = width
+                self._state.update_horizon_pick(index, pick)
+            elif category == "Faults" and index < len(proj.fault_picks):
+                pick = copy.deepcopy(proj.fault_picks[index])
+                pick.line_width = width
+                self._state.update_fault_pick(index, pick)
+        except Exception:
+            pass
+
+    def _on_panel_line_style(self, category: str, index: int, style: str) -> None:
+        import copy
+        proj = self._state.project
+        try:
+            if category == "Horizons" and index < len(proj.horizon_picks):
+                pick = copy.deepcopy(proj.horizon_picks[index])
+                pick.line_style = style
+                self._state.update_horizon_pick(index, pick)
+            elif category == "Faults" and index < len(proj.fault_picks):
+                pick = copy.deepcopy(proj.fault_picks[index])
+                pick.line_style = style
+                self._state.update_fault_pick(index, pick)
         except Exception:
             pass
 

@@ -4,7 +4,9 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QColorDialog,
+    QComboBox,
     QDockWidget,
+    QDoubleSpinBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -71,15 +73,22 @@ class _ColorSwatch(QLabel):
             self.color_changed.emit(self._color)
 
 
+_STYLE_LABELS  = ["─────", "- - -", "· · ·", "-·-·-"]
+_STYLE_VALUES  = ["solid", "dashed", "dotted", "dashdot"]
+
+
 class _ObjectRow(QWidget):
-    """A single row widget: [checkbox] [swatch] [name label]."""
+    """A single row widget: [checkbox] [swatch] [name] [width] [style]."""
 
     visibility_changed = Signal(bool)
-    color_changed = Signal(str)
-    rename_requested = Signal(str)
+    color_changed      = Signal(str)
+    rename_requested   = Signal(str)
+    line_width_changed = Signal(float)
+    line_style_changed = Signal(str)
 
     def __init__(self, name: str, color: str, visible: bool = True,
-                 parent=None) -> None:
+                 line_width: float = 1.5, line_style: str = "solid",
+                 show_stroke: bool = False, parent=None) -> None:
         super().__init__(parent)
         self._name = name
 
@@ -106,6 +115,32 @@ class _ObjectRow(QWidget):
         self._label.setFont(font)
         layout.addWidget(self._label)
 
+        self._width_spin: QDoubleSpinBox | None = None
+        self._style_combo: QComboBox | None = None
+
+        if show_stroke:
+            self._width_spin = QDoubleSpinBox()
+            self._width_spin.setRange(0.5, 6.0)
+            self._width_spin.setSingleStep(0.5)
+            self._width_spin.setValue(float(line_width))
+            self._width_spin.setFixedWidth(44)
+            self._width_spin.setDecimals(1)
+            self._width_spin.setToolTip("Line width (pt)")
+            self._width_spin.valueChanged.connect(self.line_width_changed.emit)
+            layout.addWidget(self._width_spin)
+
+            self._style_combo = QComboBox()
+            for label in _STYLE_LABELS:
+                self._style_combo.addItem(label)
+            idx = _STYLE_VALUES.index(line_style) if line_style in _STYLE_VALUES else 0
+            self._style_combo.setCurrentIndex(idx)
+            self._style_combo.setFixedWidth(54)
+            self._style_combo.setToolTip("Line style")
+            self._style_combo.currentIndexChanged.connect(
+                lambda i: self.line_style_changed.emit(_STYLE_VALUES[i])
+            )
+            layout.addWidget(self._style_combo)
+
     @property
     def is_visible(self) -> bool:
         return self._check.isChecked()
@@ -113,6 +148,16 @@ class _ObjectRow(QWidget):
     @property
     def color(self) -> str:
         return self._swatch.color
+
+    @property
+    def line_width(self) -> float:
+        return self._width_spin.value() if self._width_spin else 1.5
+
+    @property
+    def line_style(self) -> str:
+        if self._style_combo is None:
+            return "solid"
+        return _STYLE_VALUES[self._style_combo.currentIndex()]
 
     @property
     def name(self) -> str:
@@ -154,14 +199,16 @@ class ProjectPanel(QDockWidget):
         Emitted when the + button is clicked.
     """
 
-    visibility_changed = Signal(str, int, bool)
-    object_color_changed = Signal(str, int, str)
-    object_renamed = Signal(str, int, str)
-    object_deleted = Signal(str, int)
-    object_moved = Signal(str, int, int)
-    add_requested = Signal(str)
+    visibility_changed       = Signal(str, int, bool)
+    object_color_changed     = Signal(str, int, str)
+    object_line_width_changed = Signal(str, int, float)
+    object_line_style_changed = Signal(str, int, str)
+    object_renamed           = Signal(str, int, str)
+    object_deleted           = Signal(str, int)
+    object_moved             = Signal(str, int, int)
+    add_requested            = Signal(str)
     # Emitted when a Horizon/Fault is clicked — signals the active pick target
-    pick_target_selected = Signal(str, int)
+    pick_target_selected     = Signal(str, int)
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__("Project", parent)
@@ -258,19 +305,27 @@ class ProjectPanel(QDockWidget):
             self._category_items[cat] = cat_item
 
             objects = self._objects_for_category(cat)
-            for idx, (name, color) in enumerate(objects):
+            show_stroke = cat in ("Horizons", "Faults")
+            for idx, (name, color, lw, ls) in enumerate(objects):
                 child = QTreeWidgetItem()
                 child.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 )
                 cat_item.addChild(child)
 
-                row = _ObjectRow(name, color)
+                row = _ObjectRow(name, color, line_width=lw, line_style=ls,
+                                 show_stroke=show_stroke)
                 row.visibility_changed.connect(
                     lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v)
                 )
                 row.color_changed.connect(
                     lambda col, c=cat, i=idx: self.object_color_changed.emit(c, i, col)
+                )
+                row.line_width_changed.connect(
+                    lambda w, c=cat, i=idx: self.object_line_width_changed.emit(c, i, w)
+                )
+                row.line_style_changed.connect(
+                    lambda s, c=cat, i=idx: self.object_line_style_changed.emit(c, i, s)
                 )
                 self._tree.setItemWidget(child, 0, row)
                 self._row_widgets[(cat, idx)] = row
@@ -279,20 +334,23 @@ class ProjectPanel(QDockWidget):
 
     def _objects_for_category(
         self, category: str
-    ) -> list[tuple[str, str]]:
-        """Return (name, color) pairs for a category from the project."""
+    ) -> list[tuple[str, str, float, str]]:
+        """Return (name, color, line_width, line_style) tuples for a category."""
         proj = self._state.project
+        _dw, _ds = 1.5, "solid"
         if category == "Sections":
-            return [(s.name or f"Section {i+1}", _DEFAULT_COLORS["Sections"])
+            return [(s.name or f"Section {i+1}", _DEFAULT_COLORS["Sections"], _dw, _ds)
                     for i, s in enumerate(proj.sections)]
         if category == "Horizons":
-            return [(h.name or f"Horizon {i+1}", h.color)
+            return [(h.name or f"Horizon {i+1}", h.color,
+                     getattr(h, "line_width", _dw), getattr(h, "line_style", _ds))
                     for i, h in enumerate(proj.horizon_picks)]
         if category == "Faults":
-            return [(f.name or f"Fault {i+1}", f.color)
+            return [(f.name or f"Fault {i+1}", f.color,
+                     getattr(f, "line_width", _dw), getattr(f, "line_style", _ds))
                     for i, f in enumerate(proj.fault_picks)]
         if category == "Polygons":
-            return []   # Polygons stored in future work
+            return []
         return []
 
     # ------------------------------------------------------------------
