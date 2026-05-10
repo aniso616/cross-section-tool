@@ -79,6 +79,7 @@ class Project:
         self.horizon_picks: list[HorizonPick] = []
         self.wells: list[Well] = []
         self.seismic_refs: list[SeismicRef] = []
+        self.fault_picks: list[HorizonPick] = []
         self.polygons: list[SectionPolygon] = []
 
     # ------------------------------------------------------------------
@@ -97,6 +98,7 @@ class Project:
             _save_horizon_picks(f, self.horizon_picks)
             _save_wells(f, self.wells)
             _save_seismic_refs(f, self.seismic_refs)
+            _save_horizon_picks_group(f, "fault_picks", self.fault_picks)
             _save_polygons(f, self.polygons)
 
     @classmethod
@@ -112,7 +114,8 @@ class Project:
             proj.horizon_picks = _load_horizon_picks(f)
             proj.wells = _load_wells(f)
             proj.seismic_refs = _load_seismic_refs(f)
-            proj.polygons = _load_polygons(f)
+            proj.fault_picks  = _load_horizon_picks_group(f, "fault_picks")
+            proj.polygons     = _load_polygons(f)
         return proj
 
     def __repr__(self) -> str:
@@ -158,15 +161,21 @@ def _save_surfaces(f: h5py.File, surfaces: list[Surface]) -> None:
             sg.create_dataset("grid_z", data=surf._grid_z, dtype="float64")
 
 
-def _save_horizon_picks(f: h5py.File, picks: list[HorizonPick]) -> None:
-    grp = f.create_group("horizon_picks")
+def _save_horizon_picks_group(
+    f: h5py.File, group_name: str, picks: list[HorizonPick]
+) -> None:
+    grp = f.create_group(group_name)
     for i, hp in enumerate(picks):
         sg = grp.create_group(str(i))
-        sg.attrs["name"] = hp.name
+        sg.attrs["name"]    = hp.name
         sg.attrs["z_units"] = hp.z_units
-        sg.attrs["color"] = hp.color
+        sg.attrs["color"]   = hp.color
         sg.create_dataset("distances", data=hp._distances, dtype="float64")
-        sg.create_dataset("depths", data=hp._depths, dtype="float64")
+        sg.create_dataset("depths",    data=hp._depths,    dtype="float64")
+
+
+def _save_horizon_picks(f: h5py.File, picks: list[HorizonPick]) -> None:
+    _save_horizon_picks_group(f, "horizon_picks", picks)
 
 
 def _save_wells(f: h5py.File, wells: list[Well]) -> None:
@@ -260,20 +269,26 @@ def _load_surfaces(f: h5py.File) -> list[Surface]:
     return result
 
 
-def _load_horizon_picks(f: h5py.File) -> list[HorizonPick]:
-    if "horizon_picks" not in f:
+def _load_horizon_picks_group(
+    f: h5py.File, group_name: str, default_color: str = "#1f77b4"
+) -> list[HorizonPick]:
+    if group_name not in f:
         return []
-    grp = f["horizon_picks"]
+    grp = f[group_name]
     return [
         HorizonPick(
             distances=grp[k]["distances"][:],
             depths=grp[k]["depths"][:],
             name=_str(grp[k].attrs.get("name", "")),
             z_units=_str(grp[k].attrs.get("z_units", "m")),
-            color=_str(grp[k].attrs.get("color", "#1f77b4")),
+            color=_str(grp[k].attrs.get("color", default_color)),
         )
         for k in _sorted_keys(grp)
     ]
+
+
+def _load_horizon_picks(f: h5py.File) -> list[HorizonPick]:
+    return _load_horizon_picks_group(f, "horizon_picks")
 
 
 def _load_wells(f: h5py.File) -> list[Well]:

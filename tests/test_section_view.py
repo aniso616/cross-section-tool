@@ -177,7 +177,8 @@ class TestAxesState:
         state.add_section(_east_section(name="Dip Line"))
         state.set_active_section(state.project.sections[0])
         view.render()
-        assert "Dip Line" in view.axes.get_title()
+        # Title is now in the header label, not the axes title
+        assert "Dip Line" in view._section_name_label.text()
 
     def test_xlabel_set(self, view, state):
         state.add_section(_east_section())
@@ -242,16 +243,16 @@ class TestAutoRender:
         state.add_section(sec1)
         state.add_section(sec2)
         state.set_active_section(sec1)
-        assert "First" in view.axes.get_title()
+        assert "First" in view._section_name_label.text()
         state.set_active_section(sec2)
-        assert "Second" in view.axes.get_title()
+        assert "Second" in view._section_name_label.text()
 
     def test_project_changed_triggers_render(self, view, state):
         state.add_section(_east_section(name="Before"))
         state.set_active_section(state.project.sections[0])
         # new_project emits project_changed → view re-renders (no active section)
         state.new_project()
-        assert view.axes.get_title() in ("", "Section View")
+        assert view._section_name_label.text() in ("", "— no section —", "Section View")
 
     def test_horizon_pick_added_triggers_render(self, view, state):
         sec = _east_section()
@@ -309,93 +310,63 @@ class TestPickingMode:
         view.set_picking_active(False)
         assert not view._picking_active
 
-    def test_click_outside_axes_does_not_emit(self, view, state):
+    def test_set_fault_picking(self, view):
+        view.set_fault_picking(True)
+        assert view._fault_picking
+        assert not view._picking_active
+
+    def test_picking_click_adds_to_active_target(self, view, state):
+        """When picking active + target set, click writes to horizon pick."""
+        state.add_section(_east_section())
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([500.0], [1000.0], name="H1")
+        state.add_horizon_pick(hp)
+        state.set_active_pick_target("Horizons", 0)
+        view.set_picking_active(True)
+
+        class FakeEvent:
+            button = 1
+            inaxes = view.axes
+            x = 300.0
+            y = 100.0
+            xdata = 300.0
+            ydata = 500.0
+
+        view._on_sv_press(FakeEvent())
+        assert state.project.horizon_picks[0].n_picks == 2
+
+    def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
         view.set_picking_active(True)
+        n_before = len(state.project.horizon_picks)
 
-        received = []
-        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
-
-        # Simulate a click outside axes (inaxes=None)
         class FakeEvent:
             button = 1
             inaxes = None
-            xdata = 500.0
-            ydata = 200.0
+            x = 300.0; y = 100.0
+            xdata = 300.0; ydata = 500.0
 
-        view._on_canvas_click(FakeEvent())
-        assert len(received) == 0
+        view._on_sv_press(FakeEvent())
+        assert len(state.project.horizon_picks) == n_before
 
-    def test_click_in_axes_emits_signal_when_active(self, view, state):
+    def test_click_with_none_coords_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([500.0], [1000.0])
+        state.add_horizon_pick(hp)
+        state.set_active_pick_target("Horizons", 0)
         view.set_picking_active(True)
-
-        received = []
-        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
 
         class FakeEvent:
             button = 1
             inaxes = view.axes
-            xdata = 300.0
-            ydata = 500.0
+            x = None; y = None
+            xdata = None; ydata = None
 
-        view._on_canvas_click(FakeEvent())
-        assert len(received) == 1
-        assert pytest.approx(received[0][0]) == 300.0
-        assert pytest.approx(received[0][1]) == 500.0
-
-    def test_click_does_not_emit_when_inactive(self, view, state):
-        state.add_section(_east_section())
-        state.set_active_section(state.project.sections[0])
-        view.set_picking_active(False)
-
-        received = []
-        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
-
-        class FakeEvent:
-            button = 1
-            inaxes = view.axes
-            xdata = 300.0
-            ydata = 500.0
-
-        view._on_canvas_click(FakeEvent())
-        assert len(received) == 0
-
-    def test_right_click_does_not_emit(self, view, state):
-        state.add_section(_east_section())
-        state.set_active_section(state.project.sections[0])
-        view.set_picking_active(True)
-
-        received = []
-        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
-
-        class FakeEvent:
-            button = 3  # right click
-            inaxes = view.axes
-            xdata = 300.0
-            ydata = 500.0
-
-        view._on_canvas_click(FakeEvent())
-        assert len(received) == 0
-
-    def test_click_with_none_coords_does_not_emit(self, view, state):
-        state.add_section(_east_section())
-        state.set_active_section(state.project.sections[0])
-        view.set_picking_active(True)
-
-        received = []
-        view.horizon_pick_requested.connect(lambda d, z: received.append((d, z)))
-
-        class FakeEvent:
-            button = 1
-            inaxes = view.axes
-            xdata = None
-            ydata = None
-
-        view._on_canvas_click(FakeEvent())
-        assert len(received) == 0
+        view._on_sv_press(FakeEvent())
+        # Pick count unchanged
+        assert state.project.horizon_picks[0].n_picks == 1
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +387,7 @@ class TestDisplayMode:
         state.add_section(_east_section(name="Wiggle Test"))
         state.set_active_section(state.project.sections[0])
         view.set_display_mode("wiggle")
-        assert "Wiggle Test" in view.axes.get_title()
+        assert "Wiggle Test" in view._section_name_label.text()
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +436,6 @@ class TestWiggleRendering:
         distances = np.linspace(0, 1000, n_traces)
         data = np.random.default_rng(0).standard_normal((n_traces, n_samples)).astype(np.float32)
         samples = np.linspace(0, 400, n_samples)
-        view._render_seismic_wiggle(distances, data, samples)
+        view._render_wiggle(distances, data, samples)
         # Should have added lines
         assert len(view.axes.lines) > 0

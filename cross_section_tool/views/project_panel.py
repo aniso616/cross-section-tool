@@ -160,6 +160,8 @@ class ProjectPanel(QDockWidget):
     object_deleted = Signal(str, int)
     object_moved = Signal(str, int, int)
     add_requested = Signal(str)
+    # Emitted when a Horizon/Fault is clicked — signals the active pick target
+    pick_target_selected = Signal(str, int)
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__("Project", parent)
@@ -223,8 +225,13 @@ class ProjectPanel(QDockWidget):
         s.horizon_pick_added.connect(lambda _: self._rebuild())
         s.horizon_pick_removed.connect(lambda _: self._rebuild())
         s.horizon_pick_modified.connect(lambda *_: self._rebuild())
+        s.fault_pick_added.connect(lambda _: self._rebuild())
+        s.fault_pick_removed.connect(lambda _: self._rebuild())
+        s.fault_pick_modified.connect(lambda *_: self._rebuild())
         s.well_added.connect(lambda _: self._rebuild())
         s.well_removed.connect(lambda _: self._rebuild())
+        # Emit pick-target when user clicks a tree item
+        self._tree.itemClicked.connect(self._on_item_clicked)
 
     # ------------------------------------------------------------------
     # Tree population
@@ -282,7 +289,8 @@ class ProjectPanel(QDockWidget):
             return [(h.name or f"Horizon {i+1}", h.color)
                     for i, h in enumerate(proj.horizon_picks)]
         if category == "Faults":
-            return []   # Faults stored in future work
+            return [(f.name or f"Fault {i+1}", f.color)
+                    for i, f in enumerate(proj.fault_picks)]
         if category == "Polygons":
             return []   # Polygons stored in future work
         return []
@@ -315,7 +323,35 @@ class ProjectPanel(QDockWidget):
             return sel.text(0)
         return sel.parent().text(0)
 
+    def _on_item_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
+        """Clicking a Horizon or Fault item sets it as the active pick target."""
+        parent = item.parent()
+        if parent is None:
+            return  # category header, not an object row
+        cat = parent.text(0)
+        idx = parent.indexOfChild(item)
+        if cat in ("Horizons", "Faults"):
+            self._state.set_active_pick_target(cat, idx)
+            self.pick_target_selected.emit(cat, idx)
+
     def _on_context_menu(self, pos) -> None:
+        # Check if user right-clicked a category header
+        item_at = self._tree.itemAt(pos)
+        if item_at is not None and item_at.parent() is None:
+            # Category header context menu — add object
+            cat = item_at.text(0)
+            menu = QMenu(self)
+            if cat == "Horizons":
+                add_act = menu.addAction("Add Horizon…")
+            elif cat == "Faults":
+                add_act = menu.addAction("Add Fault…")
+            else:
+                add_act = menu.addAction(f"Add {cat}")
+            chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
+            if chosen is add_act:
+                self.add_requested.emit(cat)
+            return
+
         result = self._selected_category_and_index()
         if result is None:
             return

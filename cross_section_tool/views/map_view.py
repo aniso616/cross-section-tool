@@ -276,37 +276,37 @@ class MapView(QWidget):
         pt = self._ax.transData.transform([[xdata, ydata]])
         return float(pt[0, 0]), float(pt[0, 1])
 
-    def _find_nearest_node_px(
-        self, event_x: float, event_y: float
-    ) -> tuple[int, int] | None:
-        """Hit-test nodes in screen pixels using *_NODE_HIT_PX* threshold."""
-        ex, ey = self._to_screen_px(event_x, event_y)
-        best: tuple[int, int] | None = None
-        best_dist = float("inf")
-        for i, section in enumerate(self._state.project.sections):
-            nodes = section.nodes
-            for j in range(len(nodes)):
-                nx, ny = self._to_screen_px(nodes[j, 0], nodes[j, 1])
-                d = math.hypot(ex - nx, ey - ny)
-                if d <= _NODE_HIT_PX and d < best_dist:
-                    best_dist = d
-                    best = (i, j)
-        return best
+    def _expand_view_for_point(self, x: float, y: float) -> None:
+        """Expand axes limits when a drag moves a node outside the current view."""
+        xl = list(self._ax.get_xlim())
+        yl = list(self._ax.get_ylim())
+        mx = max(abs(xl[1] - xl[0]) * 0.08, 50.0)
+        my = max(abs(yl[1] - yl[0]) * 0.08, 50.0)
+        changed = False
+        if   x < xl[0]: xl[0] = x - mx; changed = True
+        elif x > xl[1]: xl[1] = x + mx; changed = True
+        y_lo, y_hi = min(yl), max(yl)
+        if   y < y_lo: y_lo = y - my; changed = True
+        elif y > y_hi: y_hi = y + my; changed = True
+        if changed:
+            self._ax.set_xlim(xl)
+            self._ax.set_ylim(y_lo, y_hi)
+            self._canvas.draw_idle()
 
-    def _pixel_threshold(self) -> float:
-        """Return *_LINE_HIT_PX* in data units (adapts to zoom)."""
+    def _pixel_threshold(self, pixels: float = _LINE_HIT_PX) -> float:
+        """Return *pixels* screen pixels expressed in data units (adapts to zoom)."""
         try:
             inv = self._ax.transData.inverted()
             p0  = inv.transform([0.0, 0.0])
-            p1  = inv.transform([float(_LINE_HIT_PX), float(_LINE_HIT_PX)])
+            p1  = inv.transform([float(pixels), float(pixels)])
             return max(abs(float(p1[0]) - float(p0[0])),
                        abs(float(p1[1]) - float(p0[1])))
         except Exception:
             return float("inf")
 
     def _find_nearest_node(self, x: float, y: float) -> tuple[int, int] | None:
-        """Data-space node hit-test (used by tests)."""
-        threshold = self._pixel_threshold()
+        """Data-space node hit-test using _NODE_HIT_PX threshold."""
+        threshold = self._pixel_threshold(_NODE_HIT_PX)
         best: tuple[int, int] | None = None
         best_dist = float("inf")
         for i, section in enumerate(self._state.project.sections):
@@ -359,8 +359,6 @@ class MapView(QWidget):
     def _on_canvas_press(self, event) -> None:
         if event.inaxes is not self._ax:
             return
-        if event.xdata is None or event.ydata is None:
-            return
 
         tool = self._state.active_tool
 
@@ -371,11 +369,15 @@ class MapView(QWidget):
 
             if tool in _EDIT_TOOLS:
                 self._mouse_pressed = True
-                x, y = float(event.xdata), float(event.ydata)
-                px, py = self._to_screen_px(x, y)
-                self._press_px = (px, py)
+                x, y = event.xdata, event.ydata
+                if x is None or y is None:
+                    self._mouse_pressed = False
+                    return
+                px = getattr(event, "x", None)
+                py = getattr(event, "y", None)
+                self._press_px = (float(px), float(py)) if (px is not None and py is not None) else None
 
-                hit = self._find_nearest_node_px(x, y)
+                hit = self._find_nearest_node(x, y)
                 if hit is not None:
                     self._selected_node     = hit
                     self._drag_section_copy = copy.deepcopy(
@@ -410,20 +412,25 @@ class MapView(QWidget):
 
         # ---- Drag node ----
         if self._mouse_pressed and self._selected_node is not None:
-            if event.xdata is None or event.ydata is None:
+            x, y = event.xdata, event.ydata
+            if x is None or y is None:
                 return
-            x, y = float(event.xdata), float(event.ydata)
-            px, py = self._to_screen_px(x, y)
+            px = getattr(event, "x", None)
+            py = getattr(event, "y", None)
 
             if not self._drag_active:
-                ppx, ppy = self._press_px
-                if math.hypot(px - ppx, py - ppy) < _DRAG_MIN_PX:
-                    return
+                if (px is not None and py is not None
+                        and self._press_px is not None):
+                    ppx, ppy = self._press_px
+                    if math.hypot(float(px) - ppx, float(py) - ppy) < _DRAG_MIN_PX:
+                        return
                 self._drag_active = True
 
             self._drag_section_copy.move_node(self._selected_node[1], x, y)
             self.status_message.emit(f"E: {x:.0f}  N: {y:.0f}")
             self.render()
+            # Expand view if node dragged outside current limits
+            self._expand_view_for_point(x, y)
             return
 
         # ---- Hover (tool-dependent, no button held) ----
@@ -494,7 +501,7 @@ class MapView(QWidget):
         if event.xdata is None or event.ydata is None:
             new_hover = None
         else:
-            new_hover = self._find_nearest_node_px(
+            new_hover = self._find_nearest_node(
                 float(event.xdata), float(event.ydata)
             )
 

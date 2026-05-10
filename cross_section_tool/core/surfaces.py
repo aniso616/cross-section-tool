@@ -228,7 +228,7 @@ class HorizonPick:
     def delete_pick(self, index: int) -> None:
         """Delete the pick at *index*.
 
-        Raises ValueError if only one pick remains.
+        Raises ValueError if fewer than two picks remain (would leave < 1).
         """
         if self.n_picks <= 1:
             raise ValueError("Cannot delete: HorizonPick must retain at least one pick")
@@ -272,10 +272,26 @@ class HorizonPick:
 
     # ------------------------------------------------------------------
     # Dunder helpers
+    @classmethod
+    def empty(
+        cls,
+        name: str = "",
+        z_units: Literal["m", "ft", "ms"] = "m",
+        color: str = "#1f77b4",
+    ) -> "HorizonPick":
+        """Create a HorizonPick with no picks (for a newly-added horizon/fault)."""
+        obj = object.__new__(cls)
+        obj._distances = np.array([], dtype=float)
+        obj._depths    = np.array([], dtype=float)
+        obj.name    = name
+        obj.z_units = z_units
+        obj.color   = color
+        return obj
+
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
         return (
             f"HorizonPick(name={self.name!r}, n_picks={self.n_picks}, "
-            f"dist_range=[{self._distances[0]:.1f}, {self._distances[-1]:.1f}])"
+            f"dist_range={[round(self._distances[0],1), round(self._distances[-1],1)] if self.n_picks else '[]'})"
         )

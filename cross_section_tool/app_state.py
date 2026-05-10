@@ -81,6 +81,14 @@ class AppState(QObject):
     polygon_removed = Signal(object)
     polygon_modified = Signal(int, object)
 
+    # Fault picks (separate from horizon picks)
+    fault_pick_added    = Signal(object)
+    fault_pick_removed  = Signal(object)
+    fault_pick_modified = Signal(int, object)
+
+    # Active pick target: which horizon/fault picks go into
+    active_pick_target_changed = Signal(str, int)  # category_name, index
+
     # Active tool (mirrors ToolPalette; stored here so views can read it)
     tool_changed = Signal(str)
 
@@ -94,6 +102,8 @@ class AppState(QObject):
         self._active_well: Well | None = None
         self._is_modified: bool = False
         self._active_tool: str = "select"
+        self._active_pick_category: str | None = None
+        self._active_pick_index: int | None = None
 
     # ------------------------------------------------------------------
     # Read-only properties
@@ -114,6 +124,19 @@ class AppState(QObject):
     @property
     def active_tool(self) -> str:
         return self._active_tool
+
+    @property
+    def active_pick_category(self) -> str | None:
+        return self._active_pick_category
+
+    @property
+    def active_pick_index(self) -> int | None:
+        return self._active_pick_index
+
+    def set_active_pick_target(self, category: str, index: int) -> None:
+        self._active_pick_category = category
+        self._active_pick_index    = index
+        self.active_pick_target_changed.emit(category, index)
 
     def set_active_tool(self, tool_id: str) -> None:
         """Set the active tool; emits :attr:`tool_changed` if it changed."""
@@ -292,6 +315,25 @@ class AppState(QObject):
     # ------------------------------------------------------------------
     # Section polygons
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Fault picks
+    # ------------------------------------------------------------------
+
+    def add_fault_pick(self, pick: HorizonPick) -> None:
+        self._project.fault_picks.append(pick)
+        self._set_modified()
+        self.fault_pick_added.emit(pick)
+
+    def remove_fault_pick(self, pick: HorizonPick) -> None:
+        self._project.fault_picks.remove(pick)
+        self._set_modified()
+        self.fault_pick_removed.emit(pick)
+
+    def update_fault_pick(self, index: int, pick: HorizonPick) -> None:
+        self._project.fault_picks[index] = pick
+        self._set_modified()
+        self.fault_pick_modified.emit(index, pick)
 
     def add_polygon(self, polygon: SectionPolygon) -> None:
         self._project.polygons.append(polygon)

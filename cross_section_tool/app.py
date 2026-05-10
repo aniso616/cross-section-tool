@@ -4,7 +4,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -17,8 +17,47 @@ from PySide6.QtWidgets import (
     QStyle,
     QTabWidget,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
+
+
+# ---------------------------------------------------------------------------
+# Collapse-strip widget (Phase 2)
+# ---------------------------------------------------------------------------
+
+class _CollapseStrip(QWidget):
+    """16px-wide dark strip with a centred ◀/▶ arrow button.
+
+    Emits :attr:`clicked` when the arrow button is pressed.
+    Call :meth:`set_collapsed` to flip the arrow direction.
+    """
+
+    from PySide6.QtCore import Signal
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(16)
+        self.setStyleSheet("background: #383838;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._btn = QPushButton("◀")
+        self._btn.setFlat(True)
+        self._btn.setFixedSize(16, 32)
+        self._btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #c8c8c8; border: none;"
+            " font-size: 10px; }"
+            "QPushButton:hover { color: white; background: #505050; }"
+        )
+        self._btn.clicked.connect(self.clicked)
+        layout.addStretch()
+        layout.addWidget(self._btn)
+        layout.addStretch()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._btn.setText("▶" if collapsed else "◀")
 
 from cross_section_tool.app_state import AppState
 from cross_section_tool.core.section import Section
@@ -75,32 +114,31 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._section_view, "Section")
         self._tabs.addTab(self._viewer_3d, "3D View")
 
-        # Horizontal splitter (map | section/3D)
+        # Map panel: view + collapse strip (always visible on right edge)
+        self._map_view.setMinimumWidth(0)
+        self._map_view.setMinimumHeight(400)   # Phase 1: floor
+        self._map_view.setMaximumHeight(700)   # Phase 1: lock vertical growth
+        self._map_collapse_strip = _CollapseStrip(self)
+        self._map_collapse_strip.clicked.connect(self._toggle_map_panel)
+        self._map_collapse_strip.setToolTip("Collapse / expand map panel  (Ctrl+2)")
+        self._map_panel_collapsed = False
+        self._map_panel_width     = 320
+
+        map_container = QWidget()
+        map_hbox = QHBoxLayout(map_container)
+        map_hbox.setContentsMargins(0, 0, 0, 0)
+        map_hbox.setSpacing(0)
+        map_hbox.addWidget(self._map_view, stretch=1)
+        map_hbox.addWidget(self._map_collapse_strip)
+
+        # Horizontal splitter (map_container | section/3D)
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(self._map_view)
+        self._splitter.addWidget(map_container)
         self._splitter.addWidget(self._tabs)
         self._splitter.setSizes([320, 960])
-        self._splitter.setStretchFactor(0, 0)   # map panel stays fixed
-        self._splitter.setStretchFactor(1, 1)   # section panel takes all extra space
-        self._map_view.setMinimumWidth(0)        # allow full collapse to 0
-        self._splitter.setCollapsible(0, True)   # allow programmatic collapse
-
-        # Collapse button in the splitter handle (14px wide strip)
-        self._splitter.setHandleWidth(14)
-        handle = self._splitter.handle(1)
-        from PySide6.QtWidgets import QVBoxLayout as _VBox
-        hl = _VBox(handle)
-        hl.setContentsMargins(1, 0, 1, 0)
-        self._map_collapse_btn = QPushButton("◀")
-        self._map_collapse_btn.setFlat(True)
-        self._map_collapse_btn.setFixedHeight(36)
-        self._map_collapse_btn.setToolTip("Collapse / expand map panel  (Ctrl+2)")
-        self._map_collapse_btn.clicked.connect(self._toggle_map_panel)
-        self._map_panel_collapsed = False
-        self._map_panel_width = 320
-        hl.addStretch()
-        hl.addWidget(self._map_collapse_btn)
-        hl.addStretch()
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setHandleWidth(2)
 
         # Tool palette + splitter as the central widget
         self._tool_palette = ToolPalette(self)
@@ -113,13 +151,45 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(content)
 
-        # Dockable project panel
+        # Dockable project panel with custom dark title bar
         self._project_panel = ProjectPanel(self._state, self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_panel)
+        self._setup_project_panel_title_bar()
 
         # Status bar
         self._status_label = QLabel("New project")
         self.statusBar().addWidget(self._status_label)
+
+    def _setup_project_panel_title_bar(self) -> None:
+        """Replace the dock's default title bar with a dark custom one."""
+        title_bar = QWidget()
+        title_bar.setStyleSheet("background: #383838;")
+        tbl = QHBoxLayout(title_bar)
+        tbl.setContentsMargins(6, 3, 4, 3)
+        lbl = QLabel("Project")
+        font = QFont()
+        font.setPointSize(9)
+        font.setBold(True)
+        lbl.setFont(font)
+        lbl.setStyleSheet("color: #c8c8c8;")
+        tbl.addWidget(lbl)
+        tbl.addStretch()
+        close_btn = QPushButton("◀")
+        close_btn.setFlat(True)
+        close_btn.setFixedSize(18, 18)
+        close_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #c8c8c8; border: none; font-size: 10px; }"
+            "QPushButton:hover { color: white; }"
+        )
+        close_btn.setToolTip("Hide Project panel  (Ctrl+1)")
+        close_btn.clicked.connect(self._project_panel.close)
+        tbl.addWidget(close_btn)
+        self._project_panel.setTitleBarWidget(title_bar)
+
+        # Re-open button (▶) in the dock's floating/re-dock action
+        self._project_panel.visibilityChanged.connect(
+            lambda visible: close_btn.setText("◀" if visible else "▶")
+        )
 
     def _build_menus(self) -> None:
         mb = self.menuBar()
@@ -237,11 +307,15 @@ class MainWindow(QMainWindow):
         s.section_removed.connect(lambda _: self._update_status())
         s.well_added.connect(lambda _: self._update_status())
         s.well_removed.connect(lambda _: self._update_status())
-        self._section_view.horizon_pick_requested.connect(self._on_pick_requested)
+        # horizon_pick_requested removed — section view now writes directly to AppState
         self._section_view.polygon_finished.connect(self._state.add_polygon)
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
+        # Project panel pick-target selection
+        self._project_panel.pick_target_selected.connect(
+            lambda cat, idx: self._state.set_active_pick_target(cat, idx)
+        )
         # Project panel → AppState mutations
         self._project_panel.object_deleted.connect(self._on_panel_delete)
         self._project_panel.object_renamed.connect(self._on_panel_rename)
@@ -323,12 +397,11 @@ class MainWindow(QMainWindow):
         self._state.new_project(crs_epsg=crs_epsg)
 
     def _open_project(self, path: str) -> bool:
-        """Load a project from *path*. Returns True on success."""
+        """Load a project from *path*. Returns True on success, False on error (no dialog)."""
         try:
             self._state.open_project(path)
             return True
-        except Exception as exc:
-            QMessageBox.critical(self, "Open Error", str(exc))
+        except Exception:
             return False
 
     def _save_project(self) -> bool:
@@ -343,12 +416,11 @@ class MainWindow(QMainWindow):
             return False
 
     def _save_project_as(self, path: str) -> bool:
-        """Save to *path* (no dialog)."""
+        """Save to *path* (no dialog). Returns True on success, False on error."""
         try:
             self._state.save_project_as(path)
             return True
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Error", str(exc))
+        except Exception:
             return False
 
     def _save_project_as_dialog(self) -> bool:
@@ -358,7 +430,10 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return False
-        return self._save_project_as(path)
+        ok = self._save_project_as(path)
+        if not ok:
+            QMessageBox.critical(self, "Save Error", f"Could not save:\n{path}")
+        return ok
 
     # ------------------------------------------------------------------
     # Action slots (with dialogs)
@@ -375,7 +450,8 @@ class MainWindow(QMainWindow):
             self, "Open Project", "", "HDF5 Project (*.h5);;All Files (*)"
         )
         if path:
-            self._open_project(path)
+            if not self._open_project(path):
+                QMessageBox.critical(self, "Open Error", f"Could not open:\n{path}")
 
     def _on_save(self) -> None:
         self._save_project()
@@ -479,18 +555,55 @@ class MainWindow(QMainWindow):
     def _on_panel_add(self, category: str) -> None:
         if category == "Sections":
             self._on_new_section()
+        elif category == "Horizons":
+            self._add_new_horizon()
+        elif category == "Faults":
+            self._add_new_fault()
+
+    def _add_new_horizon(self) -> None:
+        from PySide6.QtWidgets import QInputDialog, QColorDialog
+        name, ok = QInputDialog.getText(self, "New Horizon", "Horizon name:",
+                                        text=f"Horizon {len(self._state.project.horizon_picks)+1}")
+        if not ok or not name.strip():
+            return
+        color = QColorDialog.getColor(parent=self)
+        col = color.name() if color.isValid() else "#2ca02c"
+        from cross_section_tool.core.surfaces import HorizonPick
+        hp = HorizonPick.empty(name=name.strip(), color=col)
+        self._state.add_horizon_pick(hp)
+        idx = len(self._state.project.horizon_picks) - 1
+        self._state.set_active_pick_target("Horizons", idx)
+        self._tool_palette.set_active_tool("horizon_pick")
+
+    def _add_new_fault(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "New Fault", "Fault name:",
+                                        text=f"Fault {len(self._state.project.fault_picks)+1}")
+        if not ok or not name.strip():
+            return
+        from cross_section_tool.core.surfaces import HorizonPick
+        fp = HorizonPick.empty(name=name.strip(), color="#d62728")
+        self._state.add_fault_pick(fp)
+        idx = len(self._state.project.fault_picks) - 1
+        self._state.set_active_pick_target("Faults", idx)
+        self._tool_palette.set_active_tool("fault_pick")
 
     def _toggle_map_panel(self) -> None:
         """Collapse / expand the map panel."""
         sizes = self._splitter.sizes()
         if self._map_panel_collapsed:
+            # Restore: show map view again
+            self._map_view.show()
             self._splitter.setSizes([self._map_panel_width, sizes[1]])
-            self._map_collapse_btn.setText("◀")
+            self._map_collapse_strip.set_collapsed(False)
             self._map_panel_collapsed = False
         else:
+            # Collapse: hide map view, container shrinks to strip width (16px)
             self._map_panel_width = sizes[0] or 320
-            self._splitter.setSizes([0, sizes[0] + sizes[1]])
-            self._map_collapse_btn.setText("▶")
+            self._map_view.hide()
+            total = sizes[0] + sizes[1]
+            self._splitter.setSizes([16, total - 16])
+            self._map_collapse_strip.set_collapsed(True)
             self._map_panel_collapsed = True
 
     def _toggle_section_panel(self) -> None:
@@ -511,6 +624,7 @@ class MainWindow(QMainWindow):
         """Route palette tool activation to views and AppState."""
         self._state.set_active_tool(tool_id)
         self._section_view.set_picking_active(tool_id == "horizon_pick")
+        self._section_view.set_fault_picking(tool_id == "fault_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
         # Keep menu action in sync without triggering a re-entry loop
         self._pick_action.blockSignals(True)

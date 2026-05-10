@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section.py tests/test_surfaces.py tests/test_wells.py tests/test_crs.py tests/test_las.py tests/test_segy.py tests/test_project.py tests/test_app_state.py -q --tb=short 2>&1; Write-Host \"DONE $LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section_view.py tests/test_map_view.py tests/test_polygons.py tests/test_project_panel.py tests/test_tool_palette.py -q --tb=short 2>&1; Write-Host \"DONE $LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section_view.py tests/test_map_view.py tests/test_polygons.py tests/test_project_panel.py tests/test_tool_palette.py tests/test_viewer_3d.py tests/test_app.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section_view.py tests/test_map_view.py tests/test_polygons.py tests/test_project_panel.py tests/test_tool_palette.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ --ignore=tests/test_app.py --ignore=tests/test_viewer_3d.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_viewer_3d.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(Start-Sleep -Seconds 60; \\(Get-Item \"C:\\\\Users\\\\prkbr\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-prkbr-Projects-cross-section-tool\\\\04f6df0a-caf6-43f7-a01c-6ae2cf3626dc\\\\tasks\\\\bl3hjygc7.output\"\\).Length)",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py::TestConstruction tests/test_app.py::TestTitleBar tests/test_app.py::TestStatusBar tests/test_app.py::TestMenuActions -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_app.py::TestFileOperations -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
+    ]
+  }
+}
