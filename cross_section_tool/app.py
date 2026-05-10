@@ -4,7 +4,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSplitter,
     QStyle,
     QTabWidget,
@@ -81,8 +82,25 @@ class MainWindow(QMainWindow):
         self._splitter.setSizes([320, 960])
         self._splitter.setStretchFactor(0, 0)   # map panel stays fixed
         self._splitter.setStretchFactor(1, 1)   # section panel takes all extra space
-        self._map_view.setMinimumWidth(300)
-        self._splitter.setCollapsible(0, False)
+        self._map_view.setMinimumWidth(0)        # allow full collapse to 0
+        self._splitter.setCollapsible(0, True)   # allow programmatic collapse
+
+        # Collapse button in the splitter handle (14px wide strip)
+        self._splitter.setHandleWidth(14)
+        handle = self._splitter.handle(1)
+        from PySide6.QtWidgets import QVBoxLayout as _VBox
+        hl = _VBox(handle)
+        hl.setContentsMargins(1, 0, 1, 0)
+        self._map_collapse_btn = QPushButton("◀")
+        self._map_collapse_btn.setFlat(True)
+        self._map_collapse_btn.setFixedHeight(36)
+        self._map_collapse_btn.setToolTip("Collapse / expand map panel  (Ctrl+2)")
+        self._map_collapse_btn.clicked.connect(self._toggle_map_panel)
+        self._map_panel_collapsed = False
+        self._map_panel_width = 320
+        hl.addStretch()
+        hl.addWidget(self._map_collapse_btn)
+        hl.addStretch()
 
         # Tool palette + splitter as the central widget
         self._tool_palette = ToolPalette(self)
@@ -160,7 +178,7 @@ class MainWindow(QMainWindow):
 
         self._pick_action = QAction("&Horizon Pick Mode", self)
         self._pick_action.setCheckable(True)
-        self._pick_action.setShortcut(QKeySequence("P"))
+        # Shortcut now handled by tool palette (P key → horizon_pick)
         self._pick_action.toggled.connect(self._section_view.set_picking_active)
         view_menu.addAction(self._pick_action)
 
@@ -228,6 +246,28 @@ class MainWindow(QMainWindow):
         self._project_panel.object_deleted.connect(self._on_panel_delete)
         self._project_panel.object_renamed.connect(self._on_panel_rename)
         self._project_panel.add_requested.connect(self._on_panel_add)
+        # Status bar from map view drag
+        self._map_view.status_message.connect(self._on_map_status)
+        # Keyboard shortcuts for tools (application-wide)
+        _tool_keys = {
+            "V": "select",   "H": "pan",          "Z": "zoom",
+            "S": "new_section", "E": "edit_nodes",
+            "P": "horizon_pick", "F": "fault_pick",
+            "G": "polygon",  "M": "measure",
+        }
+        for key, tool_id in _tool_keys.items():
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(
+                lambda tid=tool_id: self._tool_palette.set_active_tool(tid)
+            )
+        # Panel toggle shortcuts
+        sc1 = QShortcut(QKeySequence("Ctrl+1"), self)
+        sc1.activated.connect(self._project_panel.toggleViewAction().trigger)
+        sc2 = QShortcut(QKeySequence("Ctrl+2"), self)
+        sc2.activated.connect(self._toggle_map_panel)
+        sc3 = QShortcut(QKeySequence("Ctrl+3"), self)
+        sc3.activated.connect(self._toggle_section_panel)
 
     # ------------------------------------------------------------------
     # Title / status helpers
@@ -440,8 +480,36 @@ class MainWindow(QMainWindow):
         if category == "Sections":
             self._on_new_section()
 
+    def _toggle_map_panel(self) -> None:
+        """Collapse / expand the map panel."""
+        sizes = self._splitter.sizes()
+        if self._map_panel_collapsed:
+            self._splitter.setSizes([self._map_panel_width, sizes[1]])
+            self._map_collapse_btn.setText("◀")
+            self._map_panel_collapsed = False
+        else:
+            self._map_panel_width = sizes[0] or 320
+            self._splitter.setSizes([0, sizes[0] + sizes[1]])
+            self._map_collapse_btn.setText("▶")
+            self._map_panel_collapsed = True
+
+    def _toggle_section_panel(self) -> None:
+        """Collapse / expand the section/3D tabs panel."""
+        sizes = self._splitter.sizes()
+        if sizes[1] == 0:
+            self._splitter.setSizes([sizes[0], 960])
+        else:
+            self._splitter.setSizes([sizes[0] + sizes[1], 0])
+
+    def _on_map_status(self, msg: str) -> None:
+        if msg:
+            self._status_label.setText(msg)
+        else:
+            self._update_status()
+
     def _on_tool_changed(self, tool_id: str) -> None:
-        """Route palette tool activation to the appropriate view modes."""
+        """Route palette tool activation to views and AppState."""
+        self._state.set_active_tool(tool_id)
         self._section_view.set_picking_active(tool_id == "horizon_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
         # Keep menu action in sync without triggering a re-entry loop
@@ -478,6 +546,11 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(MainWindow.APP_NAME)
     app.setApplicationVersion(MainWindow.APP_VERSION)
     app.setOrganizationName("Geoscience")
+    app.setStyleSheet("QToolTip { padding: 4px; }")
+    # 500ms tooltip delay
+    from PySide6.QtWidgets import QToolTip
+    from PySide6.QtGui import QFont
+    QToolTip.setFont(QFont("Segoe UI", 9))
 
     window = MainWindow()
     window.show()

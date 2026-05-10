@@ -55,18 +55,30 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig = Figure(figsize=(10, 6), tight_layout=True)
-        self._ax = self._fig.add_subplot(111)
+        self._fig    = Figure(figsize=(10, 6), tight_layout=True)
+        self._ax     = self._fig.add_subplot(111)
         self._canvas = FigureCanvasQTAgg(self._fig)
+
+        # Hidden toolbar — kept for zoom-stack; NOT in the layout.
         self._toolbar = NavigationToolbar2QT(self._canvas, self)
+        self._toolbar.hide()
+
+        # Pan state
+        self._sv_pan_anchor: tuple[float, float] | None = None
+        self._sv_pan_xlim0:  tuple[float, float] | None = None
+        self._sv_pan_ylim0:  tuple[float, float] | None = None
+        self._sv_pan_inv     = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._toolbar)
-        layout.addWidget(self._canvas)
+        layout.addWidget(self._canvas)   # canvas only
 
-        self._canvas.mpl_connect("button_press_event", self._on_canvas_click)
+        self._canvas.mpl_connect("button_press_event",   self._on_canvas_press_sv)
+        self._canvas.mpl_connect("motion_notify_event",  self._on_canvas_motion_sv)
+        self._canvas.mpl_connect("button_release_event", self._on_canvas_release_sv)
+        self._canvas.mpl_connect("scroll_event",         self._on_scroll_sv)
+        self._canvas.mpl_connect("button_press_event",   self._on_canvas_click)
 
     def _connect_signals(self) -> None:
         s = self._state
@@ -387,6 +399,46 @@ class SectionView(QWidget):
 
     def _on_polygons_changed(self, *_args) -> None:
         self.render()
+
+    # ------------------------------------------------------------------
+    # Pan / zoom for section view (delegated from tool palette)
+    # ------------------------------------------------------------------
+
+    def _on_canvas_press_sv(self, event) -> None:
+        if event.button == 1 and self._state.active_tool == "pan":
+            if event.inaxes is self._ax:
+                self._sv_pan_anchor = (event.x, event.y)
+                self._sv_pan_xlim0  = self._ax.get_xlim()
+                self._sv_pan_ylim0  = self._ax.get_ylim()
+                self._sv_pan_inv    = self._ax.transData.inverted()
+
+    def _on_canvas_motion_sv(self, event) -> None:
+        if self._sv_pan_anchor is None:
+            return
+        d0 = self._sv_pan_inv.transform(self._sv_pan_anchor)
+        d1 = self._sv_pan_inv.transform([event.x, event.y])
+        dx, dy = d0[0] - d1[0], d0[1] - d1[1]
+        self._ax.set_xlim(self._sv_pan_xlim0[0] + dx, self._sv_pan_xlim0[1] + dx)
+        self._ax.set_ylim(self._sv_pan_ylim0[0] + dy, self._sv_pan_ylim0[1] + dy)
+        self._canvas.draw_idle()
+
+    def _on_canvas_release_sv(self, event) -> None:
+        if event.button == 1:
+            self._sv_pan_anchor = None
+
+    def _on_scroll_sv(self, event) -> None:
+        if self._state.active_tool != "zoom":
+            return
+        if event.inaxes is not self._ax:
+            return
+        factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
+        cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
+        cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        self._ax.set_xlim([cx + (x - cx) * factor for x in xl])
+        self._ax.set_ylim([cy + (y - cy) * factor for y in yl])
+        self._canvas.draw_idle()
 
     def _on_canvas_click(self, event) -> None:
         if event.inaxes is not self._ax:

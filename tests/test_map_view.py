@@ -31,7 +31,9 @@ def qapp():
 
 @pytest.fixture
 def state():
-    return AppState()
+    s = AppState()
+    s.set_active_tool("select")  # node editing requires select or edit_nodes
+    return s
 
 
 @pytest.fixture
@@ -111,10 +113,13 @@ class TestConstruction:
 
     def test_has_toolbar(self, view):
         from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+        # Toolbar exists but is hidden — not in the layout
         assert isinstance(view._toolbar, NavigationToolbar2QT)
+        assert not view._toolbar.isVisible()
 
     def test_no_drag_initially(self, view):
         assert view._selected_node is None
+        assert view._hover_node is None
         assert view._drag_active is False
 
 
@@ -380,6 +385,9 @@ class FakePress:
         self.inaxes = axes
         self.xdata = x
         self.ydata = y
+        # Display pixel coordinates required by _start_pan
+        self.x = float(x) if x is not None else 0.0
+        self.y = float(y) if y is not None else 0.0
 
 class FakeMotion:
     def __init__(self, axes, x, y):
@@ -597,3 +605,174 @@ class TestGraticule:
         view.render()
         # TickLabel format set to plain — just check no crash
         assert view.axes.get_xlabel() != ""
+
+
+# ---------------------------------------------------------------------------
+# Hover state
+# ---------------------------------------------------------------------------
+
+class TestHoverState:
+    def _setup(self, view, state):
+        sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
+        state.add_section(sec)
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+
+    def test_hover_none_initially(self, view):
+        assert view._hover_node is None
+
+    def test_hover_set_on_move_near_node(self, view, state):
+        self._setup(view, state)
+
+        class FakeMotion:
+            xdata = 0.0
+            ydata = 0.0
+            inaxes = view.axes
+
+        view._update_hover(FakeMotion())
+        assert view._hover_node is not None
+        assert view._hover_node == (0, 0)
+
+    def test_hover_cleared_on_move_away(self, view, state):
+        self._setup(view, state)
+
+        class FarMotion:
+            xdata = 9999.0
+            ydata = 9999.0
+            inaxes = view.axes
+
+        view._hover_node = (0, 0)
+        view._update_hover(FarMotion())
+        assert view._hover_node is None
+
+    def test_hover_cleared_on_non_edit_tool(self, view, state):
+        self._setup(view, state)
+        view._hover_node = (0, 0)
+        state.set_active_tool("pan")
+        # tool_changed should clear hover
+        assert view._hover_node is None
+
+    def test_no_hover_when_pan_tool_active(self, view, state):
+        self._setup(view, state)
+        state.set_active_tool("pan")
+
+        class FakeMotion:
+            button = None
+            xdata = 0.0
+            ydata = 0.0
+            inaxes = view.axes
+
+        view._on_canvas_motion(FakeMotion())
+        assert view._hover_node is None
+
+
+# ---------------------------------------------------------------------------
+# Delete key
+# ---------------------------------------------------------------------------
+
+class TestDeleteKey:
+    def _setup(self, view, state):
+        sec = Section([(0.0, 0.0), (500.0, 0.0), (1000.0, 0.0)], name="L")
+        state.add_section(sec)
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+
+    def test_delete_selected_node(self, view, state):
+        self._setup(view, state)
+        view._on_canvas_press(FakePress(view.axes, 500.0, 0.0))  # select midpoint
+
+        class FakeKey:
+            key = "delete"
+
+        view._on_key_press(FakeKey())
+        assert state.project.sections[0].n_nodes == 2
+
+    def test_delete_noop_when_nothing_selected(self, view, state):
+        self._setup(view, state)
+
+        class FakeKey:
+            key = "delete"
+
+        view._on_key_press(FakeKey())
+        assert state.project.sections[0].n_nodes == 3
+
+    def test_delete_noop_when_only_two_nodes(self, view, state):
+        sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
+        state.add_section(sec)
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+        view._on_canvas_press(FakePress(view.axes, 0.0, 0.0))
+
+        class FakeKey:
+            key = "delete"
+
+        view._on_key_press(FakeKey())
+        assert state.project.sections[0].n_nodes == 2  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Escape key
+# ---------------------------------------------------------------------------
+
+class TestEscapeKey:
+    def _setup(self, view, state):
+        sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
+        state.add_section(sec)
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+
+    def test_escape_deselects(self, view, state):
+        self._setup(view, state)
+        view._on_canvas_press(FakePress(view.axes, 0.0, 0.0))
+        assert view._selected_node is not None
+
+        class FakeKey:
+            key = "escape"
+
+        view._on_key_press(FakeKey())
+        assert view._selected_node is None
+
+    def test_escape_cancels_drag_without_committing(self, view, state):
+        self._setup(view, state)
+        original_x = state.project.sections[0].nodes[0, 0]
+        view._on_canvas_press(FakePress(view.axes, 0.0, 0.0))
+        view._on_canvas_motion(FakeMotion(view.axes, -500.0, 0.0))
+
+        class FakeKey:
+            key = "escape"
+
+        view._on_key_press(FakeKey())
+        # Drag cancelled — AppState NOT updated
+        assert pytest.approx(state.project.sections[0].nodes[0, 0]) == original_x
+        assert not view._drag_active
+
+
+# ---------------------------------------------------------------------------
+# Tool-routing (node editing disabled for non-edit tools)
+# ---------------------------------------------------------------------------
+
+class TestToolRouting:
+    def test_press_noop_when_pan_tool_active(self, view, state):
+        sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
+        state.add_section(sec)
+        state.set_active_tool("pan")
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+        view._on_canvas_press(FakePress(view.axes, 0.0, 0.0))
+        # Pan tool: should start pan, NOT select node
+        assert view._selected_node is None
+
+    def test_node_selection_works_for_edit_nodes_tool(self, view, state):
+        sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
+        state.add_section(sec)
+        state.set_active_tool("edit_nodes")
+        view.axes.set_xlim(-200, 1200)
+        view.axes.set_ylim(-200, 200)
+        view.canvas.draw()
+        view._on_canvas_press(FakePress(view.axes, 0.0, 0.0))
+        assert view._selected_node is not None

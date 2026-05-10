@@ -78,7 +78,9 @@ class TestConstruction:
 
     def test_has_toolbar(self, view):
         from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+        # Toolbar exists but is hidden — canvas is the only widget
         assert isinstance(view._toolbar, NavigationToolbar2QT)
+        assert not view._toolbar.isVisible()
 
     def test_picking_off_by_default(self, view):
         assert not view._picking_active

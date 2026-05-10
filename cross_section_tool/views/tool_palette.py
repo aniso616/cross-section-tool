@@ -16,18 +16,27 @@ from PySide6.QtWidgets import (
 
 # (tool_id, unicode_icon, tooltip_text) — None inserts a visual separator
 _TOOL_DEFS: list[tuple[str, str, str] | None] = [
-    ("select",       "↖",  "Select / edit objects  (V)"),
-    ("pan",          "⊕",  "Pan view  (Space)"),
-    ("zoom",         "⊙",  "Zoom — left: in, right: out  (Z)"),
+    ("select",       "↖",
+     "Select (V)\nSelect and edit existing objects and nodes"),
+    ("pan",          "⊕",
+     "Pan (H)\nLeft-click-drag to pan the active view"),
+    ("zoom",         "⊙",
+     "Zoom (Z)\nScroll wheel to zoom in / out centred on cursor"),
     None,
-    ("new_section",  "╱",  "New Section — draw on map  (N)"),
-    ("edit_nodes",   "◉",  "Edit section nodes  (E)"),
+    ("new_section",  "╱",
+     "New Section (S)\nDraw a section trace on the map — click nodes, Enter to finish"),
+    ("edit_nodes",   "◉",
+     "Edit Nodes (E)\nSelect, move, insert, or delete section nodes"),
     None,
-    ("horizon_pick", "─",  "Horizon Pick  (H)"),
-    ("fault_pick",   "╲",  "Fault Pick  (F)"),
-    ("polygon",      "▭",  "Polygon  (G)"),
+    ("horizon_pick", "─",
+     "Horizon Pick (P)\nLeft-click on the section view to place interpretation picks"),
+    ("fault_pick",   "╲",
+     "Fault Pick (F)\nDraw a fault trace on the section view"),
+    ("polygon",      "▭",
+     "Polygon (G)\nDraw a filled polygon on the section view — right-click to close"),
     None,
-    ("measure",      "↔",  "Measure distance  (M)"),
+    ("measure",      "↔",
+     "Measure (M)\nMeasure distances along the section or on the map"),
 ]
 
 _TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if t is not None]

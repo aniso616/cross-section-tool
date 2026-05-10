@@ -81,6 +81,9 @@ class AppState(QObject):
     polygon_removed = Signal(object)
     polygon_modified = Signal(int, object)
 
+    # Active tool (mirrors ToolPalette; stored here so views can read it)
+    tool_changed = Signal(str)
+
     # ------------------------------------------------------------------
 
     def __init__(self, parent=None) -> None:
@@ -90,6 +93,7 @@ class AppState(QObject):
         self._active_section: Section | None = None
         self._active_well: Well | None = None
         self._is_modified: bool = False
+        self._active_tool: str = "select"
 
     # ------------------------------------------------------------------
     # Read-only properties
@@ -106,6 +110,16 @@ class AppState(QObject):
     @property
     def is_modified(self) -> bool:
         return self._is_modified
+
+    @property
+    def active_tool(self) -> str:
+        return self._active_tool
+
+    def set_active_tool(self, tool_id: str) -> None:
+        """Set the active tool; emits :attr:`tool_changed` if it changed."""
+        if self._active_tool != tool_id:
+            self._active_tool = tool_id
+            self.tool_changed.emit(tool_id)
 
     @property
     def active_section(self) -> Section | None:

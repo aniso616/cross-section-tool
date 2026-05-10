@@ -82,6 +82,9 @@ class TestInitialState:
     def test_no_active_well(self):
         assert AppState().active_well is None
 
+    def test_active_tool_default_select(self):
+        assert AppState().active_tool == "select"
+
     def test_repr_does_not_crash(self):
         s = AppState()
         assert "AppState" in repr(s)
@@ -700,3 +703,39 @@ class TestSignalBehaviour:
             s._is_modified = False
             fn(idx, obj)
             assert s.is_modified
+
+
+# ---------------------------------------------------------------------------
+# Active tool
+# ---------------------------------------------------------------------------
+
+class TestActiveTool:
+    def test_default_is_select(self):
+        assert AppState().active_tool == "select"
+
+    def test_set_active_tool(self):
+        s = AppState()
+        s.set_active_tool("pan")
+        assert s.active_tool == "pan"
+
+    def test_tool_changed_signal_emitted(self):
+        s = AppState()
+        received = []
+        s.tool_changed.connect(lambda t: received.append(t))
+        s.set_active_tool("zoom")
+        assert received == ["zoom"]
+
+    def test_tool_changed_not_emitted_for_same_tool(self):
+        s = AppState()
+        s.set_active_tool("select")
+        received = []
+        s.tool_changed.connect(lambda t: received.append(t))
+        s.set_active_tool("select")
+        assert received == []
+
+    def test_all_palette_tools_settable(self):
+        from cross_section_tool.views.tool_palette import _TOOL_IDS
+        s = AppState()
+        for tid in _TOOL_IDS:
+            s.set_active_tool(tid)
+            assert s.active_tool == tid
