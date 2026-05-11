@@ -104,6 +104,7 @@ class MapView(QWidget):
         self._canvas.mpl_connect("button_release_event", self._on_canvas_release)
         self._canvas.mpl_connect("scroll_event",         self._on_scroll)
         self._canvas.mpl_connect("key_press_event",      self._on_key_press)
+        self._canvas.mpl_connect("resize_event",         lambda _: self._canvas.draw_idle())
 
         # Accept keyboard focus so Delete / Escape work
         self._canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)

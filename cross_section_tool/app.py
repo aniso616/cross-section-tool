@@ -116,8 +116,6 @@ class MainWindow(QMainWindow):
 
         # Map panel: view + collapse strip (always visible on right edge)
         self._map_view.setMinimumWidth(0)
-        self._map_view.setMinimumHeight(400)   # Phase 1: floor
-        self._map_view.setMaximumHeight(700)   # Phase 1: lock vertical growth
         self._map_collapse_strip = _CollapseStrip(self)
         self._map_collapse_strip.clicked.connect(self._toggle_map_panel)
         self._map_collapse_strip.setToolTip("Collapse / expand map panel  (Ctrl+2)")
@@ -312,10 +310,8 @@ class MainWindow(QMainWindow):
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
-        # Project panel pick-target selection
-        self._project_panel.pick_target_selected.connect(
-            lambda cat, idx: self._state.set_active_pick_target(cat, idx)
-        )
+        # Project panel pick-target selection → auto-switch tool
+        self._project_panel.pick_target_selected.connect(self._on_pick_target_selected)
         # Project panel → AppState mutations
         self._project_panel.object_deleted.connect(self._on_panel_delete)
         self._project_panel.object_renamed.connect(self._on_panel_rename)
@@ -325,6 +321,9 @@ class MainWindow(QMainWindow):
         self._project_panel.add_requested.connect(self._on_panel_add)
         # Status bar from map view drag
         self._map_view.status_message.connect(self._on_map_status)
+        # Status bar updates when tool or active pick target changes
+        s.tool_changed.connect(lambda _: self._update_status())
+        s.active_pick_target_changed.connect(lambda *_: self._update_status())
         # Keyboard shortcuts for tools (application-wide)
         _tool_keys = {
             "V": "select",   "H": "pan",          "Z": "zoom",
@@ -358,15 +357,21 @@ class MainWindow(QMainWindow):
 
     def _update_status(self, *_args) -> None:
         path = self._state.project_path
-        if path:
-            msg = os.path.basename(path)
-        else:
-            msg = "New project"
+        msg = os.path.basename(path) if path else "New project"
         if self._state.is_modified:
-            msg += "  [unsaved changes]"
-        n_sec = len(self._state.project.sections)
+            msg += "  [unsaved]"
+        n_sec  = len(self._state.project.sections)
         n_well = len(self._state.project.wells)
         msg += f"  |  {n_sec} section(s)  {n_well} well(s)"
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        if cat is not None and idx is not None:
+            proj = self._state.project
+            picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+            if idx < len(picks):
+                obj_name = picks[idx].name or f"{cat[:-1]} {idx + 1}"
+                tool_label = self._state.active_tool.replace("_", " ").title()
+                msg += f"  |  Active: {obj_name}  |  Tool: {tool_label}"
         self._status_label.setText(msg)
 
     # ------------------------------------------------------------------
@@ -673,6 +678,14 @@ class MainWindow(QMainWindow):
             self._status_label.setText(msg)
         else:
             self._update_status()
+
+    def _on_pick_target_selected(self, cat: str, idx: int) -> None:
+        """Clicking a horizon/fault in the panel also activates the matching tool."""
+        self._state.set_active_pick_target(cat, idx)
+        if cat == "Horizons":
+            self._tool_palette.set_active_tool("horizon_pick")
+        elif cat == "Faults":
+            self._tool_palette.set_active_tool("fault_pick")
 
     def _on_tool_changed(self, tool_id: str) -> None:
         """Route palette tool activation to views and AppState."""

@@ -159,11 +159,13 @@ class SectionView(QWidget):
         self._canvas.mpl_connect("button_release_event", self._on_sv_release)
         self._canvas.mpl_connect("scroll_event",         self._on_scroll_sv)
         self._canvas.mpl_connect("key_press_event",      self._on_sv_key)
+        self._canvas.mpl_connect("resize_event",         lambda _: self._canvas.draw_idle())
         self._canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _connect_signals(self) -> None:
         s = self._state
         s.active_section_changed.connect(self._on_active_section_changed)
+        s.active_pick_target_changed.connect(self._on_data_changed)
         s.project_changed.connect(self.render)
         s.horizon_pick_added.connect(self._on_data_changed)
         s.horizon_pick_removed.connect(self._on_data_changed)
@@ -366,15 +368,21 @@ class SectionView(QWidget):
     def _mpl_linestyle(style: str) -> str:
         return {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}.get(style, "-")
 
+    def _is_active_pick(self, category: str, obj_idx: int) -> bool:
+        return (self._state.active_pick_category == category and
+                self._state.active_pick_index == obj_idx)
+
     def _render_horizons(self, section: Section) -> None:
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
             if hp.n_picks == 0:
                 continue
             lw = getattr(hp, "line_width", 1.5)
             ls = self._mpl_linestyle(getattr(hp, "line_style", "solid"))
+            is_active = self._is_active_pick("Horizons", obj_idx)
             self._ax.plot(
                 hp.distances, hp.depths,
-                color=hp.color, linewidth=lw, linestyle=ls, zorder=3,
+                color=hp.color, linewidth=lw * 1.6 if is_active else lw,
+                linestyle=ls, zorder=3 if not is_active else 4,
                 label=hp.name or "_nolegend_",
             )
             for pt_idx in range(hp.n_picks):
@@ -390,9 +398,11 @@ class SectionView(QWidget):
                 continue
             lw = getattr(fp, "line_width", 1.5)
             ls = self._mpl_linestyle(getattr(fp, "line_style", "dashed"))
+            is_active = self._is_active_pick("Faults", obj_idx)
             self._ax.plot(
                 fp.distances, fp.depths,
-                color=fp.color, linewidth=lw, linestyle=ls, zorder=3,
+                color=fp.color, linewidth=lw * 1.6 if is_active else lw,
+                linestyle=ls, zorder=3 if not is_active else 4,
                 label=fp.name or "_nolegend_",
             )
             for pt_idx in range(fp.n_picks):

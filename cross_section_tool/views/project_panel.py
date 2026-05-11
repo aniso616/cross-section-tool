@@ -382,15 +382,19 @@ class ProjectPanel(QDockWidget):
         return sel.parent().text(0)
 
     def _on_item_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
-        """Clicking a Horizon or Fault item sets it as the active pick target."""
+        """Single click on any object row activates it."""
         parent = item.parent()
         if parent is None:
-            return  # category header, not an object row
+            return  # category header
         cat = parent.text(0)
         idx = parent.indexOfChild(item)
         if cat in ("Horizons", "Faults"):
             self._state.set_active_pick_target(cat, idx)
             self.pick_target_selected.emit(cat, idx)
+        elif cat == "Sections":
+            proj = self._state.project
+            if idx < len(proj.sections):
+                self._state.set_active_section(proj.sections[idx])
 
     def _on_context_menu(self, pos) -> None:
         # Check if user right-clicked a category header

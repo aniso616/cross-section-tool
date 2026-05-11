@@ -739,3 +739,146 @@ class TestActiveTool:
         for tid in _TOOL_IDS:
             s.set_active_tool(tid)
             assert s.active_tool == tid
+
+
+# ---------------------------------------------------------------------------
+# Active pick target
+# ---------------------------------------------------------------------------
+
+class TestActivePickTarget:
+    def test_defaults_none(self):
+        s = AppState()
+        assert s.active_pick_category is None
+        assert s.active_pick_index is None
+
+    def test_set_active_pick_target(self):
+        s = AppState()
+        s.set_active_pick_target("Horizons", 2)
+        assert s.active_pick_category == "Horizons"
+        assert s.active_pick_index == 2
+
+    def test_set_fault_pick_target(self):
+        s = AppState()
+        s.set_active_pick_target("Faults", 0)
+        assert s.active_pick_category == "Faults"
+        assert s.active_pick_index == 0
+
+    def test_signal_emitted_on_change(self):
+        s = AppState()
+        received = []
+        s.active_pick_target_changed.connect(lambda c, i: received.append((c, i)))
+        s.set_active_pick_target("Horizons", 1)
+        assert received == [("Horizons", 1)]
+
+    def test_signal_emitted_every_call(self):
+        s = AppState()
+        received = []
+        s.active_pick_target_changed.connect(lambda c, i: received.append((c, i)))
+        s.set_active_pick_target("Horizons", 0)
+        s.set_active_pick_target("Horizons", 0)
+        assert len(received) == 2
+
+    def test_overwrite_category(self):
+        s = AppState()
+        s.set_active_pick_target("Horizons", 1)
+        s.set_active_pick_target("Faults", 0)
+        assert s.active_pick_category == "Faults"
+        assert s.active_pick_index == 0
+
+
+# ---------------------------------------------------------------------------
+# HorizonPick add / remove / sort (integration via AppState)
+# ---------------------------------------------------------------------------
+
+class TestPickPointOperations:
+    def test_add_pick_increments_count(self):
+        s = AppState()
+        hp = HorizonPick([0.0], [100.0], name="H1")
+        s.add_horizon_pick(hp)
+        copy_hp = hp.__class__(
+            hp.distances.tolist() + [500.0],
+            hp.depths.tolist() + [200.0],
+            name=hp.name, color=hp.color,
+        )
+        s.update_horizon_pick(0, copy_hp)
+        assert s.project.horizon_picks[0].n_picks == 2
+
+    def test_insert_pick_sorts_by_distance(self):
+        import copy as _copy
+        s = AppState()
+        hp = HorizonPick([0.0, 1000.0], [100.0, 150.0], name="H1")
+        s.add_horizon_pick(hp)
+        hp2 = _copy.deepcopy(s.project.horizon_picks[0])
+        hp2.insert_pick(500.0, 125.0)
+        s.update_horizon_pick(0, hp2)
+        result = s.project.horizon_picks[0]
+        import numpy as np
+        assert np.all(np.diff(result.distances) >= 0)
+        assert result.n_picks == 3
+
+    def test_remove_pick_decrements_count(self):
+        import copy as _copy
+        s = AppState()
+        hp = HorizonPick([0.0, 500.0, 1000.0], [100.0, 120.0, 150.0])
+        s.add_horizon_pick(hp)
+        hp2 = _copy.deepcopy(s.project.horizon_picks[0])
+        hp2.delete_pick(1)
+        s.update_horizon_pick(0, hp2)
+        assert s.project.horizon_picks[0].n_picks == 2
+
+    def test_update_pick_emits_modified(self):
+        import copy as _copy
+        s = AppState()
+        hp = HorizonPick([0.0], [100.0])
+        s.add_horizon_pick(hp)
+        received = []
+        s.horizon_pick_modified.connect(lambda i, p: received.append((i, p)))
+        hp2 = _copy.deepcopy(hp)
+        hp2.insert_pick(500.0, 200.0)
+        s.update_horizon_pick(0, hp2)
+        assert len(received) == 1
+        assert received[0][0] == 0
+
+    def test_empty_pick_can_receive_points(self):
+        import copy as _copy
+        s = AppState()
+        hp = HorizonPick.empty(name="Empty")
+        s.add_horizon_pick(hp)
+        assert s.project.horizon_picks[0].n_picks == 0
+        hp2 = _copy.deepcopy(s.project.horizon_picks[0])
+        hp2.insert_pick(300.0, 500.0)
+        s.update_horizon_pick(0, hp2)
+        assert s.project.horizon_picks[0].n_picks == 1
+
+
+# ---------------------------------------------------------------------------
+# active_pick_target_changed signal fires on section-panel interaction
+# ---------------------------------------------------------------------------
+
+class TestPickTargetSignalChain:
+    def test_pick_target_changed_fires_with_correct_args(self):
+        s = AppState()
+        s.add_horizon_pick(HorizonPick([0.0], [100.0], name="Top"))
+        s.add_horizon_pick(HorizonPick([0.0], [200.0], name="Base"))
+        received = []
+        s.active_pick_target_changed.connect(lambda c, i: received.append((c, i)))
+        s.set_active_pick_target("Horizons", 1)
+        assert received == [("Horizons", 1)]
+
+    def test_active_pick_index_matches_set_value(self):
+        s = AppState()
+        for i in range(3):
+            s.add_horizon_pick(HorizonPick([float(i * 100)], [float(i * 50)]))
+        s.set_active_pick_target("Horizons", 2)
+        assert s.active_pick_index == 2
+
+    def test_fault_pick_target_independent_of_horizon(self):
+        s = AppState()
+        s.add_horizon_pick(HorizonPick([0.0], [100.0]))
+        from cross_section_tool.core.surfaces import HorizonPick as HP
+        s.add_fault_pick(HP([0.0], [100.0], name="F1"))
+        s.set_active_pick_target("Horizons", 0)
+        assert s.active_pick_category == "Horizons"
+        s.set_active_pick_target("Faults", 0)
+        assert s.active_pick_category == "Faults"
+        assert s.active_pick_index == 0
