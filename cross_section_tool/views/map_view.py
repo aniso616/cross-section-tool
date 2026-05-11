@@ -363,6 +363,11 @@ class MapView(QWidget):
 
         tool = self._state.active_tool
 
+        # Middle button always pans
+        if event.button == 2:
+            self._start_pan(event)
+            return
+
         if event.button == 1:
             if tool == "pan":
                 self._start_pan(event)
@@ -440,8 +445,8 @@ class MapView(QWidget):
             self._update_hover(event)
 
     def _on_canvas_release(self, event) -> None:
-        if event.button == 1:
-            # End pan
+        if event.button in (1, 2):
+            # End pan (left button in pan-tool, or middle button)
             self._end_pan()
 
             # Commit drag
@@ -463,8 +468,6 @@ class MapView(QWidget):
                 )
 
     def _on_scroll(self, event) -> None:
-        if self._state.active_tool != "zoom":
-            return
         if event.inaxes is not self._ax:
             return
         factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85

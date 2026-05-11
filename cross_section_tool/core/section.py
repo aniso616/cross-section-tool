@@ -14,7 +14,7 @@ class Section:
         nodes: list[tuple[float, float]] | np.ndarray,
         name: str = "",
         depth_domain: Literal["depth", "twt"] = "depth",
-        depth_units: Literal["m", "ft"] = "m",
+        depth_units: str = "m",
         vertical_exaggeration: float = 1.0,
         crs_epsg: int = 32632,
     ) -> None:
@@ -26,7 +26,7 @@ class Section:
         self._nodes: np.ndarray = nodes.copy()
         self.name = name
         self.depth_domain: Literal["depth", "twt"] = depth_domain
-        self.depth_units: Literal["m", "ft"] = depth_units
+        self.depth_units: str = str(depth_units)
         self.vertical_exaggeration: float = float(vertical_exaggeration)
         self.crs_epsg: int = int(crs_epsg)
 

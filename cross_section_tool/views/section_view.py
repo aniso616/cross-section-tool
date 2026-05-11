@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import MultipleLocator
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
@@ -34,6 +35,8 @@ from cross_section_tool.io.segy import SeismicDataset
 _PICK_HIT_PX  = 10      # pick-point hit-test radius in screen pixels
 _PICK_DRAG_PX = 3       # minimum movement (px) before drag activates
 _DEFAULT_DEPTH = 5000.0  # default y-axis range when no data loaded (m)
+
+_DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s"]
 
 # Pick-point visual states: (radius_pt, face, edge, ew)
 _PP_NORMAL   = (5,  "white",   "#555", 0.8)
@@ -112,38 +115,58 @@ class SectionView(QWidget):
         self._toolbar = NavigationToolbar2QT(self._canvas, self)
         self._toolbar.hide()
 
-        # Header bar: section name + VE spinbox + VE lock
+        # Header bar: [section name] [depth-units combo] [VE spinbox] [VE lock]
         self._header = QWidget()
         self._header.setFixedHeight(28)
         self._header.setStyleSheet("background: #f5f5f5; border-bottom: 1px solid #ddd;")
         hl = QHBoxLayout(self._header)
         hl.setContentsMargins(8, 2, 8, 2)
+        hl.setSpacing(6)
         self._section_name_label = QLabel("— no section —")
         self._section_name_label.setStyleSheet("color: #444; font-size: 9px;")
         hl.addWidget(self._section_name_label)
         hl.addStretch()
+
+        # Depth units combo
+        hl.addWidget(QLabel("Units:"))
+        self._depth_units_combo = QComboBox()
+        self._depth_units_combo.setFixedWidth(52)
+        self._depth_units_combo.setToolTip("Depth / time axis units")
+        for u in _DEPTH_UNITS:
+            self._depth_units_combo.addItem(u)
+        self._depth_units_combo.currentIndexChanged.connect(self._on_depth_units_changed)
+        hl.addWidget(self._depth_units_combo)
+
+        # VE spinbox
         hl.addWidget(QLabel("VE:"))
         self._ve_spin = QDoubleSpinBox()
         self._ve_spin.setRange(0.1, 20.0)
         self._ve_spin.setSingleStep(0.5)
         self._ve_spin.setValue(1.0)
         self._ve_spin.setFixedWidth(60)
+        self._ve_spin.setDecimals(1)
         self._ve_spin.setToolTip(
             "Vertical exaggeration (1.0 = true scale)\n"
             "Higher values stretch depth axis, steepening apparent dips."
         )
         self._ve_spin.valueChanged.connect(self._on_ve_changed)
         hl.addWidget(self._ve_spin)
-        self._ve_lock_btn = QPushButton("\U0001F512")   # 🔒
+
+        # VE lock — icon toggles between 🔒 and 🔓
+        self._ve_lock_btn = QPushButton("\U0001F513")   # 🔓 (unlocked default)
         self._ve_lock_btn.setCheckable(True)
         self._ve_lock_btn.setFixedSize(24, 22)
         self._ve_lock_btn.setToolTip(
-            "Lock VE — when checked, the same vertical exaggeration\n"
-            "applies to all sections (switching sections keeps this value)."
+            "Lock VE: when locked, the same vertical exaggeration applies\n"
+            "to all sections and is preserved when switching between them.\n"
+            "Scroll or click to unlock."
         )
         self._ve_lock_btn.setStyleSheet(
             "QPushButton { border: 1px solid #bbb; border-radius: 3px; font-size: 11px; }"
             "QPushButton:checked { background: #d0e8ff; border-color: #5599cc; }"
+        )
+        self._ve_lock_btn.toggled.connect(
+            lambda locked: self._ve_lock_btn.setText("\U0001F512" if locked else "\U0001F513")
         )
         hl.addWidget(self._ve_lock_btn)
 
@@ -259,12 +282,19 @@ class SectionView(QWidget):
         if section is None:
             self._section_name_label.setText("— no section —")
             self._ve_spin.setEnabled(False)
+            self._depth_units_combo.setEnabled(False)
             self._canvas.draw_idle()
             return
 
         self._section_name_label.setText(section.name or "Unnamed section")
         self._ve_spin.setEnabled(True)
-        # Sync spinbox to section only when VE is not locked
+        self._depth_units_combo.setEnabled(True)
+        # Sync depth units combo
+        u = section.depth_units if section.depth_units in _DEPTH_UNITS else "m"
+        self._depth_units_combo.blockSignals(True)
+        self._depth_units_combo.setCurrentIndex(_DEPTH_UNITS.index(u))
+        self._depth_units_combo.blockSignals(False)
+        # Sync VE spinbox only when not locked
         if not self._ve_lock_btn.isChecked():
             self._ve_spin.blockSignals(True)
             self._ve_spin.setValue(section.vertical_exaggeration)
@@ -640,6 +670,18 @@ class SectionView(QWidget):
     # VE spinbox
     # ------------------------------------------------------------------
 
+    def _on_depth_units_changed(self, index: int) -> None:
+        section = self._state.active_section
+        if section is None:
+            return
+        units = _DEPTH_UNITS[index]
+        if section.depth_units == units:
+            return
+        idx = self._state.project.sections.index(section)
+        sec_copy = copy.deepcopy(section)
+        sec_copy.depth_units = units
+        self._state.update_section(idx, sec_copy)
+
     def _on_ve_changed(self, value: float) -> None:
         if self._ve_lock_btn.isChecked():
             # Apply to every section
@@ -685,8 +727,8 @@ class SectionView(QWidget):
 
         tool = self._state.active_tool
 
-        # ---- Pan ----
-        if event.button == 1 and tool == "pan":
+        # ---- Pan (left+pan-tool or middle button) ----
+        if (event.button == 1 and tool == "pan") or event.button == 2:
             self._sv_pan_anchor = (event.x, event.y)
             self._sv_pan_xlim0  = self._ax.get_xlim()
             self._sv_pan_ylim0  = self._ax.get_ylim()
@@ -798,8 +840,8 @@ class SectionView(QWidget):
             self.render()
 
     def _on_sv_release(self, event) -> None:
-        # End pan
-        if event.button == 1:
+        # End pan (left in pan-tool, or middle button)
+        if event.button in (1, 2):
             self._sv_pan_anchor = None
 
         # Commit drag
@@ -814,8 +856,6 @@ class SectionView(QWidget):
             self._pick_press_px = None
 
     def _on_scroll_sv(self, event) -> None:
-        if self._state.active_tool != "zoom":
-            return
         if event.inaxes is not self._ax:
             return
         factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
@@ -843,6 +883,14 @@ class SectionView(QWidget):
                 self._delete_selected_pick()
 
     def _on_active_section_changed(self, section) -> None:
+        if section is not None and self._ve_lock_btn.isChecked():
+            locked_ve = self._ve_spin.value()
+            if abs(getattr(section, "vertical_exaggeration", 1.0) - locked_ve) > 0.001:
+                idx = self._state.project.sections.index(section)
+                sec_copy = copy.deepcopy(section)
+                sec_copy.vertical_exaggeration = locked_ve
+                self._state.update_section(idx, sec_copy)
+                return  # update_section triggers re-render
         self.render()
 
     def _on_data_changed(self, *_args) -> None:
