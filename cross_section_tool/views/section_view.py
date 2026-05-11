@@ -32,9 +32,12 @@ from cross_section_tool.io.segy import SeismicDataset
 # Constants
 # ---------------------------------------------------------------------------
 
-_PICK_HIT_PX  = 10      # pick-point hit-test radius in screen pixels
-_PICK_DRAG_PX = 3       # minimum movement (px) before drag activates
-_DEFAULT_DEPTH = 5000.0  # default y-axis range when no data loaded (m)
+_PICK_HIT_PX      = 10    # pick-point hit-test radius in screen pixels
+_LINE_HIT_PX      = 8     # pick-line hit-test tolerance in screen pixels
+_PICK_DRAG_PX     = 3     # minimum movement before drag activates
+_OBJ_DRAG_PX      = 3     # minimum movement before object-move activates
+_SNAP_THRESHOLD   = 15    # snap radius in screen pixels
+_DEFAULT_DEPTH    = 5000.0
 
 _DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s"]
 
@@ -82,13 +85,30 @@ class SectionView(QWidget):
         # ---- display mode ----
         self._display_mode: Literal["variable_density", "wiggle"] = "variable_density"
 
-        # ---- pick-node interaction ----
-        # _pick_ref: (category, obj_idx, pt_idx) — "Horizons"|"Faults"
+        # ---- Phase 2: object selection state machine ----
+        # mode: "idle" → "object_selected" → "edit_mode"
+        self._sv_mode:         str                        = "idle"
+        self._selected_object: tuple[str, int] | None    = None   # (cat, obj_idx)
+        self._hover_object:    tuple[str, int] | None    = None
+        # Phase 3: whole-object drag
+        self._object_drag_active:   bool                       = False
+        self._object_drag_press_pt: tuple[float, float] | None = None
+        self._object_drag_origin:   HorizonPick | None         = None
+
+        # ---- pick-node interaction (edit mode only) ----
+        # _pick_ref: (category, obj_idx, FULL_ARRAY_pt_idx)
         self._pick_hover:    tuple[str, int, int] | None = None
         self._pick_selected: tuple[str, int, int] | None = None
         self._pick_drag:     bool                        = False
         self._pick_press_px: tuple[float, float] | None = None
         self._pick_copy:     HorizonPick | None          = None
+
+        # ---- Phase 5: snapping ----
+        self._snap_active: bool                       = True
+        self._snap_point:  tuple[float, float] | None = None
+
+        # drag preview (set during motion, consumed on release)
+        self._object_drag_preview = None
 
         # ---- pan state ----
         self._sv_pan_anchor: tuple[float, float] | None = None
@@ -207,6 +227,9 @@ class SectionView(QWidget):
         s.polygon_added.connect(self._on_data_changed)
         s.polygon_removed.connect(self._on_data_changed)
         s.polygon_modified.connect(self._on_data_changed)
+        s.reference_line_added.connect(self._on_data_changed)
+        s.reference_line_removed.connect(self._on_data_changed)
+        s.reference_line_modified.connect(self._on_data_changed)
 
     # ------------------------------------------------------------------
     # Public API
@@ -304,12 +327,14 @@ class SectionView(QWidget):
         self._render_seismic(section)
         self._render_grid(section)
         self._render_section_ends(section)
+        self._render_reference_lines(section)
         self._render_polygons(section)
         self._render_surfaces(section)
         self._render_faults(section)
         self._render_horizons(section)
         self._render_wells(section)
         self._render_rubber_band(section)
+        self._render_snap_indicator()
         self._render_polygon_in_progress()
         self._canvas.draw_idle()
 
@@ -390,6 +415,46 @@ class SectionView(QWidget):
         self._ax.plot([0, 0],         [ylo, yhi], **kw)
         self._ax.plot([total, total], [ylo, yhi], **kw)
 
+    def _render_reference_lines(self, section: Section) -> None:
+        """Phase 4: horizontal and vertical construction lines."""
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        ylo, yhi = min(yl), max(yl)
+        kw = dict(color="#aaaaaa", linewidth=0.8, linestyle=(0, (6, 4)), zorder=1)
+        for rl in self._state.project.reference_lines:
+            if not rl.visible:
+                continue
+            if rl.kind == "horizontal":
+                self._ax.axhline(rl.value, **kw)
+                label = f" {rl.name or rl.value}"
+                self._ax.text(xl[1], rl.value, label, fontsize=6,
+                              color="#999", va="center", ha="right", zorder=1)
+            elif rl.kind == "vertical":
+                self._ax.axvline(rl.value, **kw)
+                label = f" {rl.name or rl.value}"
+                self._ax.text(rl.value, ylo, label, fontsize=6,
+                              color="#999", va="bottom", ha="left",
+                              rotation=90, zorder=1)
+
+    def _render_snap_indicator(self) -> None:
+        """Phase 5: small crosshair at the snapped cursor position."""
+        if self._snap_point is None:
+            return
+        sx, sy = self._snap_point
+        s = 6   # half-size in screen pixels
+        try:
+            inv = self._ax.transData.inverted()
+            p0  = inv.transform([0, 0])
+            p1  = inv.transform([s, s])
+            dx  = abs(float(p1[0]) - float(p0[0]))
+            dy  = abs(float(p1[1]) - float(p0[1]))
+        except Exception:
+            return
+        self._ax.plot([sx - dx, sx + dx], [sy, sy],
+                      color="#ff8800", lw=1.2, zorder=12)
+        self._ax.plot([sx, sx], [sy - dy, sy + dy],
+                      color="#ff8800", lw=1.2, zorder=12)
+
     # ------------------------------------------------------------------
     # Object renderers
     # ------------------------------------------------------------------
@@ -402,45 +467,58 @@ class SectionView(QWidget):
         return (self._state.active_pick_category == category and
                 self._state.active_pick_index == obj_idx)
 
-    def _render_horizons(self, section: Section) -> None:
-        for obj_idx, hp in enumerate(self._state.project.horizon_picks):
-            if hp.n_picks == 0:
-                continue
-            lw = getattr(hp, "line_width", 1.5)
-            ls = self._mpl_linestyle(getattr(hp, "line_style", "solid"))
-            is_active = self._is_active_pick("Horizons", obj_idx)
-            self._ax.plot(
-                hp.distances, hp.depths,
-                color=hp.color, linewidth=lw * 1.6 if is_active else lw,
-                linestyle=ls, zorder=3 if not is_active else 4,
-                label=hp.name or "_nolegend_",
-            )
-            for pt_idx in range(hp.n_picks):
-                d, z = hp.distances[pt_idx], hp.depths[pt_idx]
-                ms, fc, ec, ew = self._pick_point_style("Horizons", obj_idx, pt_idx)
-                self._ax.plot(d, z, "o",
+    def _render_pick_object(
+        self, category: str, obj_idx: int, hp: HorizonPick,
+        section: Section, marker: str, default_ls: str,
+    ) -> None:
+        """Shared renderer for horizons and faults."""
+        # Phase 3: use drag preview if available
+        preview = getattr(self, "_object_drag_preview", None)
+        if (preview is not None
+                and preview[0] == category and preview[1] == obj_idx):
+            hp = preview[2]
+        # Phase 1: only picks belonging to this section (+ global picks)
+        sec_idxs = hp.section_indices(section.name)
+        d_sec = hp._distances[sec_idxs]
+        z_sec = hp._depths[sec_idxs]
+        if len(d_sec) == 0:
+            return
+
+        lw       = getattr(hp, "line_width", 1.5)
+        ls       = self._mpl_linestyle(getattr(hp, "line_style", default_ls))
+        is_active   = self._is_active_pick(category, obj_idx)
+        is_selected = (self._selected_object == (category, obj_idx))
+        is_edit     = (self._sv_mode == "edit_mode" and is_selected)
+
+        render_lw = lw * 1.6 if is_active else lw
+        zorder    = 4 if (is_active or is_selected) else 3
+
+        # Selection glow (Phase 2)
+        if is_selected:
+            self._ax.plot(d_sec, z_sec, color=hp.color,
+                          linewidth=render_lw * 3, alpha=0.20,
+                          zorder=zorder - 1, solid_capstyle="round")
+
+        self._ax.plot(d_sec, z_sec, color=hp.color,
+                      linewidth=render_lw, linestyle=ls, zorder=zorder)
+
+        # Phase 2: nodes only in edit mode for this object
+        if is_edit:
+            for fi_full in sec_idxs:
+                d = float(hp._distances[fi_full])
+                z = float(hp._depths[fi_full])
+                ms, fc, ec, ew = self._pick_point_style(category, obj_idx, fi_full)
+                self._ax.plot(d, z, marker,
                               markersize=ms, markerfacecolor=fc,
                               markeredgecolor=ec, markeredgewidth=ew, zorder=5)
 
+    def _render_horizons(self, section: Section) -> None:
+        for obj_idx, hp in enumerate(self._state.project.horizon_picks):
+            self._render_pick_object("Horizons", obj_idx, hp, section, "o", "solid")
+
     def _render_faults(self, section: Section) -> None:
         for obj_idx, fp in enumerate(self._state.project.fault_picks):
-            if fp.n_picks == 0:
-                continue
-            lw = getattr(fp, "line_width", 1.5)
-            ls = self._mpl_linestyle(getattr(fp, "line_style", "dashed"))
-            is_active = self._is_active_pick("Faults", obj_idx)
-            self._ax.plot(
-                fp.distances, fp.depths,
-                color=fp.color, linewidth=lw * 1.6 if is_active else lw,
-                linestyle=ls, zorder=3 if not is_active else 4,
-                label=fp.name or "_nolegend_",
-            )
-            for pt_idx in range(fp.n_picks):
-                d, z = fp.distances[pt_idx], fp.depths[pt_idx]
-                ms, fc, ec, ew = self._pick_point_style("Faults", obj_idx, pt_idx)
-                self._ax.plot(d, z, "D",
-                              markersize=ms, markerfacecolor=fc,
-                              markeredgecolor=ec, markeredgewidth=ew, zorder=5)
+            self._render_pick_object("Faults", obj_idx, fp, section, "D", "dashed")
 
     def _pick_point_style(
         self, category: str, obj_idx: int, pt_idx: int
@@ -587,7 +665,9 @@ class SectionView(QWidget):
     def _find_nearest_pick_px(
         self, event_x: float, event_y: float
     ) -> tuple[str, int, int] | None:
-        """Return (category, obj_idx, pt_idx) for the nearest pick within threshold."""
+        """Return (category, obj_idx, FULL_pt_idx) for nearest pick in current section."""
+        section = self._state.active_section
+        sec_name = section.name if section is not None else ""
         ex, ey = self._to_screen_px_sv(event_x, event_y)
         best = None
         best_dist = float("inf")
@@ -595,16 +675,76 @@ class SectionView(QWidget):
         def _check(category, picks):
             nonlocal best, best_dist
             for oi, hp in enumerate(picks):
-                for pi in range(hp.n_picks):
-                    nx, ny = self._to_screen_px_sv(hp.distances[pi], hp.depths[pi])
+                # Only check picks visible on this section (Phase 1)
+                for fi_full in hp.section_indices(sec_name):
+                    nx, ny = self._to_screen_px_sv(
+                        float(hp._distances[fi_full]), float(hp._depths[fi_full])
+                    )
                     d = math.hypot(ex - nx, ey - ny)
                     if d <= _PICK_HIT_PX and d < best_dist:
                         best_dist = d
-                        best = (category, oi, pi)
+                        best = (category, oi, int(fi_full))
 
         _check("Horizons", self._state.project.horizon_picks)
         _check("Faults",   self._state.project.fault_picks)
         return best
+
+    def _find_nearest_pick_line(
+        self, event_x: float, event_y: float
+    ) -> tuple[str, int] | None:
+        """Phase 2: Return (category, obj_idx) of the nearest pick LINE within tolerance."""
+        section = self._state.active_section
+        if section is None:
+            return None
+        sec_name = section.name
+        ex, ey = self._to_screen_px_sv(event_x, event_y)
+        best_cat, best_idx = None, None
+        best_dist = float("inf")
+
+        def _check(category, picks):
+            nonlocal best_cat, best_idx, best_dist
+            for oi, hp in enumerate(picks):
+                sec_idxs = hp.section_indices(sec_name)
+                if len(sec_idxs) < 2:
+                    continue
+                d_sec = hp._distances[sec_idxs]
+                z_sec = hp._depths[sec_idxs]
+                for i in range(len(d_sec) - 1):
+                    ax2, ay2 = self._to_screen_px_sv(float(d_sec[i]),   float(z_sec[i]))
+                    bx2, by2 = self._to_screen_px_sv(float(d_sec[i+1]), float(z_sec[i+1]))
+                    d = _seg_dist(ex, ey, ax2, ay2, bx2, by2)
+                    if d <= _LINE_HIT_PX and d < best_dist:
+                        best_dist = d
+                        best_cat, best_idx = category, oi
+
+        _check("Horizons", self._state.project.horizon_picks)
+        _check("Faults",   self._state.project.fault_picks)
+        return (best_cat, best_idx) if best_cat is not None else None
+
+    def _compute_snap(self, x: float, y: float) -> tuple[float, float] | None:
+        """Phase 5: Return nearest pick point within snap threshold, or None."""
+        if not self._snap_active:
+            return None
+        section = self._state.active_section
+        if section is None:
+            return None
+        sec_name = section.name
+        ex, ey = self._to_screen_px_sv(x, y)
+        best_dist = float(_SNAP_THRESHOLD)
+        best_pt: tuple[float, float] | None = None
+
+        for picks_list in [self._state.project.horizon_picks,
+                            self._state.project.fault_picks]:
+            for hp in picks_list:
+                for fi in hp.section_indices(sec_name):
+                    d = float(hp._distances[fi])
+                    z = float(hp._depths[fi])
+                    nx, ny = self._to_screen_px_sv(d, z)
+                    dist = math.hypot(ex - nx, ey - ny)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_pt = (d, z)
+        return best_pt
 
     def _get_active_pick_last_point(
         self,
@@ -634,24 +774,26 @@ class SectionView(QWidget):
         return hp, float(hp.distances[-1]), float(hp.depths[-1])
 
     def _add_pick_to_active_target(self, x: float, y: float) -> None:
-        """Insert a pick point into the currently active horizon/fault."""
+        """Insert a pick point (Phase 1: tagged with current section name)."""
         cat = self._state.active_pick_category
         idx = self._state.active_pick_index
         if cat is None or idx is None:
             return
+        section = self._state.active_section
+        sec_name = section.name if section is not None else ""
         if cat == "Horizons":
             picks = self._state.project.horizon_picks
             if idx >= len(picks):
                 return
             hp = copy.deepcopy(picks[idx])
-            hp.insert_pick(x, y)
+            hp.insert_pick(x, y, sec_name)
             self._state.update_horizon_pick(idx, hp)
         elif cat == "Faults":
             picks = self._state.project.fault_picks
             if idx >= len(picks):
                 return
             fp = copy.deepcopy(picks[idx])
-            fp.insert_pick(x, y)
+            fp.insert_pick(x, y, sec_name)
             self._state.update_fault_pick(idx, fp)
 
     # ------------------------------------------------------------------
@@ -725,22 +867,25 @@ class SectionView(QWidget):
             else:
                 return
 
+        # Apply snap (Phase 5)
+        if self._snap_point is not None:
+            x, y = self._snap_point
+
         tool = self._state.active_tool
 
         # ---- Pan (left+pan-tool or middle button) ----
         if (event.button == 1 and tool == "pan") or event.button == 2:
-            self._sv_pan_anchor = (event.x, event.y)
+            self._sv_pan_anchor = (getattr(event, "x", x), getattr(event, "y", y))
             self._sv_pan_xlim0  = self._ax.get_xlim()
             self._sv_pan_ylim0  = self._ax.get_ylim()
             self._sv_pan_inv    = self._ax.transData.inverted()
             return
 
-        # ---- Horizon / fault pick ----
+        # ---- Picking / polygon (tool-active modes) ----
         if event.button == 1 and (self._picking_active or self._fault_picking):
             self._add_pick_to_active_target(x, y)
             return
 
-        # ---- Polygon drawing ----
         if event.button == 1 and self._polygon_drawing:
             self._polygon_vertices.append((x, y))
             self.polygon_vertex_added.emit(x, y)
@@ -750,51 +895,115 @@ class SectionView(QWidget):
             self.finish_polygon()
             return
 
-        # ---- Pick-node select / drag (select / edit_nodes tool) ----
+        # ---- Phase 2: Object selection state machine ----
         if event.button == 1 and tool in ("select", "edit_nodes"):
-            hit = self._find_nearest_pick_px(x, y)
-            if hit is not None:
-                self._pick_selected = hit
-                self._pick_drag     = False
-                self._pick_press_px = (event.x, event.y)
-                cat, oi, pi = hit
-                picks = (self._state.project.horizon_picks if cat == "Horizons"
-                         else self._state.project.fault_picks)
-                self._pick_copy = copy.deepcopy(picks[oi])
+            is_dbl = getattr(event, "dblclick", False)
+
+            if self._sv_mode == "edit_mode":
+                # In edit mode: click on node → select; click on line → insert; empty → exit
+                hit_node = self._find_nearest_pick_px(x, y)
+                if hit_node is not None:
+                    self._pick_selected = hit_node
+                    self._pick_drag     = False
+                    self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
+                    cat, oi, _ = hit_node
+                    picks = (self._state.project.horizon_picks if cat == "Horizons"
+                             else self._state.project.fault_picks)
+                    self._pick_copy = copy.deepcopy(picks[oi])
+                    self.render()
+                    return
+                # Click near line (not a node) → insert pick there
+                if self._selected_object is not None:
+                    cat, oi = self._selected_object
+                    hit_line = self._find_nearest_pick_line(x, y)
+                    if hit_line == self._selected_object:
+                        # Insert new node at click position
+                        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                                 else self._state.project.fault_picks)
+                        section = self._state.active_section
+                        sec_name = section.name if section else ""
+                        hp = copy.deepcopy(picks[oi])
+                        hp.insert_pick(x, y, sec_name)
+                        if cat == "Horizons":
+                            self._state.update_horizon_pick(oi, hp)
+                        else:
+                            self._state.update_fault_pick(oi, hp)
+                        return
+                # Click on empty space → exit edit mode
+                self._sv_mode = "object_selected"
+                self._pick_selected = None
+                self._pick_copy = None
                 self.render()
                 return
-            # Click empty space → deselect
-            if self._pick_selected is not None:
+
+            # mode == "idle" or "object_selected"
+            if is_dbl and self._selected_object is not None:
+                # Double-click on selected object → enter edit mode
+                hit_line = self._find_nearest_pick_line(x, y)
+                if hit_line == self._selected_object:
+                    self._sv_mode = "edit_mode"
+                    self._pick_selected = None
+                    self.render()
+                    return
+
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is not None:
+                prev = self._selected_object
+                self._selected_object = hit_line
+                self._sv_mode = "object_selected"
                 self._pick_selected = None
-                self._pick_copy     = None
-                self._pick_drag     = False
+                # Save state for potential object-drag
+                self._object_drag_press_pt = (x, y)
+                cat, oi = hit_line
+                picks = (self._state.project.horizon_picks if cat == "Horizons"
+                         else self._state.project.fault_picks)
+                self._object_drag_origin = copy.deepcopy(picks[oi])
+                self._object_drag_active = False
+                if prev != hit_line:
+                    self.render()
+                return
+
+            # Click empty space → deselect
+            if self._sv_mode != "idle" or self._selected_object is not None:
+                self._sv_mode = "idle"
+                self._selected_object = None
+                self._pick_selected = None
+                self._pick_copy = None
+                self._object_drag_active = False
                 self.render()
 
-        # ---- Right-click context menu on pick point ----
+        # ---- Right-click context on pick node (edit mode only) ----
         if event.button == 3 and tool in ("select", "edit_nodes"):
-            hit = self._find_nearest_pick_px(x, y)
-            if hit is not None:
-                self._show_pick_context_menu(hit, event)
+            if self._sv_mode == "edit_mode":
+                hit = self._find_nearest_pick_px(x, y)
+                if hit is not None:
+                    self._show_pick_context_menu(hit, event)
 
     def _on_sv_motion(self, event) -> None:
-        # Track cursor for rubber band (always)
+        # Track cursor + compute snap (Phase 5)
         if event.xdata is not None and event.ydata is not None:
-            self._cursor_data = (float(event.xdata), float(event.ydata))
+            cx, cy = float(event.xdata), float(event.ydata)
+            self._cursor_data = (cx, cy)
+            self._snap_point  = self._compute_snap(cx, cy)
         else:
             self._cursor_data = None
+            self._snap_point  = None
 
         # ---- Pan ----
         if self._sv_pan_anchor is not None:
-            d0 = self._sv_pan_inv.transform(self._sv_pan_anchor)
-            d1 = self._sv_pan_inv.transform([event.x, event.y])
-            self._ax.set_xlim(self._sv_pan_xlim0[0] + d0[0] - d1[0],
-                              self._sv_pan_xlim0[1] + d0[0] - d1[0])
-            self._ax.set_ylim(self._sv_pan_ylim0[0] + d0[1] - d1[1],
-                              self._sv_pan_ylim0[1] + d0[1] - d1[1])
+            try:
+                d0 = self._sv_pan_inv.transform(self._sv_pan_anchor)
+                d1 = self._sv_pan_inv.transform([event.x, event.y])
+                self._ax.set_xlim(self._sv_pan_xlim0[0] + d0[0] - d1[0],
+                                  self._sv_pan_xlim0[1] + d0[0] - d1[0])
+                self._ax.set_ylim(self._sv_pan_ylim0[0] + d0[1] - d1[1],
+                                  self._sv_pan_ylim0[1] + d0[1] - d1[1])
+            except Exception:
+                pass
             self._canvas.draw_idle()
             return
 
-        # ---- Drag a pick point ----
+        # ---- Phase 3: Drag a pick node (edit mode) ----
         if self._pick_selected is not None and self._pick_press_px is not None:
             try:
                 xy = self._ax.transData.inverted().transform([[event.x, event.y]])[0]
@@ -804,28 +1013,51 @@ class SectionView(QWidget):
             dx = math.hypot(event.x - self._pick_press_px[0],
                             event.y - self._pick_press_px[1])
             if not self._pick_drag and dx < _PICK_DRAG_PX:
-                # Redraw rubber band while considering a drag
-                if self._picking_active or self._fault_picking:
-                    self.render()
                 return
             self._pick_drag = True
             cat, oi, pi = self._pick_selected
-            # Update pick in the copy
             self._pick_copy._distances[pi] = x
             self._pick_copy._depths[pi]    = y
-            # Re-sort (pick may have moved past a neighbour)
             order = np.argsort(self._pick_copy._distances, kind="stable")
-            self._pick_copy._distances = self._pick_copy._distances[order]
-            self._pick_copy._depths    = self._pick_copy._depths[order]
-            # Update selected index after sort
+            self._pick_copy._distances     = self._pick_copy._distances[order]
+            self._pick_copy._depths        = self._pick_copy._depths[order]
+            self._pick_copy._section_names = self._pick_copy._section_names[order]
             new_pi = int(np.where(order == pi)[0][0])
             self._pick_selected = (cat, oi, new_pi)
             self.render()
             return
 
-        # ---- Hover for pick-node select tool ----
+        # ---- Phase 3: Drag entire object (object_selected mode) ----
+        if (self._sv_mode == "object_selected"
+                and self._selected_object is not None
+                and self._object_drag_press_pt is not None
+                and self._object_drag_origin is not None):
+            x_cur = getattr(event, "xdata", None)
+            y_cur = getattr(event, "ydata", None)
+            if x_cur is None or y_cur is None:
+                return
+            dx = float(x_cur) - self._object_drag_press_pt[0]
+            dy = float(y_cur) - self._object_drag_press_pt[1]
+            if not self._object_drag_active:
+                if math.hypot(dx, dy) < _OBJ_DRAG_PX:
+                    return
+                self._object_drag_active = True
+            section = self._state.active_section
+            sec_name = section.name if section else ""
+            cat, oi = self._selected_object
+            # Build preview copy
+            preview = copy.deepcopy(self._object_drag_origin)
+            sec_idxs = preview.section_indices(sec_name)
+            preview._distances[sec_idxs] += dx
+            preview._depths[sec_idxs]    += dy
+            # Stash for render (rendered in _render_pick_object via the stored copy)
+            self._object_drag_preview = (cat, oi, preview)
+            self.render()
+            return
+
+        # ---- Hover: pick-node in edit mode ----
         tool = self._state.active_tool
-        if tool in ("select", "edit_nodes"):
+        if tool in ("select", "edit_nodes") and self._sv_mode == "edit_mode":
             if event.xdata is not None:
                 new_hover = self._find_nearest_pick_px(
                     float(event.xdata), float(event.ydata)
@@ -835,25 +1067,51 @@ class SectionView(QWidget):
                     self.render()
                     return
 
-        # ---- Redraw rubber band if picking ----
-        if (self._picking_active or self._fault_picking) and self._cursor_data is not None:
+        # ---- Hover: object line ----
+        if tool in ("select", "edit_nodes") and self._sv_mode != "edit_mode":
+            if event.xdata is not None:
+                new_obj = self._find_nearest_pick_line(
+                    float(event.xdata), float(event.ydata)
+                )
+                if new_obj != self._hover_object:
+                    self._hover_object = new_obj
+                    self.render()
+                    return
+
+        # ---- Rubber band / snap ----
+        if self._picking_active or self._fault_picking or self._snap_point is not None:
             self.render()
 
     def _on_sv_release(self, event) -> None:
-        # End pan (left in pan-tool, or middle button)
         if event.button in (1, 2):
             self._sv_pan_anchor = None
 
-        # Commit drag
+        # Commit node drag
         if self._pick_drag and self._pick_selected is not None:
             cat, oi, _ = self._pick_selected
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, self._pick_copy)
             else:
                 self._state.update_fault_pick(oi, self._pick_copy)
-            self._pick_drag  = False
-            self._pick_copy  = None
+            self._pick_drag     = False
+            self._pick_copy     = None
             self._pick_press_px = None
+
+        # Commit object drag (Phase 3)
+        if self._object_drag_active:
+            preview_data = getattr(self, "_object_drag_preview", None)
+            if preview_data is not None:
+                cat, oi, preview = preview_data
+                if cat == "Horizons":
+                    self._state.update_horizon_pick(oi, preview)
+                else:
+                    self._state.update_fault_pick(oi, preview)
+            self._object_drag_active  = False
+            self._object_drag_preview = None
+            self._object_drag_press_pt = None
+        elif event.button == 1:
+            # Clear drag prep (no actual drag occurred)
+            self._object_drag_press_pt = None
 
     def _on_scroll_sv(self, event) -> None:
         if event.inaxes is not self._ax:
@@ -869,7 +1127,6 @@ class SectionView(QWidget):
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
             if self._pick_drag:
-                # Cancel drag: restore original
                 self._pick_drag     = False
                 self._pick_copy     = None
                 self._pick_press_px = None
@@ -878,9 +1135,20 @@ class SectionView(QWidget):
                 self._pick_selected = None
                 self._pick_copy     = None
                 self.render()
+            elif self._sv_mode == "edit_mode":
+                self._sv_mode = "object_selected"
+                self.render()
+            elif self._sv_mode == "object_selected":
+                self._sv_mode = "idle"
+                self._selected_object = None
+                self.render()
         elif event.key == "delete":
             if self._pick_selected is not None and not self._pick_drag:
                 self._delete_selected_pick()
+            elif self._selected_object is not None and self._sv_mode in (
+                "object_selected", "edit_mode"
+            ):
+                self._delete_selected_object_with_confirm()
 
     def _on_active_section_changed(self, section) -> None:
         if section is not None and self._ve_lock_btn.isChecked():
@@ -923,6 +1191,36 @@ class SectionView(QWidget):
             self._delete_selected_pick()
 
     # ------------------------------------------------------------------
+    # Object deletion (Phase 3)
+    # ------------------------------------------------------------------
+
+    def _delete_selected_object_with_confirm(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        if self._selected_object is None:
+            return
+        cat, oi = self._selected_object
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if oi >= len(picks):
+            return
+        name = picks[oi].name or f"{cat[:-1]} {oi + 1}"
+        reply = QMessageBox.question(
+            self, "Delete Object",
+            f"Delete '{name}'? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._sv_mode = "idle"
+        self._selected_object = None
+        self._pick_selected = None
+        self._pick_copy = None
+        if cat == "Horizons":
+            self._state.remove_horizon_pick(picks[oi])
+        else:
+            self._state.remove_fault_pick(picks[oi])
+
+    # ------------------------------------------------------------------
     # Pick deletion
     # ------------------------------------------------------------------
 
@@ -951,6 +1249,22 @@ class SectionView(QWidget):
                 return
             fp.delete_pick(pi)
             self._state.update_fault_pick(oi, fp)
+
+
+# ---------------------------------------------------------------------------
+# Geometry helpers
+# ---------------------------------------------------------------------------
+
+def _seg_dist(px: float, py: float,
+              ax: float, ay: float,
+              bx: float, by: float) -> float:
+    """Screen-pixel distance from (px,py) to segment (ax,ay)-(bx,by)."""
+    dx, dy = bx - ax, by - ay
+    len2 = dx * dx + dy * dy
+    if len2 == 0.0:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len2))
+    return math.hypot(px - ax - t * dx, py - ay - t * dy)
 
 
 # ---------------------------------------------------------------------------

@@ -26,18 +26,20 @@ from cross_section_tool.app_state import AppState
 # Category labels and per-object type colours
 # ---------------------------------------------------------------------------
 
-_CATEGORIES = ["Sections", "Horizons", "Faults", "Polygons"]
+_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines", "Polygons"]
 _DEFAULT_COLORS = {
-    "Sections": "#1f77b4",
-    "Horizons": "#2ca02c",
-    "Faults":   "#d62728",
-    "Polygons": "#9467bd",
+    "Sections":        "#1f77b4",
+    "Horizons":        "#2ca02c",
+    "Faults":          "#d62728",
+    "Reference Lines": "#999999",
+    "Polygons":        "#9467bd",
 }
 _ICONS = {
-    "Sections": "⟋",
-    "Horizons": "─",
-    "Faults":   "╲",
-    "Polygons": "■",
+    "Sections":        "⟋",
+    "Horizons":        "─",
+    "Faults":          "╲",
+    "Reference Lines": "·",
+    "Polygons":        "■",
 }
 
 
@@ -277,6 +279,9 @@ class ProjectPanel(QDockWidget):
         s.fault_pick_modified.connect(lambda *_: self._rebuild())
         s.well_added.connect(lambda _: self._rebuild())
         s.well_removed.connect(lambda _: self._rebuild())
+        s.reference_line_added.connect(lambda _: self._rebuild())
+        s.reference_line_removed.connect(lambda _: self._rebuild())
+        s.reference_line_modified.connect(lambda *_: self._rebuild())
         # Emit pick-target when user clicks a tree item
         self._tree.itemClicked.connect(self._on_item_clicked)
 
@@ -349,6 +354,10 @@ class ProjectPanel(QDockWidget):
             return [(f.name or f"Fault {i+1}", f.color,
                      getattr(f, "line_width", _dw), getattr(f, "line_style", _ds))
                     for i, f in enumerate(proj.fault_picks)]
+        if category == "Reference Lines":
+            return [(rl.name or f"{'H' if rl.kind == 'horizontal' else 'V'} {rl.value}",
+                     rl.color, _dw, _ds)
+                    for rl in proj.reference_lines]
         if category == "Polygons":
             return []
         return []

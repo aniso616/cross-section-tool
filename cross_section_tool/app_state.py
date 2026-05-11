@@ -5,6 +5,7 @@ import os
 from PySide6.QtCore import QObject, Signal
 
 from cross_section_tool.core.polygons import SectionPolygon
+from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
 from cross_section_tool.core.wells import Well
@@ -85,6 +86,11 @@ class AppState(QObject):
     fault_pick_added    = Signal(object)
     fault_pick_removed  = Signal(object)
     fault_pick_modified = Signal(int, object)
+
+    # Reference lines
+    reference_line_added    = Signal(object)
+    reference_line_removed  = Signal(object)
+    reference_line_modified = Signal(int, object)
 
     # Active pick target: which horizon/fault picks go into
     active_pick_target_changed = Signal(str, int)  # category_name, index
@@ -349,6 +355,25 @@ class AppState(QObject):
         self._project.polygons[index] = polygon
         self._set_modified()
         self.polygon_modified.emit(index, polygon)
+
+    # ------------------------------------------------------------------
+    # Reference lines
+    # ------------------------------------------------------------------
+
+    def add_reference_line(self, rl: ReferenceLine) -> None:
+        self._project.reference_lines.append(rl)
+        self._set_modified()
+        self.reference_line_added.emit(rl)
+
+    def remove_reference_line(self, rl: ReferenceLine) -> None:
+        self._project.reference_lines.remove(rl)
+        self._set_modified()
+        self.reference_line_removed.emit(rl)
+
+    def update_reference_line(self, index: int, rl: ReferenceLine) -> None:
+        self._project.reference_lines[index] = rl
+        self._set_modified()
+        self.reference_line_modified.emit(index, rl)
 
     # ------------------------------------------------------------------
     # Internal

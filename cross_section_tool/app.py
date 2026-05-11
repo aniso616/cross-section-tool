@@ -264,6 +264,17 @@ class MainWindow(QMainWindow):
         )
         view_menu.addAction(self._wiggle_action)
 
+        # ---- Reference Lines ----
+        ref_menu = mb.addMenu("&Reference")
+        self._add_hline_action = QAction("Add &Horizontal Line…", self)
+        self._add_hline_action.triggered.connect(
+            lambda: self._add_reference_line_kind("horizontal"))
+        ref_menu.addAction(self._add_hline_action)
+        self._add_vline_action = QAction("Add &Vertical Line…", self)
+        self._add_vline_action.triggered.connect(
+            lambda: self._add_reference_line_kind("vertical"))
+        ref_menu.addAction(self._add_vline_action)
+
         # ---- Help ----
         help_menu = mb.addMenu("&Help")
 
@@ -544,6 +555,8 @@ class MainWindow(QMainWindow):
                 self._state.remove_horizon_pick(proj.horizon_picks[index])
             elif category == "Faults" and index < len(proj.fault_picks):
                 self._state.remove_fault_pick(proj.fault_picks[index])
+            elif category == "Reference Lines" and index < len(proj.reference_lines):
+                self._state.remove_reference_line(proj.reference_lines[index])
         except Exception:
             pass
 
@@ -618,6 +631,8 @@ class MainWindow(QMainWindow):
             self._add_new_horizon()
         elif category == "Faults":
             self._add_new_fault()
+        elif category == "Reference Lines":
+            self._add_reference_line_dialog()
 
     def _add_new_horizon(self) -> None:
         from PySide6.QtWidgets import QInputDialog, QColorDialog
@@ -633,6 +648,32 @@ class MainWindow(QMainWindow):
         idx = len(self._state.project.horizon_picks) - 1
         self._state.set_active_pick_target("Horizons", idx)
         self._tool_palette.set_active_tool("horizon_pick")
+
+    def _add_reference_line_kind(self, kind: str) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        from cross_section_tool.core.reference_line import ReferenceLine
+        label = "Depth value:" if kind == "horizontal" else "Distance along section:"
+        value, ok = QInputDialog.getDouble(self, "Reference Line", label, 0.0)
+        if not ok:
+            return
+        rl = ReferenceLine(kind=kind, value=value)
+        self._state.add_reference_line(rl)
+
+    def _add_reference_line_dialog(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        from cross_section_tool.core.reference_line import ReferenceLine
+        kinds = ["Horizontal (depth)", "Vertical (distance)"]
+        kind_str, ok = QInputDialog.getItem(self, "Reference Line", "Type:", kinds, 0, False)
+        if not ok:
+            return
+        kind = "horizontal" if "Horizontal" in kind_str else "vertical"
+        label = "Depth value:" if kind == "horizontal" else "Distance along section:"
+        value, ok2 = QInputDialog.getDouble(self, "Reference Line", label, 0.0)
+        if not ok2:
+            return
+        name, ok3 = QInputDialog.getText(self, "Reference Line", "Name (optional):", text="")
+        rl = ReferenceLine(kind=kind, value=value, name=name.strip())
+        self._state.add_reference_line(rl)
 
     def _add_new_fault(self) -> None:
         from PySide6.QtWidgets import QInputDialog

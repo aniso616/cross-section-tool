@@ -168,6 +168,7 @@ class HorizonPick:
         color: str = "#1f77b4",
         line_width: float = 1.5,
         line_style: str = "solid",
+        section_names: list | np.ndarray | None = None,
     ) -> None:
         distances = np.asarray(distances, dtype=float)
         depths = np.asarray(depths, dtype=float)
@@ -177,9 +178,16 @@ class HorizonPick:
             raise ValueError("distances and depths must have the same length")
         if len(distances) == 0:
             raise ValueError("HorizonPick requires at least one point")
+        if section_names is None:
+            snames = np.array([""] * len(distances), dtype=object)
+        else:
+            snames = np.asarray(section_names, dtype=object).ravel()
+            if len(snames) != len(distances):
+                raise ValueError("section_names must have the same length as distances")
         order = np.argsort(distances, kind="stable")
         self._distances = distances[order].copy()
         self._depths = depths[order].copy()
+        self._section_names: np.ndarray = snames[order].copy()
         self.name = name
         self.z_units: Literal["m", "ft", "ms"] = z_units
         self.color = color
@@ -223,11 +231,36 @@ class HorizonPick:
     # Pick operations
     # ------------------------------------------------------------------
 
-    def insert_pick(self, distance: float, depth: float) -> None:
+    # ------------------------------------------------------------------
+    # Per-section access
+    # ------------------------------------------------------------------
+
+    def section_indices(self, section_name: str) -> np.ndarray:
+        """Full-array indices for picks on *section_name* or global picks ('')."""
+        mask = (self._section_names == section_name) | (self._section_names == "")
+        return np.where(mask)[0]
+
+    def picks_for_section(
+        self, section_name: str
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return (distances, depths) for picks visible on *section_name*."""
+        idxs = self.section_indices(section_name)
+        return self._distances[idxs], self._depths[idxs]
+
+    def n_picks_for_section(self, section_name: str) -> int:
+        return int(len(self.section_indices(section_name)))
+
+    # ------------------------------------------------------------------
+    # Pick operations
+    # ------------------------------------------------------------------
+
+    def insert_pick(self, distance: float, depth: float,
+                    section_name: str = "") -> None:
         """Insert a pick, maintaining ascending distance order."""
         idx = int(np.searchsorted(self._distances, distance))
         self._distances = np.insert(self._distances, idx, distance)
         self._depths = np.insert(self._depths, idx, depth)
+        self._section_names = np.insert(self._section_names, idx, section_name)
 
     def delete_pick(self, index: int) -> None:
         """Delete the pick at *index*.
@@ -240,16 +273,20 @@ class HorizonPick:
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
         self._distances = np.delete(self._distances, index)
         self._depths = np.delete(self._depths, index)
+        self._section_names = np.delete(self._section_names, index)
 
     def move_pick(self, index: int, distance: float, depth: float) -> None:
         """Move the pick at *index* to (distance, depth), re-sorting as needed."""
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
+        sec = self._section_names[index]
         self._distances = np.delete(self._distances, index)
         self._depths = np.delete(self._depths, index)
+        self._section_names = np.delete(self._section_names, index)
         idx = int(np.searchsorted(self._distances, distance))
         self._distances = np.insert(self._distances, idx, distance)
         self._depths = np.insert(self._depths, idx, depth)
+        self._section_names = np.insert(self._section_names, idx, sec)
 
     # ------------------------------------------------------------------
     # Coordinate transforms
@@ -274,6 +311,7 @@ class HorizonPick:
             color=self.color,
             line_width=self.line_width,
             line_style=self.line_style,
+            section_names=self._section_names.tolist(),
         )
 
     # ------------------------------------------------------------------
@@ -289,8 +327,9 @@ class HorizonPick:
     ) -> "HorizonPick":
         """Create a HorizonPick with no picks (for a newly-added horizon/fault)."""
         obj = object.__new__(cls)
-        obj._distances = np.array([], dtype=float)
-        obj._depths    = np.array([], dtype=float)
+        obj._distances     = np.array([], dtype=float)
+        obj._depths        = np.array([], dtype=float)
+        obj._section_names = np.array([], dtype=object)
         obj.name       = name
         obj.z_units    = z_units
         obj.color      = color

@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 
 from cross_section_tool.core.polygons import SectionPolygon
+from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
 from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
@@ -81,6 +82,7 @@ class Project:
         self.seismic_refs: list[SeismicRef] = []
         self.fault_picks: list[HorizonPick] = []
         self.polygons: list[SectionPolygon] = []
+        self.reference_lines: list[ReferenceLine] = []
 
     # ------------------------------------------------------------------
     # Persistence
@@ -100,6 +102,7 @@ class Project:
             _save_seismic_refs(f, self.seismic_refs)
             _save_horizon_picks_group(f, "fault_picks", self.fault_picks)
             _save_polygons(f, self.polygons)
+            _save_reference_lines(f, self.reference_lines)
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> "Project":
@@ -114,8 +117,9 @@ class Project:
             proj.horizon_picks = _load_horizon_picks(f)
             proj.wells = _load_wells(f)
             proj.seismic_refs = _load_seismic_refs(f)
-            proj.fault_picks  = _load_horizon_picks_group(f, "fault_picks")
-            proj.polygons     = _load_polygons(f)
+            proj.fault_picks     = _load_horizon_picks_group(f, "fault_picks")
+            proj.polygons        = _load_polygons(f)
+            proj.reference_lines = _load_reference_lines(f)
         return proj
 
     def __repr__(self) -> str:
@@ -174,6 +178,11 @@ def _save_horizon_picks_group(
         sg.attrs["line_style"] = str(getattr(hp, "line_style", "solid"))
         sg.create_dataset("distances", data=hp._distances, dtype="float64")
         sg.create_dataset("depths",    data=hp._depths,    dtype="float64")
+        snames = getattr(hp, "_section_names", None)
+        if snames is not None and len(snames) > 0:
+            sg.create_dataset("section_names",
+                              data=[s.encode() if isinstance(s, str) else s
+                                    for s in snames.tolist()])
 
 
 def _save_horizon_picks(f: h5py.File, picks: list[HorizonPick]) -> None:
@@ -287,13 +296,20 @@ def _load_horizon_picks_group(
         color      = _str(sg.attrs.get("color", default_color))
         line_width = float(sg.attrs.get("line_width", 1.5))
         line_style = _str(sg.attrs.get("line_style", "solid"))
+        if "section_names" in sg:
+            raw = sg["section_names"][:]
+            section_names = [s.decode() if isinstance(s, bytes) else str(s)
+                             for s in raw]
+        else:
+            section_names = None
         if len(distances) == 0:
             hp = HorizonPick.empty(name=name, z_units=z_units, color=color,
                                    line_width=line_width, line_style=line_style)
         else:
             hp = HorizonPick(distances=distances, depths=depths, name=name,
                              z_units=z_units, color=color,
-                             line_width=line_width, line_style=line_style)
+                             line_width=line_width, line_style=line_style,
+                             section_names=section_names)
         result.append(hp)
     return result
 
@@ -394,6 +410,36 @@ def _load_polygons(f: h5py.File) -> list[SectionPolygon]:
         )
         for k in _sorted_keys(grp)
     ]
+
+
+def _save_reference_lines(
+    f: h5py.File, lines: list[ReferenceLine]
+) -> None:
+    grp = f.create_group("reference_lines")
+    for i, rl in enumerate(lines):
+        sg = grp.create_group(str(i))
+        sg.attrs["kind"]    = rl.kind
+        sg.attrs["value"]   = rl.value
+        sg.attrs["name"]    = rl.name
+        sg.attrs["visible"] = int(rl.visible)
+        sg.attrs["color"]   = rl.color
+
+
+def _load_reference_lines(f: h5py.File) -> list[ReferenceLine]:
+    if "reference_lines" not in f:
+        return []
+    grp = f["reference_lines"]
+    result = []
+    for k in _sorted_keys(grp):
+        sg = grp[k]
+        result.append(ReferenceLine(
+            kind=_str(sg.attrs.get("kind", "horizontal")),
+            value=float(sg.attrs.get("value", 0.0)),
+            name=_str(sg.attrs.get("name", "")),
+            visible=bool(int(sg.attrs.get("visible", 1))),
+            color=_str(sg.attrs.get("color", "#999999")),
+        ))
+    return result
 
 
 def _str(value: Any) -> str:

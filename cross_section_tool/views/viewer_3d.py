@@ -271,15 +271,14 @@ class Viewer3D(QWidget):
                     pass
 
     def _render_horizon_picks(self) -> None:
-        section = self._state.active_section
-        if section is None:
-            return
-        for pick in self._state.project.horizon_picks:
-            self._safe_add_mesh(
-                build_horizon_pick_3d(pick, section),
-                color=pick.color,
-                line_width=2,
-            )
+        """Phase 1: Show picks from ALL sections in the 3D view."""
+        for section in self._state.project.sections:
+            for pick in self._state.project.horizon_picks:
+                self._safe_add_mesh(
+                    build_horizon_pick_3d(pick, section),
+                    color=pick.color,
+                    line_width=2,
+                )
 
     # ------------------------------------------------------------------
     # Depth computation
