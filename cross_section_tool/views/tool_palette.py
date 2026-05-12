@@ -15,67 +15,69 @@ from PySide6.QtWidgets import (
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-# Each entry is one of:
-#   (tool_id, icon, label, tooltip)  — a tool button
-#   str                              — a category header ("Navigate" etc.)
-#   None                             — a thin separator line
+# (tool_id, icon, label, tooltip) | str (group header) | None (separator)
 
 _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
     "Navigate",
-    ("select",       "↖", "Select",
-     "Select  (V)\n"
-     "Click to select an object, double-click to edit its nodes.\n"
-     "Drag a selected object to move it."),
-    ("pan",          "⊕", "Pan",
+    ("select",      "↖", "Select",
+     "Select Object  (V)\n"
+     "Click an object to select it. Double-click to enter node-edit mode.\n"
+     "Drag to move the selected object.  Delete to remove it.\n"
+     "Hold Space to temporarily pan."),
+    ("node_edit",   "↗", "Nodes",
+     "Direct Select / Node Edit  (A)\n"
+     "Click a node to select it; drag to move.  Delete to remove it.\n"
+     "Click between nodes on a line to insert a new node.\n"
+     "Escape to exit node mode."),
+    ("pan",         "⊕", "Pan",
      "Pan  (H)\n"
-     "Left-drag or middle-drag to pan the view."),
-    ("zoom",         "⊙", "Zoom",
-     "Zoom  (Z)\n"
-     "Scroll wheel zooms in/out centred on the cursor."),
+     "Left-drag or middle-drag to pan the view.\n"
+     "Hold Space from any tool to pan temporarily."),
+    ("zoom",        "⊙", "Zoom",
+     "Zoom  (Z) · Shift+Z to fit\n"
+     "Scroll wheel zooms in/out centred on the cursor.\n"
+     "Shift+Z resets view to fit all data."),
     None,
     "Draw",
-    ("new_section",  "╱", "Section",
+    ("new_section", "╱", "Section",
      "Draw Section  (S)\n"
      "Click nodes on the map to draw a section trace.\n"
-     "Double-click or press Enter to finish.  Escape to cancel."),
-    ("edit_nodes",   "◉", "Nodes",
-     "Edit Nodes  (E)\n"
-     "Select, move, insert or delete section nodes."),
+     "Double-click or Enter to finish.  Escape to cancel.\n"
+     "Section → New Section (east-west default) for a quick default."),
     None,
     "Interpret",
-    ("horizon_pick", "─", "Horizon",
+    ("horizon_pick","─", "Horizon",
      "Horizon Pick  (P)\n"
-     "Click on the section view to place horizon picks.\n"
-     "Right-click or double-click to end the pick sequence."),
-    ("fault_pick",   "╲", "Fault",
+     "Click on the section view to add picks to the active horizon.\n"
+     "Right-click or Escape to end.  Double-click to place final pick."),
+    ("fault_pick",  "╲", "Fault",
      "Fault Pick  (F)\n"
-     "Draw a fault trace on the section view.\n"
-     "Right-click or double-click to end."),
-    ("polygon",      "▭", "Polygon",
+     "Click to add picks to the active fault.  Right-click to end."),
+    ("polygon",     "▭", "Polygon",
      "Polygon  (G)\n"
-     "Draw a filled polygon — right-click to close."),
+     "Click to place vertices; right-click to close the polygon."),
     None,
     "Construct",
-    ("h_ref",        "═", "H-Ref",
-     "Horizontal Reference Line\n"
-     "Click on the section view to place a horizontal guide at that depth."),
-    ("v_ref",        "‖", "V-Ref",
-     "Vertical Reference Line\n"
-     "Click on the section view to place a vertical guide at that distance."),
-    ("a_ref",        "╱", "A-Ref",
-     "Angled Reference Line\n"
-     "Click to set anchor, click again to set direction (angle shown in status bar)."),
-    ("extend",       "→|", "Extend",
-     "Extend  —  click an endpoint, then click the target line to extend to it."),
-    ("trim",         "|←", "Trim",
-     "Trim  —  click a pick line, then the cutting line."),
-    ("parallel",     "‗", "Parallel",
-     "Parallel  —  click a source line, then place a parallel copy at click position."),
+    ("h_ref",       "═", "H-Ref",
+     "Horizontal Reference Line  (R)\n"
+     "Click on the section to place a horizontal guide at that depth."),
+    ("v_ref",       "‖", "V-Ref",
+     "Vertical Reference Line  (R twice)\n"
+     "Click to place a vertical guide at that distance."),
+    ("a_ref",       "╱", "A-Ref",
+     "Angled Reference Line  (R thrice)\n"
+     "Click to set anchor; move to set direction; click to confirm."),
+    ("extend",      "→|", "Extend",
+     "Extend  —  click an endpoint then click the target line."),
+    ("trim",        "|←", "Trim",
+     "Trim  —  click a pick line then click the cutting line."),
+    ("parallel",    "‗", "Parallel",
+     "Parallel  —  click source line then click to place parallel copy."),
     None,
     "Tools",
-    ("measure",      "↔", "Measure",
+    ("measure",     "↔", "Measure",
      "Measure  (M)\n"
-     "Measure distances along the section or on the map."),
+     "Measure distances, depth differences, and angles on the section or map."),
 ]
 
 _TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if isinstance(t, tuple)]
@@ -90,7 +92,7 @@ QPushButton {{
     border: none;
     border-radius: 5px;
     color: {fg};
-    font-size: 20px;
+    font-size: 14px;
     padding: 0px;
     margin: 0px;
 }}
@@ -119,7 +121,7 @@ _LABEL_STYLE = (
 # ---------------------------------------------------------------------------
 
 class _ToolButton(QWidget):
-    """40×40 icon button + 12px short-label row = ~52px total height."""
+    """40×36 icon button + 12px short-label = ~50px total height."""
 
     clicked = Signal()
 
@@ -127,14 +129,14 @@ class _ToolButton(QWidget):
                  tooltip: str, parent=None) -> None:
         super().__init__(parent)
         self.tool_id = tool_id
-        self.setFixedWidth(48)
+        self.setFixedWidth(52)
 
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(4, 0, 4, 2)
+        vbox.setContentsMargins(2, 0, 2, 2)
         vbox.setSpacing(0)
 
         self._btn = QPushButton(icon)
-        self._btn.setFixedSize(40, 40)
+        self._btn.setFixedSize(44, 36)
         self._btn.setCheckable(True)
         self._btn.setFlat(True)
         self._btn.setToolTip(tooltip)
@@ -159,12 +161,11 @@ class _ToolButton(QWidget):
 # ---------------------------------------------------------------------------
 
 class ToolPalette(QWidget):
-    """Vertical tool palette — 40×40 icons with labels, grouped by category.
+    """Vertical tool palette with grouped icon buttons.
 
     Signals
     -------
-    tool_changed(str)
-        The tool_id of the newly-active tool.
+    tool_changed(str)  — tool_id of the newly-active tool.
     """
 
     tool_changed = Signal(str)
@@ -196,9 +197,7 @@ class ToolPalette(QWidget):
             if item is None:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.Shape.HLine)
-                sep.setStyleSheet(
-                    "QFrame { color: #d0d0d0; margin: 2px 6px; }"
-                )
+                sep.setStyleSheet("QFrame { color: #d0d0d0; margin: 2px 6px; }")
                 sep.setFixedHeight(4)
                 layout.addWidget(sep)
                 continue
@@ -208,7 +207,6 @@ class ToolPalette(QWidget):
                 lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
                 lbl.setStyleSheet(_CATEGORY_STYLE)
                 layout.addWidget(lbl)
-                # thin underline
                 line = QFrame()
                 line.setFrameShape(QFrame.Shape.HLine)
                 line.setStyleSheet("QFrame { color: #d8d8d8; margin: 0 4px; }")
@@ -227,8 +225,6 @@ class ToolPalette(QWidget):
         layout.addStretch()
 
     # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     @property
     def active_tool(self) -> str:
@@ -242,8 +238,6 @@ class ToolPalette(QWidget):
         if tool_id not in self._buttons:
             return
         self._activate(tool_id, emit=True)
-
-    # ------------------------------------------------------------------
 
     def _activate(self, tool_id: str, *, emit: bool) -> None:
         changed = self._active_tool != tool_id

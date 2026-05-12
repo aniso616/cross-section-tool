@@ -155,6 +155,12 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_panel)
         self._setup_project_panel_title_bar()
 
+        # Properties panel (Phase 3) — docked below project panel
+        from cross_section_tool.views.properties_panel import PropertiesPanel
+        self._properties_panel = PropertiesPanel(self._state, self)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,
+                           self._properties_panel)
+
         # Status bar
         self._status_label = QLabel("New project")
         self.statusBar().addWidget(self._status_label)
@@ -343,6 +349,9 @@ class MainWindow(QMainWindow):
         self._section_view.pick_ended.connect(
             lambda: self._tool_palette.set_active_tool("select")
         )
+        # Context toolbar → new horizon/fault flow
+        self._section_view._context_toolbar.action_requested.connect(
+            self._on_context_toolbar_action)
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
@@ -365,16 +374,27 @@ class MainWindow(QMainWindow):
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
+        # Phase 3: wire node selection → properties panel
+        self._section_view.node_selected.connect(
+            self._properties_panel.set_selected_node)
+        # Phase 3: deselect node in props when mode changes
+        s.active_pick_target_changed.connect(
+            lambda *_: self._properties_panel.set_selected_node(None))
+        # Phase 2: update pick status when target changes
+        s.active_pick_target_changed.connect(
+            lambda *_: self._update_pick_status() if s.active_tool in (
+                "horizon_pick", "fault_pick") else None)
         # Phase 6: annotations
         s.annotation_added.connect(lambda _: self._section_view.render())
         s.annotation_removed.connect(lambda _: self._section_view.render())
         s.annotation_modified.connect(lambda *_: self._section_view.render())
         # Keyboard shortcuts for tools (application-wide)
         _tool_keys = {
-            "V": "select",   "H": "pan",          "Z": "zoom",
-            "S": "new_section", "E": "edit_nodes",
+            "V": "select",    "A": "node_edit",
+            "H": "pan",       "Z": "zoom",
+            "S": "new_section",
             "P": "horizon_pick", "F": "fault_pick",
-            "G": "polygon",  "M": "measure",
+            "G": "polygon",   "M": "measure",
         }
         for key, tool_id in _tool_keys.items():
             sc = QShortcut(QKeySequence(key), self)
@@ -382,6 +402,17 @@ class MainWindow(QMainWindow):
             sc.activated.connect(
                 lambda tid=tool_id: self._tool_palette.set_active_tool(tid)
             )
+
+        # Shift+Z → zoom to fit
+        sc_fit = QShortcut(QKeySequence("Shift+Z"), self)
+        sc_fit.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc_fit.activated.connect(self._zoom_to_fit)
+
+        # R → cycle through reference line tools
+        self._ref_cycle_idx = 0
+        sc_ref = QShortcut(QKeySequence("R"), self)
+        sc_ref.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc_ref.activated.connect(self._cycle_ref_line_tool)
         # Global undo/redo shortcuts (Phase 7)
         sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
         sc_undo.setContext(Qt.ShortcutContext.ApplicationShortcut)
@@ -920,6 +951,45 @@ class MainWindow(QMainWindow):
         else:
             self._splitter.setSizes([sizes[0] + sizes[1], 0])
 
+    # ------------------------------------------------------------------
+    # Phase 6 helpers
+    # ------------------------------------------------------------------
+
+    def _zoom_to_fit(self) -> None:
+        """Shift+Z: reset both views to full data extent."""
+        self._map_view.render()
+        self._section_view._ax_limits_set = False
+        self._section_view.render()
+
+    def _cycle_ref_line_tool(self) -> None:
+        """R key: cycle H-Ref → V-Ref → A-Ref."""
+        tools = ["h_ref", "v_ref", "a_ref"]
+        cur = self._state.active_tool
+        if cur in tools:
+            self._ref_cycle_idx = (tools.index(cur) + 1) % len(tools)
+        else:
+            self._ref_cycle_idx = 0
+        self._tool_palette.set_active_tool(tools[self._ref_cycle_idx])
+
+    # Space-bar temporary pan
+    def keyPressEvent(self, event) -> None:
+        from PySide6.QtCore import Qt as _Qt
+        if (event.key() == _Qt.Key.Key_Space
+                and not event.isAutoRepeat()
+                and self._state.active_tool != "pan"):
+            self._space_prev_tool = self._state.active_tool
+            self._tool_palette.set_active_tool("pan")
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        from PySide6.QtCore import Qt as _Qt
+        if (event.key() == _Qt.Key.Key_Space
+                and not event.isAutoRepeat()
+                and hasattr(self, "_space_prev_tool")):
+            self._tool_palette.set_active_tool(self._space_prev_tool)
+            del self._space_prev_tool
+        super().keyReleaseEvent(event)
+
     def _flash_status(self, msg: str) -> None:
         """Phase 7: briefly show *msg* in the status bar, then restore."""
         from PySide6.QtCore import QTimer
@@ -932,11 +1002,58 @@ class MainWindow(QMainWindow):
         else:
             self._update_status()
 
+    def _on_context_toolbar_action(self, action: str) -> None:
+        """Route actions from context toolbar that need app-level handling."""
+        if action == "new_horizon":
+            self._add_new_horizon()
+        elif action == "new_fault":
+            self._add_new_fault()
+        elif action == "end_pick":
+            self._tool_palette.set_active_tool("select")
+
     def _on_panel_properties(self, cat: str, idx: int) -> None:
         if cat == "Horizons":
             self._horizon_properties(idx)
         elif cat == "Faults":
             self._fault_properties(idx)
+
+    def _ensure_pick_target(self, tool_id: str) -> None:
+        """Phase 2: auto-select a pick target if none is set."""
+        cat = "Horizons" if tool_id == "horizon_pick" else "Faults"
+        cur_cat = self._state.active_pick_category
+        cur_idx = self._state.active_pick_index
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+
+        if cur_cat == cat and cur_idx is not None and cur_idx < len(picks):
+            return  # already valid target
+
+        if picks:
+            # Auto-select the first available object
+            self._state.set_active_pick_target(cat, 0)
+        else:
+            # Create a new object
+            if cat == "Horizons":
+                self._add_new_horizon()
+            else:
+                self._add_new_fault()
+
+    def _update_pick_status(self) -> None:
+        """Phase 2: show picking target + existing pick count in status bar."""
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        if cat is None or idx is None:
+            return
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if idx >= len(picks):
+            return
+        hp = picks[idx]
+        sec = self._state.active_section
+        n = hp.n_picks_for_section(sec.name) if sec else hp.n_picks
+        self._status_label.setText(
+            f"Picking: {hp.name}  ({n} existing picks)  |  Right-click or Escape to end"
+        )
 
     def _on_pick_target_selected(self, cat: str, idx: int) -> None:
         """Clicking a horizon/fault in the panel also activates the matching tool."""
@@ -953,8 +1070,12 @@ class MainWindow(QMainWindow):
         self._section_view.set_fault_picking(tool_id == "fault_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
         self._section_view.set_ref_line_tool(tool_id)
-        # new_section tool: enter drawing mode on map (interactive, not auto-create)
-        # The map view handles clicks when active_tool == "new_section"
+        self._section_view.apply_tool_cursor(tool_id)
+        self._map_view.apply_tool_cursor(tool_id)
+        # Phase 2: update status bar with picking info
+        if tool_id in ("horizon_pick", "fault_pick"):
+            self._ensure_pick_target(tool_id)
+            self._update_pick_status()
         # Keep menu action in sync without triggering a re-entry loop
         self._pick_action.blockSignals(True)
         self._pick_action.setChecked(tool_id == "horizon_pick")

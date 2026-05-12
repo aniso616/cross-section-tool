@@ -32,7 +32,7 @@ def qapp():
 @pytest.fixture
 def state():
     s = AppState()
-    s.set_active_tool("select")  # node editing requires select or edit_nodes
+    s.set_active_tool("node_edit")  # node editing requires node_edit (A) tool
     return s
 
 
@@ -407,6 +407,7 @@ class TestNodeDrag:
     def _setup(self, view, state):
         sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
         state.add_section(sec)
+        state.set_active_tool("node_edit")   # A-tool required for node dragging
         view.axes.set_xlim(-200, 1200)
         view.axes.set_ylim(-200, 200)
         view.canvas.draw()
@@ -675,6 +676,7 @@ class TestDeleteKey:
     def _setup(self, view, state):
         sec = Section([(0.0, 0.0), (500.0, 0.0), (1000.0, 0.0)], name="L")
         state.add_section(sec)
+        state.set_active_tool("node_edit")
         view.axes.set_xlim(-200, 1200)
         view.axes.set_ylim(-200, 200)
         view.canvas.draw()
@@ -721,6 +723,7 @@ class TestEscapeKey:
     def _setup(self, view, state):
         sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
         state.add_section(sec)
+        state.set_active_tool("node_edit")
         view.axes.set_xlim(-200, 1200)
         view.axes.set_ylim(-200, 200)
         view.canvas.draw()
@@ -767,10 +770,10 @@ class TestToolRouting:
         # Pan tool: should start pan, NOT select node
         assert view._selected_node is None
 
-    def test_node_selection_works_for_edit_nodes_tool(self, view, state):
+    def test_node_selection_works_for_node_edit_tool(self, view, state):
         sec = _sec(nodes=[(0.0, 0.0), (1000.0, 0.0)])
         state.add_section(sec)
-        state.set_active_tool("edit_nodes")
+        state.set_active_tool("node_edit")
         view.axes.set_xlim(-200, 1200)
         view.axes.set_ylim(-200, 200)
         view.canvas.draw()

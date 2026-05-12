@@ -137,7 +137,7 @@ class TestToolIds:
     def test_expected_tools_present(self, palette):
         expected = {
             "select", "pan", "zoom",
-            "new_section", "edit_nodes",
+            "new_section", "node_edit",
             "horizon_pick", "fault_pick", "polygon",
             "measure",
         }

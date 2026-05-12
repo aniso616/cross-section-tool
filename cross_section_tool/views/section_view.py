@@ -66,7 +66,8 @@ class SectionView(QWidget):
 
     polygon_vertex_added = Signal(float, float)
     polygon_finished     = Signal(object)
-    pick_ended           = Signal()   # FIX 1: emitted when pick sequence ends
+    pick_ended           = Signal()       # emitted when pick sequence ends
+    node_selected        = Signal(str, int, int)   # Phase 3: (cat, obj_idx, pt_idx)
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
@@ -206,10 +207,16 @@ class SectionView(QWidget):
         )
         hl.addWidget(self._ve_lock_btn)
 
+        # Context toolbar (Phase 4) — inserted between header and canvas
+        from cross_section_tool.views.context_toolbar import ContextToolbar
+        self._context_toolbar = ContextToolbar(self._state)
+        self._context_toolbar.action_requested.connect(self._on_context_action)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._header)
+        layout.addWidget(self._context_toolbar)
         layout.addWidget(self._canvas, stretch=1)
 
         # Matplotlib events
@@ -305,6 +312,26 @@ class SectionView(QWidget):
         finally:
             self._ax = old_ax
         return fig
+
+    def apply_tool_cursor(self, tool_id: str) -> None:
+        """Phase 5: set an appropriate cursor for the active tool."""
+        from PySide6.QtCore import Qt as _Qt
+        _map = {
+            "select":       _Qt.CursorShape.ArrowCursor,
+            "node_edit":    _Qt.CursorShape.CrossCursor,
+            "pan":          _Qt.CursorShape.OpenHandCursor,
+            "zoom":         _Qt.CursorShape.SizeFCursor,
+            "new_section":  _Qt.CursorShape.CrossCursor,
+            "horizon_pick": _Qt.CursorShape.CrossCursor,
+            "fault_pick":   _Qt.CursorShape.CrossCursor,
+            "polygon":      _Qt.CursorShape.CrossCursor,
+            "h_ref":        _Qt.CursorShape.CrossCursor,
+            "v_ref":        _Qt.CursorShape.CrossCursor,
+            "a_ref":        _Qt.CursorShape.CrossCursor,
+            "measure":      _Qt.CursorShape.CrossCursor,
+        }
+        shape = _map.get(tool_id, _Qt.CursorShape.ArrowCursor)
+        self._canvas.setCursor(_Qt.CursorShape(shape))
 
     def set_ref_line_tool(self, tool_id: str) -> None:
         """Phase 2+3: activate/deactivate reference-line and construct tools."""
@@ -1234,7 +1261,7 @@ class SectionView(QWidget):
             return
 
         # ---- Phase 3 polish: node hit test has priority in ALL modes ----
-        if event.button == 1 and tool in ("select", "edit_nodes"):
+        if event.button == 1 and tool in ("select", "node_edit"):
             is_dbl = getattr(event, "dblclick", False)
 
             # Check for nearby pick node FIRST (any mode)
@@ -1243,12 +1270,13 @@ class SectionView(QWidget):
                 self._pick_selected = hit_node
                 self._pick_drag     = False
                 self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
-                cat, oi, _ = hit_node
+                cat, oi, pi = hit_node
                 picks = (self._state.project.horizon_picks if cat == "Horizons"
                          else self._state.project.fault_picks)
                 self._pick_copy = copy.deepcopy(picks[oi])
                 self._sv_mode = "edit_mode"
                 self._selected_object = (cat, oi)
+                self.node_selected.emit(cat, oi, pi)
                 self.render()
                 return
 
@@ -1315,7 +1343,7 @@ class SectionView(QWidget):
                 self.render()
 
         # ---- Right-click context on pick node (edit mode only) ----
-        if event.button == 3 and tool in ("select", "edit_nodes"):
+        if event.button == 3 and tool in ("select", "node_edit"):
             if self._sv_mode == "edit_mode":
                 hit = self._find_nearest_pick_px(x, y)
                 if hit is not None:
@@ -1401,7 +1429,7 @@ class SectionView(QWidget):
 
         # ---- Hover: pick-node in ALL modes (Phase 3 polish) ----
         tool = self._state.active_tool
-        if tool in ("select", "edit_nodes"):
+        if tool in ("select", "node_edit"):
             if event.xdata is not None:
                 new_hover = self._find_nearest_pick_px(
                     float(event.xdata), float(event.ydata)
@@ -1416,7 +1444,7 @@ class SectionView(QWidget):
                     return
 
         # ---- Hover: object line ----
-        if tool in ("select", "edit_nodes") and self._sv_mode != "edit_mode":
+        if tool in ("select", "node_edit") and self._sv_mode != "edit_mode":
             if event.xdata is not None:
                 new_obj = self._find_nearest_pick_line(
                     float(event.xdata), float(event.ydata)
@@ -1503,6 +1531,27 @@ class SectionView(QWidget):
             self._state.undo()
         elif event.key in ("ctrl+shift+z", "ctrl+y"):
             self._state.redo()
+
+    def _on_context_action(self, action: str) -> None:
+        """Phase 4: handle actions from the context toolbar."""
+        if action == "end_pick":
+            self._end_pick_sequence()
+        elif action == "close_polygon":
+            self.finish_polygon()
+        elif action == "cancel_polygon":
+            self._polygon_vertices.clear()
+            self.set_polygon_drawing(False)
+        elif action == "delete_node":
+            if self._pick_selected and not self._pick_drag:
+                self._delete_selected_pick()
+        elif action == "delete_object":
+            if self._selected_object:
+                self._delete_selected_object_with_confirm()
+        elif action == "new_horizon":
+            # Signal up to app — can't create directly from here without dialog
+            self._state.set_active_tool("select")
+        elif action == "new_fault":
+            self._state.set_active_tool("select")
 
     def _on_active_section_changed(self, section) -> None:
         self._ax_limits_set = False   # FIX 2: new section gets default limits

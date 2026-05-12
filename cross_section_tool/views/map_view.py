@@ -37,8 +37,9 @@ _NODE_DRAG     = (9,  "red",    "white",   1.5)
 _WELL_COLOR    = "#8B4513"
 _SURFACE_COLOR = "darkorange"
 
-# Tools that activate node editing
-_EDIT_TOOLS = ("select", "edit_nodes")
+# Tools that activate node editing (A-key tool only now)
+_EDIT_TOOLS = ("node_edit",)
+_SELECT_TOOLS = ("select", "node_edit")  # both can select sections/objects
 
 
 class MapView(QWidget):
@@ -418,26 +419,28 @@ class MapView(QWidget):
                 self._start_pan(event)
                 return
 
-            if tool in _EDIT_TOOLS:
-                self._mouse_pressed = True
+            if tool in _SELECT_TOOLS:
                 x, y = event.xdata, event.ydata
                 if x is None or y is None:
-                    self._mouse_pressed = False
-                    return
-                px = getattr(event, "x", None)
-                py = getattr(event, "y", None)
-                self._press_px = (float(px), float(py)) if (px is not None and py is not None) else None
-
-                hit = self._find_nearest_node(x, y)
-                if hit is not None:
-                    self._selected_node     = hit
-                    self._drag_section_copy = copy.deepcopy(
-                        self._state.project.sections[hit[0]]
-                    )
-                    self._drag_active = False
-                    self.render()
                     return
 
+                # A-tool (node_edit): node selection has priority
+                if tool in _EDIT_TOOLS:
+                    self._mouse_pressed = True
+                    px = getattr(event, "x", None)
+                    py = getattr(event, "y", None)
+                    self._press_px = (float(px), float(py)) if (px is not None and py is not None) else None
+                    hit = self._find_nearest_node(x, y)
+                    if hit is not None:
+                        self._selected_node     = hit
+                        self._drag_section_copy = copy.deepcopy(
+                            self._state.project.sections[hit[0]]
+                        )
+                        self._drag_active = False
+                        self.render()
+                        return
+
+                # Both V and A: section line selection
                 sec_idx = self._find_nearest_section(x, y)
                 if sec_idx is not None:
                     self._state.set_active_section(
@@ -448,7 +451,7 @@ class MapView(QWidget):
                     self._drag_active       = False
                     return
 
-                # Empty space → deselect
+                # Empty space → deselect node
                 if self._selected_node is not None:
                     self._selected_node     = None
                     self._drag_section_copy = None
@@ -657,6 +660,22 @@ class MapView(QWidget):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
+
+    def apply_tool_cursor(self, tool_id: str) -> None:
+        """Phase 5: set an appropriate cursor for the active tool."""
+        from PySide6.QtCore import Qt as _Qt
+        _map = {
+            "select":       _Qt.CursorShape.ArrowCursor,
+            "node_edit":    _Qt.CursorShape.CrossCursor,
+            "pan":          _Qt.CursorShape.OpenHandCursor,
+            "zoom":         _Qt.CursorShape.SizeFCursor,
+            "new_section":  _Qt.CursorShape.CrossCursor,
+            "horizon_pick": _Qt.CursorShape.CrossCursor,
+            "fault_pick":   _Qt.CursorShape.CrossCursor,
+            "polygon":      _Qt.CursorShape.CrossCursor,
+        }
+        shape = _map.get(tool_id, _Qt.CursorShape.ArrowCursor)
+        self._canvas.setCursor(_Qt.CursorShape(shape))
 
     def _on_sections_changed(self, *_args) -> None:
         self.render()
