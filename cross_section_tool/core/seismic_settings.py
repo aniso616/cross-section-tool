@@ -1,0 +1,35 @@
+"""Phase 5 — Per-section seismic display settings."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class SeismicDisplaySettings:
+    colormap:        str   = "seismic_red_blue"
+    gain:            float = 1.0
+    clip_percentile: float = 99.0
+    opacity:         float = 1.0
+    show_wiggle:     bool  = False
+    wiggle_fill:     bool  = True
+
+    def to_dict(self) -> dict:
+        return {
+            "colormap":        self.colormap,
+            "gain":            self.gain,
+            "clip_percentile": self.clip_percentile,
+            "opacity":         self.opacity,
+            "show_wiggle":     self.show_wiggle,
+            "wiggle_fill":     self.wiggle_fill,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SeismicDisplaySettings":
+        return cls(
+            colormap=d.get("colormap", "seismic_red_blue"),
+            gain=d.get("gain", 1.0),
+            clip_percentile=d.get("clip_percentile", 99.0),
+            opacity=d.get("opacity", 1.0),
+            show_wiggle=d.get("show_wiggle", False),
+            wiggle_fill=d.get("wiggle_fill", True),
+        )

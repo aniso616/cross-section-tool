@@ -271,6 +271,41 @@ class SectionView(QWidget):
         self._display_mode = mode
         self.render()
 
+    def render_to_figure(
+        self, width_inches: float = 10.0, height_inches: float = 6.0,
+        dpi: int = 150
+    ):
+        """Phase 8: render the current section to an independent Matplotlib Figure.
+
+        Returns a :class:`matplotlib.figure.Figure` suitable for saving to
+        PNG/SVG/PDF without affecting the on-screen display.
+        """
+        from matplotlib.figure import Figure as _Figure
+        fig = _Figure(figsize=(width_inches, height_inches), tight_layout=True)
+        ax  = fig.add_subplot(111)
+        section = self._state.active_section
+        if section is None:
+            return fig
+        old_ax, self._ax = self._ax, ax
+        try:
+            self._setup_axes(section)
+            if self._ax_limits_set:
+                self._ax.set_xlim(old_ax.get_xlim())
+                self._ax.set_ylim(old_ax.get_ylim())
+            self._render_seismic(section)
+            self._render_grid(section)
+            self._render_section_ends(section)
+            self._render_reference_lines(section)
+            self._render_polygons(section)
+            self._render_surfaces(section)
+            self._render_faults(section)
+            self._render_horizons(section)
+            self._render_wells(section)
+            self._render_annotations(section)
+        finally:
+            self._ax = old_ax
+        return fig
+
     def set_ref_line_tool(self, tool_id: str) -> None:
         """Phase 2+3: activate/deactivate reference-line and construct tools."""
         ref_tools     = {"h_ref", "v_ref", "a_ref"}
@@ -375,6 +410,7 @@ class SectionView(QWidget):
         self._render_rubber_band(section)
         self._render_snap_indicator()
         self._render_polygon_in_progress()
+        self._render_annotations(section)
         self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
@@ -443,6 +479,31 @@ class SectionView(QWidget):
         self._ax.xaxis.set_major_locator(MultipleLocator(interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(interval))
         self._ax.ticklabel_format(style="plain", axis="both")
+
+    def _render_annotations(self, section: Section) -> None:
+        """Phase 6: draw text annotations (and optional leader lines)."""
+        for ann in self._state.project.annotations:
+            if ann.section_name and ann.section_name != section.name:
+                continue
+            r, g, b = ann.color
+            color = "#{:02x}{:02x}{:02x}".format(r, g, b)
+            px, pz = ann.position
+            if ann.anchor_point is not None:
+                ax_, az_ = ann.anchor_point
+                self._ax.annotate(
+                    ann.text,
+                    xy=(ax_, az_), xytext=(px, pz),
+                    fontsize=ann.font_size, color=color,
+                    rotation=ann.rotation_degrees,
+                    arrowprops=dict(arrowstyle="-", color=color, lw=0.8),
+                    zorder=11,
+                )
+            else:
+                self._ax.text(
+                    px, pz, ann.text,
+                    fontsize=ann.font_size, color=color,
+                    rotation=ann.rotation_degrees, zorder=11,
+                )
 
     def _render_section_ends(self, section: Section) -> None:
         """Draw vertical end-cap lines at x=0 and x=total_length."""
@@ -966,27 +1027,36 @@ class SectionView(QWidget):
         return hp, float(hp.distances[-1]), float(hp.depths[-1])
 
     def _add_pick_to_active_target(self, x: float, y: float) -> None:
-        """Insert a pick point (Phase 1: tagged with current section name)."""
+        """Insert a pick point tagged with current section name."""
         cat = self._state.active_pick_category
         idx = self._state.active_pick_index
         if cat is None or idx is None:
             return
         section = self._state.active_section
         sec_name = section.name if section is not None else ""
-        if cat == "Horizons":
-            picks = self._state.project.horizon_picks
-            if idx >= len(picks):
-                return
-            hp = copy.deepcopy(picks[idx])
-            hp.insert_pick(x, y, sec_name)
-            self._state.update_horizon_pick(idx, hp)
-        elif cat == "Faults":
-            picks = self._state.project.fault_picks
-            if idx >= len(picks):
-                return
-            fp = copy.deepcopy(picks[idx])
-            fp.insert_pick(x, y, sec_name)
-            self._state.update_fault_pick(idx, fp)
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if idx >= len(picks):
+            return
+        hp_before = copy.deepcopy(picks[idx])
+        hp_after  = copy.deepcopy(hp_before)
+        hp_after.insert_pick(x, y, sec_name)
+
+        def _do():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(idx, copy.deepcopy(hp_after))
+            else:
+                self._state.update_fault_pick(idx, copy.deepcopy(hp_after))
+        def _undo():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(idx, copy.deepcopy(hp_before))
+            else:
+                self._state.update_fault_pick(idx, copy.deepcopy(hp_before))
+
+        _do()
+        self._state.record_command(
+            f"Add pick to {hp_before.name or cat}", undo=_undo, redo=_do
+        )
 
     # ------------------------------------------------------------------
     # Seismic cache
@@ -1287,9 +1357,11 @@ class SectionView(QWidget):
             self._pick_copy._distances[pi] = x
             self._pick_copy._depths[pi]    = y
             order = np.argsort(self._pick_copy._distances, kind="stable")
-            self._pick_copy._distances     = self._pick_copy._distances[order]
-            self._pick_copy._depths        = self._pick_copy._depths[order]
-            self._pick_copy._section_names = self._pick_copy._section_names[order]
+            for _attr in ("_distances", "_depths", "_section_names",
+                          "_confidence", "_quality", "_note"):
+                arr = getattr(self._pick_copy, _attr, None)
+                if arr is not None and len(arr) == len(order):
+                    setattr(self._pick_copy, _attr, arr[order])
             new_pi = int(np.where(order == pi)[0][0])
             self._pick_selected = (cat, oi, new_pi)
             self.render()
@@ -1420,7 +1492,9 @@ class SectionView(QWidget):
             ):
                 self._delete_selected_object_with_confirm()
         elif event.key == "ctrl+z":
-            self._undo_last_delete()
+            self._state.undo()
+        elif event.key in ("ctrl+shift+z", "ctrl+y"):
+            self._state.redo()
 
     def _on_active_section_changed(self, section) -> None:
         self._ax_limits_set = False   # FIX 2: new section gets default limits
@@ -1449,6 +1523,8 @@ class SectionView(QWidget):
         self, pick_ref: tuple[str, int, int], event
     ) -> None:
         menu = QMenu(self)
+        props_act = menu.addAction("Properties…")
+        menu.addSeparator()
         del_act = menu.addAction("Delete Pick")
         pos = self._canvas.mapToGlobal(
             self._canvas.rect().topLeft()
@@ -1459,7 +1535,9 @@ class SectionView(QWidget):
             QPoint(int(event.x), self._canvas.height() - int(event.y))
         )
         chosen = menu.exec(screen_pos)
-        if chosen is del_act:
+        if chosen is props_act:
+            self._show_pick_properties(pick_ref)
+        elif chosen is del_act:
             self._pick_selected = pick_ref
             self._delete_selected_pick()
 
@@ -1492,6 +1570,51 @@ class SectionView(QWidget):
             self._state.remove_horizon_pick(picks[oi])
         else:
             self._state.remove_fault_pick(picks[oi])
+
+    def _show_pick_properties(self, pick_ref: tuple[str, int, int]) -> None:
+        """Phase 3: edit per-point confidence, quality, note."""
+        from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QComboBox,
+                                       QDoubleSpinBox, QFormLayout, QLineEdit,
+                                       QVBoxLayout)
+        cat, oi, pi = pick_ref
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if oi >= len(picks):
+            return
+        hp = picks[oi]
+        if pi >= hp.n_picks:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Pick Properties")
+        form = QFormLayout()
+        conf_spin = QDoubleSpinBox(); conf_spin.setRange(0, 1); conf_spin.setSingleStep(0.1)
+        conf_spin.setDecimals(2); conf_spin.setValue(float(hp._confidence[pi]))
+        qual_combo = QComboBox()
+        for q in ("picked", "interpolated", "projected", "inferred"):
+            qual_combo.addItem(q)
+        cur_q = str(hp._quality[pi])
+        idx_q = ["picked", "interpolated", "projected", "inferred"].index(cur_q) \
+                if cur_q in ["picked", "interpolated", "projected", "inferred"] else 0
+        qual_combo.setCurrentIndex(idx_q)
+        note_edit = QLineEdit(str(hp._note[pi]))
+        form.addRow("Confidence:", conf_spin)
+        form.addRow("Quality:", qual_combo)
+        form.addRow("Note:", note_edit)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        vb = QVBoxLayout(dlg); vb.addLayout(form); vb.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        hp2 = copy.deepcopy(hp)
+        hp2._confidence[pi] = conf_spin.value()
+        hp2._quality[pi]    = qual_combo.currentText()
+        hp2._note[pi]       = note_edit.text()
+        if cat == "Horizons":
+            self._state.update_horizon_pick(oi, hp2)
+        else:
+            self._state.update_fault_pick(oi, hp2)
 
     # ------------------------------------------------------------------
     # Pick deletion
@@ -1526,10 +1649,20 @@ class SectionView(QWidget):
         else:
             hp.delete_pick(pi)
 
+        hp_before = copy.deepcopy(picks[oi])  # save for undo (before mutation)
         if cat == "Horizons":
             self._state.update_horizon_pick(oi, hp)
         else:
             self._state.update_fault_pick(oi, hp)
+        # Record undo
+        _oi, _cat = oi, cat
+        _saved = hp_before
+        def _undo_del():
+            if _cat == "Horizons":
+                self._state.update_horizon_pick(_oi, copy.deepcopy(_saved))
+            else:
+                self._state.update_fault_pick(_oi, copy.deepcopy(_saved))
+        self._state.record_command(f"Delete pick from {hp_before.name}", undo=_undo_del)
 
     def _undo_last_delete(self) -> None:
         """Phase 1: restore the last deleted pick point."""

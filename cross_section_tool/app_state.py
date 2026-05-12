@@ -4,6 +4,9 @@ import os
 
 from PySide6.QtCore import QObject, Signal
 
+from cross_section_tool.core.annotation import Annotation
+from cross_section_tool.core.command_stack import Command, CommandStack
+from cross_section_tool.core.intersection import FaultHorizonIntersection
 from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
@@ -92,6 +95,15 @@ class AppState(QObject):
     reference_line_removed  = Signal(object)
     reference_line_modified = Signal(int, object)
 
+    # Phase 2/6 additions
+    intersection_added   = Signal(object)
+    annotation_added     = Signal(object)
+    annotation_removed   = Signal(object)
+    annotation_modified  = Signal(int, object)
+    # Phase 7: undo/redo status
+    undo_performed       = Signal(str)   # description
+    redo_performed       = Signal(str)
+
     # Active pick target: which horizon/fault picks go into
     active_pick_target_changed = Signal(str, int)  # category_name, index
 
@@ -108,6 +120,8 @@ class AppState(QObject):
         self._active_well: Well | None = None
         self._is_modified: bool = False
         self._active_tool: str = "select"
+        # Phase 7: command stack
+        self._cmd_stack: CommandStack = CommandStack()
         self._active_pick_category: str | None = None
         self._active_pick_index: int | None = None
 
@@ -139,6 +153,26 @@ class AppState(QObject):
     def active_pick_index(self) -> int | None:
         return self._active_pick_index
 
+    @property
+    def command_stack(self) -> CommandStack:
+        return self._cmd_stack
+
+    def record_command(self, description: str,
+                       undo, redo=None) -> None:
+        """Phase 7: record an already-applied operation for undo/redo."""
+        self._cmd_stack.push(Command(description=description,
+                                     undo=undo, redo=redo or (lambda: None)))
+
+    def undo(self) -> None:
+        desc = self._cmd_stack.undo()
+        if desc is not None:
+            self.undo_performed.emit(desc)
+
+    def redo(self) -> None:
+        desc = self._cmd_stack.redo()
+        if desc is not None:
+            self.redo_performed.emit(desc)
+
     def set_active_pick_target(self, category: str, index: int) -> None:
         self._active_pick_category = category
         self._active_pick_index    = index
@@ -169,6 +203,7 @@ class AppState(QObject):
         self._active_section = None
         self._active_well = None
         self._is_modified = False
+        self._cmd_stack.clear()
         self.project_path_changed.emit("")
         self.project_changed.emit()
         self.project_modified_changed.emit(False)
@@ -374,6 +409,50 @@ class AppState(QObject):
         self._project.reference_lines[index] = rl
         self._set_modified()
         self.reference_line_modified.emit(index, rl)
+
+    # ------------------------------------------------------------------
+    # Annotations (Phase 6)
+    # ------------------------------------------------------------------
+
+    def add_annotation(self, ann: Annotation) -> None:
+        self._project.annotations.append(ann)
+        self._set_modified()
+        self.annotation_added.emit(ann)
+
+    def remove_annotation(self, ann: Annotation) -> None:
+        self._project.annotations.remove(ann)
+        self._set_modified()
+        self.annotation_removed.emit(ann)
+
+    def update_annotation(self, index: int, ann: Annotation) -> None:
+        self._project.annotations[index] = ann
+        self._set_modified()
+        self.annotation_modified.emit(index, ann)
+
+    # ------------------------------------------------------------------
+    # Intersections (Phase 2)
+    # ------------------------------------------------------------------
+
+    def add_intersection(self, isc: FaultHorizonIntersection) -> None:
+        self._project.intersections.append(isc)
+        self._set_modified()
+        self.intersection_added.emit(isc)
+
+    def compute_and_store_intersections(self, section) -> list:
+        from cross_section_tool.core.intersection import compute_intersections
+        new_ints = compute_intersections(
+            section,
+            self._project.horizon_picks,
+            self._project.fault_picks,
+        )
+        # Remove old intersections for this section
+        self._project.intersections = [
+            i for i in self._project.intersections
+            if i.section_name != section.name
+        ]
+        for isc in new_ints:
+            self.add_intersection(isc)
+        return new_ints
 
     # ------------------------------------------------------------------
     # Internal

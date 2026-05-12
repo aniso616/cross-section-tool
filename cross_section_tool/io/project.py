@@ -9,11 +9,15 @@ from typing import Any
 import h5py
 import numpy as np
 
+from cross_section_tool.core.annotation import Annotation
+from cross_section_tool.core.event import Event, EventSequence
 from cross_section_tool.core.formation import Formation, StratigraphicColumn
+from cross_section_tool.core.intersection import FaultHorizonIntersection
 from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
+from cross_section_tool.core.velocity_model import VelocityModel
 from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
 
 FORMAT_VERSION = "1.0"
@@ -85,6 +89,11 @@ class Project:
         self.polygons: list[SectionPolygon] = []
         self.reference_lines: list[ReferenceLine] = []
         self.strat_column: StratigraphicColumn = StratigraphicColumn()
+        # Phase 1-6 additions
+        self.event_sequence: EventSequence = EventSequence()
+        self.intersections: list[FaultHorizonIntersection] = []
+        self.velocity_model: VelocityModel = VelocityModel()
+        self.annotations: list[Annotation] = []
 
     # ------------------------------------------------------------------
     # Persistence
@@ -106,6 +115,10 @@ class Project:
             _save_polygons(f, self.polygons)
             _save_reference_lines(f, self.reference_lines)
             _save_strat_column(f, self.strat_column)
+            _save_json(f, "event_sequence", self.event_sequence.to_list())
+            _save_json(f, "intersections",  [i.to_dict() for i in self.intersections])
+            _save_json(f, "velocity_model", self.velocity_model.to_dict())
+            _save_json(f, "annotations",    [a.to_dict() for a in self.annotations])
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> "Project":
@@ -124,6 +137,14 @@ class Project:
             proj.polygons        = _load_polygons(f)
             proj.reference_lines = _load_reference_lines(f)
             proj.strat_column    = _load_strat_column(f)
+            proj.event_sequence  = EventSequence.from_list(
+                _load_json(f, "event_sequence", []))
+            proj.intersections   = [FaultHorizonIntersection.from_dict(d)
+                                     for d in _load_json(f, "intersections", [])]
+            proj.velocity_model  = VelocityModel.from_dict(
+                _load_json(f, "velocity_model", {}))
+            proj.annotations     = [Annotation.from_dict(d)
+                                     for d in _load_json(f, "annotations", [])]
         return proj
 
     def __repr__(self) -> str:
@@ -149,6 +170,12 @@ def _save_sections(f: h5py.File, sections: list[Section]) -> None:
         sg.attrs["vertical_exaggeration"] = sec.vertical_exaggeration
         sg.attrs["crs_epsg"] = sec.crs_epsg
         sg.create_dataset("nodes", data=sec._nodes, dtype="float64")
+        # Phase 5: seismic display settings
+        import json as _json
+        sg.attrs["seismic_display"] = _json.dumps(
+            sec.seismic_display.to_dict()
+            if hasattr(sec, "seismic_display") else {}
+        )
 
 
 def _save_surfaces(f: h5py.File, surfaces: list[Surface]) -> None:
@@ -192,8 +219,19 @@ def _save_horizon_picks_group(
             sg.attrs["age_ma"] = float(hp.age_ma)
         if getattr(hp, "displacement", None) is not None:
             sg.attrs["displacement"] = float(hp.displacement)
-        sg.create_dataset("distances", data=hp._distances, dtype="float64")
-        sg.create_dataset("depths",    data=hp._depths,    dtype="float64")
+        sg.create_dataset("distances",  data=hp._distances, dtype="float64")
+        sg.create_dataset("depths",     data=hp._depths,    dtype="float64")
+        conf = getattr(hp, "_confidence", None)
+        if conf is not None and len(conf) > 0:
+            sg.create_dataset("confidence", data=conf, dtype="float64")
+        qual = getattr(hp, "_quality", None)
+        if qual is not None and len(qual) > 0:
+            sg.create_dataset("quality",
+                              data=[s.encode() for s in qual.tolist()])
+        note = getattr(hp, "_note", None)
+        if note is not None and len(note) > 0:
+            sg.create_dataset("note",
+                              data=[s.encode() for s in note.tolist()])
         snames = getattr(hp, "_section_names", None)
         if snames is not None and len(snames) > 0:
             sg.create_dataset("section_names",
@@ -261,18 +299,27 @@ def _save_seismic_refs(f: h5py.File, refs: list[SeismicRef]) -> None:
 def _load_sections(f: h5py.File) -> list[Section]:
     if "sections" not in f:
         return []
+    import json as _json
+    from cross_section_tool.core.seismic_settings import SeismicDisplaySettings as _SDS
     grp = f["sections"]
-    return [
-        Section(
-            nodes=grp[k]["nodes"][:],
-            name=_str(grp[k].attrs.get("name", "")),
-            depth_domain=_str(grp[k].attrs.get("depth_domain", "depth")),
-            depth_units=_str(grp[k].attrs.get("depth_units", "m")),
-            vertical_exaggeration=float(grp[k].attrs.get("vertical_exaggeration", 1.0)),
-            crs_epsg=int(grp[k].attrs.get("crs_epsg", 32632)),
+    result = []
+    for k in _sorted_keys(grp):
+        sg = grp[k]
+        sec = Section(
+            nodes=sg["nodes"][:],
+            name=_str(sg.attrs.get("name", "")),
+            depth_domain=_str(sg.attrs.get("depth_domain", "depth")),
+            depth_units=_str(sg.attrs.get("depth_units", "m")),
+            vertical_exaggeration=float(sg.attrs.get("vertical_exaggeration", 1.0)),
+            crs_epsg=int(sg.attrs.get("crs_epsg", 32632)),
         )
-        for k in _sorted_keys(grp)
-    ]
+        raw_sd = sg.attrs.get("seismic_display", "{}")
+        try:
+            sec.seismic_display = _SDS.from_dict(_json.loads(raw_sd))
+        except Exception:
+            pass
+        result.append(sec)
+    return result
 
 
 def _load_surfaces(f: h5py.File) -> list[Surface]:
@@ -341,6 +388,18 @@ def _load_horizon_picks_group(
                              z_units=z_units, color=color,
                              line_width=line_width, line_style=line_style,
                              section_names=section_names, **extra)
+        # Phase 3: restore per-point metadata
+        import numpy as _np
+        if "confidence" in sg:
+            hp._confidence = sg["confidence"][:].astype(float)
+        if "quality" in sg:
+            hp._quality = _np.array(
+                [s.decode() if isinstance(s, bytes) else str(s)
+                 for s in sg["quality"][:]], dtype=object)
+        if "note" in sg:
+            hp._note = _np.array(
+                [s.decode() if isinstance(s, bytes) else str(s)
+                 for s in sg["note"][:]], dtype=object)
         result.append(hp)
     return result
 
@@ -441,6 +500,23 @@ def _load_polygons(f: h5py.File) -> list[SectionPolygon]:
         )
         for k in _sorted_keys(grp)
     ]
+
+
+def _save_json(f: h5py.File, key: str, data) -> None:
+    import json
+    grp = f.require_group(key)
+    grp.attrs["data"] = json.dumps(data)
+
+
+def _load_json(f: h5py.File, key: str, default=None):
+    import json
+    if key not in f:
+        return default if default is not None else {}
+    raw = f[key].attrs.get("data", "null")
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default if default is not None else {}
 
 
 def _save_strat_column(f: h5py.File, col: StratigraphicColumn) -> None:

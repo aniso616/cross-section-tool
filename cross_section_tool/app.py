@@ -229,6 +229,16 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._export_img_action = QAction("Export Section &Image…", self)
+        self._export_img_action.triggered.connect(self._on_export_section_image)
+        file_menu.addAction(self._export_img_action)
+
+        self._export_csv_action = QAction("Export Horizons to &CSV…", self)
+        self._export_csv_action.triggered.connect(self._on_export_horizons_csv)
+        file_menu.addAction(self._export_csv_action)
+
+        file_menu.addSeparator()
+
         self._exit_action = QAction("E&xit", self)
         self._exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         self._exit_action.triggered.connect(self.close)
@@ -351,6 +361,13 @@ class MainWindow(QMainWindow):
         # Status bar updates when tool or active pick target changes
         s.tool_changed.connect(lambda _: self._update_status())
         s.active_pick_target_changed.connect(lambda *_: self._update_status())
+        # Phase 7: undo/redo status flashes
+        s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
+        s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
+        # Phase 6: annotations
+        s.annotation_added.connect(lambda _: self._section_view.render())
+        s.annotation_removed.connect(lambda _: self._section_view.render())
+        s.annotation_modified.connect(lambda *_: self._section_view.render())
         # Keyboard shortcuts for tools (application-wide)
         _tool_keys = {
             "V": "select",   "H": "pan",          "Z": "zoom",
@@ -364,6 +381,14 @@ class MainWindow(QMainWindow):
             sc.activated.connect(
                 lambda tid=tool_id: self._tool_palette.set_active_tool(tid)
             )
+        # Global undo/redo shortcuts (Phase 7)
+        sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        sc_undo.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc_undo.activated.connect(self._state.undo)
+        sc_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        sc_redo.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc_redo.activated.connect(self._state.redo)
+
         # Panel toggle shortcuts
         sc1 = QShortcut(QKeySequence("Ctrl+1"), self)
         sc1.activated.connect(self._project_panel.toggleViewAction().trigger)
@@ -552,6 +577,61 @@ class MainWindow(QMainWindow):
                 name=f"Horizon {len(picks) + 1}",
             )
             self._state.add_horizon_pick(pick)
+
+    def _on_export_section_image(self) -> None:
+        """Phase 8: render section to PNG/SVG/PDF."""
+        if self._state.active_section is None:
+            QMessageBox.information(self, "No Section", "Activate a section first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Section Image", "",
+            "PNG Image (*.png);;SVG Vector (*.svg);;PDF Document (*.pdf)"
+        )
+        if not path:
+            return
+        try:
+            fig = self._section_view.render_to_figure(12.0, 7.0, 200)
+            fig.savefig(path, bbox_inches="tight")
+            QMessageBox.information(self, "Export OK", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _on_export_horizons_csv(self) -> None:
+        """Phase 8: export picks for the active section to CSV."""
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "No Section", "Activate a section first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Horizons CSV", "", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        import csv
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.writer(fh)
+                writer.writerow([
+                    "section_name", "horizon_name",
+                    "distance", "depth", "x", "y", "z",
+                    "confidence", "quality",
+                ])
+                for hp in self._state.project.horizon_picks:
+                    idxs = hp.section_indices(section.name)
+                    for fi in idxs:
+                        d   = float(hp._distances[fi])
+                        z   = float(hp._depths[fi])
+                        x, y = section.section_to_map(d)
+                        conf = float(hp._confidence[fi]) if len(hp._confidence) > fi else 1.0
+                        qual = str(hp._quality[fi]) if len(hp._quality) > fi else "picked"
+                        writer.writerow([
+                            section.name, hp.name, d, z,
+                            f"{x:.2f}", f"{y:.2f}", f"{z:.2f}",
+                            f"{conf:.2f}", qual,
+                        ])
+            QMessageBox.information(self, "Export OK", f"Saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
 
     def _on_about(self) -> None:
         QMessageBox.about(
@@ -824,6 +904,12 @@ class MainWindow(QMainWindow):
             self._splitter.setSizes([sizes[0], 960])
         else:
             self._splitter.setSizes([sizes[0] + sizes[1], 0])
+
+    def _flash_status(self, msg: str) -> None:
+        """Phase 7: briefly show *msg* in the status bar, then restore."""
+        from PySide6.QtCore import QTimer
+        self._status_label.setText(msg)
+        QTimer.singleShot(2000, self._update_status)
 
     def _on_map_status(self, msg: str) -> None:
         if msg:

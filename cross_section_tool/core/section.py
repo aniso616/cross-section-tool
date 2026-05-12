@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 from typing import Literal
 
@@ -29,6 +30,9 @@ class Section:
         self.depth_units: str = str(depth_units)
         self.vertical_exaggeration: float = float(vertical_exaggeration)
         self.crs_epsg: int = int(crs_epsg)
+        # Phase 5: per-section seismic display settings
+        from cross_section_tool.core.seismic_settings import SeismicDisplaySettings
+        self.seismic_display: SeismicDisplaySettings = SeismicDisplaySettings()
 
     # ------------------------------------------------------------------
     # Properties
@@ -216,6 +220,27 @@ class Section:
     # ------------------------------------------------------------------
     # Dunder helpers
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Phase 4: domain conversion
+    # ------------------------------------------------------------------
+
+    def convert_domain(self, target_domain: str, velocity_model) -> "Section":
+        """Return a copy of this section in *target_domain* ("depth" or "twt").
+
+        *velocity_model* must be a :class:`~core.velocity_model.VelocityModel`.
+        The section geometry (map nodes) is unchanged; only ``depth_domain`` and
+        ``depth_units`` are updated.  Pick conversion is handled by callers.
+        """
+        copy_ = copy.deepcopy(self)
+        if target_domain == self.depth_domain:
+            return copy_
+        copy_.depth_domain = target_domain
+        if target_domain == "twt":
+            copy_.depth_units = "ms"
+        else:
+            copy_.depth_units = "m"
+        return copy_
 
     # ------------------------------------------------------------------
     # Phase 5: snapshot / restore (foundation for restoration workflows)

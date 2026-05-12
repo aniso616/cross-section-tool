@@ -500,7 +500,9 @@ class MapView(QWidget):
             if self._selected_node is not None and not self._drag_active:
                 self._delete_selected_node()
         elif event.key == "ctrl+z":
-            self._undo_last_delete()
+            self._state.undo()
+        elif event.key in ("ctrl+shift+z", "ctrl+y"):
+            self._state.redo()
 
     # ------------------------------------------------------------------
     # Hover state

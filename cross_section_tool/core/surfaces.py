@@ -202,6 +202,11 @@ class HorizonPick:
         self._distances = distances[order].copy()
         self._depths = depths[order].copy()
         self._section_names: np.ndarray = snames[order].copy()
+        # Phase 3: per-point metadata
+        n = len(distances)
+        self._confidence: np.ndarray = np.ones(n, dtype=float)
+        self._quality: np.ndarray    = np.array(["picked"] * n, dtype=object)
+        self._note: np.ndarray       = np.array([""] * n, dtype=object)
         self.name = name
         self.z_units: Literal["m", "ft", "ms"] = z_units
         self.color = color
@@ -283,38 +288,47 @@ class HorizonPick:
     # ------------------------------------------------------------------
 
     def insert_pick(self, distance: float, depth: float,
-                    section_name: str = "") -> None:
+                    section_name: str = "",
+                    confidence: float = 1.0,
+                    quality: str = "picked",
+                    note: str = "") -> None:
         """Insert a pick, maintaining ascending distance order."""
         idx = int(np.searchsorted(self._distances, distance))
-        self._distances = np.insert(self._distances, idx, distance)
-        self._depths = np.insert(self._depths, idx, depth)
+        self._distances     = np.insert(self._distances, idx, distance)
+        self._depths        = np.insert(self._depths, idx, depth)
         self._section_names = np.insert(self._section_names, idx, section_name)
+        self._confidence    = np.insert(self._confidence, idx, confidence)
+        self._quality       = np.insert(self._quality, idx, quality)
+        self._note          = np.insert(self._note, idx, note)
 
     def delete_pick(self, index: int) -> None:
-        """Delete the pick at *index*.
-
-        Raises ValueError if fewer than two picks remain (would leave < 1).
-        """
+        """Delete the pick at *index*."""
         if self.n_picks <= 1:
             raise ValueError("Cannot delete: HorizonPick must retain at least one pick")
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
-        self._distances = np.delete(self._distances, index)
-        self._depths = np.delete(self._depths, index)
-        self._section_names = np.delete(self._section_names, index)
+        for attr in ("_distances", "_depths", "_section_names",
+                     "_confidence", "_quality", "_note"):
+            setattr(self, attr, np.delete(getattr(self, attr), index))
 
     def move_pick(self, index: int, distance: float, depth: float) -> None:
         """Move the pick at *index* to (distance, depth), re-sorting as needed."""
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
-        sec = self._section_names[index]
-        self._distances = np.delete(self._distances, index)
-        self._depths = np.delete(self._depths, index)
-        self._section_names = np.delete(self._section_names, index)
+        sec  = self._section_names[index]
+        conf = self._confidence[index]
+        qual = self._quality[index]
+        note = self._note[index]
+        for attr in ("_distances", "_depths", "_section_names",
+                     "_confidence", "_quality", "_note"):
+            setattr(self, attr, np.delete(getattr(self, attr), index))
         idx = int(np.searchsorted(self._distances, distance))
-        self._distances = np.insert(self._distances, idx, distance)
-        self._depths = np.insert(self._depths, idx, depth)
+        self._distances     = np.insert(self._distances, idx, distance)
+        self._depths        = np.insert(self._depths, idx, depth)
         self._section_names = np.insert(self._section_names, idx, sec)
+        self._confidence    = np.insert(self._confidence, idx, conf)
+        self._quality       = np.insert(self._quality, idx, qual)
+        self._note          = np.insert(self._note, idx, note)
 
     # ------------------------------------------------------------------
     # Coordinate transforms
@@ -366,6 +380,9 @@ class HorizonPick:
         obj._distances     = np.array([], dtype=float)
         obj._depths        = np.array([], dtype=float)
         obj._section_names = np.array([], dtype=object)
+        obj._confidence    = np.array([], dtype=float)
+        obj._quality       = np.array([], dtype=object)
+        obj._note          = np.array([], dtype=object)
         obj.name       = name
         obj.z_units    = z_units
         obj.color      = color
