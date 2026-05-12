@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -104,66 +105,113 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         self.setWindowTitle(self.APP_NAME)
 
-        # Views
-        self._map_view = MapView(self._state, self)
+        # ── Views ─────────────────────────────────────────────────────────────
+        self._map_view     = MapView(self._state, self)
         self._section_view = SectionView(self._state, self)
-        self._viewer_3d = Viewer3D(self._state, self)
+        self._viewer_3d    = Viewer3D(self._state, self)
 
-        # Right-hand tab widget
+        # ── Section / 3D tab panel ────────────────────────────────────────────
         self._tabs = QTabWidget()
         self._tabs.addTab(self._section_view, "Section")
-        self._tabs.addTab(self._viewer_3d, "3D View")
+        self._tabs.addTab(self._viewer_3d,    "3D View")
 
-        # Map panel: view + collapse strip (always visible on right edge)
+        # ── Map panel with collapse strip ─────────────────────────────────────
         self._map_view.setMinimumWidth(0)
-        self._map_view.setMinimumHeight(300)   # Phase 4: stable minimum
+        self._map_view.setMinimumHeight(300)
         self._map_collapse_strip = _CollapseStrip(self)
         self._map_collapse_strip.clicked.connect(self._toggle_map_panel)
-        self._map_collapse_strip.setToolTip("Collapse / expand map panel  (Ctrl+2)")
+        self._map_collapse_strip.setToolTip("Collapse / expand map  (Ctrl+2)")
         self._map_panel_collapsed = False
-        self._map_panel_width     = 320
+        self._map_panel_width     = 360
 
         map_container = QWidget()
-        map_hbox = QHBoxLayout(map_container)
-        map_hbox.setContentsMargins(0, 0, 0, 0)
-        map_hbox.setSpacing(0)
-        map_hbox.addWidget(self._map_view, stretch=1)
-        map_hbox.addWidget(self._map_collapse_strip)
+        _mh = QHBoxLayout(map_container)
+        _mh.setContentsMargins(0, 0, 0, 0)
+        _mh.setSpacing(0)
+        _mh.addWidget(self._map_view, stretch=1)
+        _mh.addWidget(self._map_collapse_strip)
 
-        # Horizontal splitter (map_container | section/3D)
+        # ── Central widget: horizontal splitter (map | section/3D) ───────────
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.addWidget(map_container)
         self._splitter.addWidget(self._tabs)
-        self._splitter.setSizes([320, 960])
+        self._splitter.setSizes([360, 960])
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setHandleWidth(2)
+        self.setCentralWidget(self._splitter)
 
-        # Tool palette + splitter as the central widget
-        self._tool_palette = ToolPalette(self)
-        content = QWidget()
-        hbox = QHBoxLayout(content)
-        hbox.setContentsMargins(0, 0, 0, 0)
-        hbox.setSpacing(0)
-        hbox.addWidget(self._tool_palette)
-        hbox.addWidget(self._splitter)
+        # ── Tool palette — QToolBar docked LEFT, not movable ─────────────────
+        self._tool_palette = ToolPalette()
+        self._tool_tb = QToolBar("Tools")
+        self._tool_tb.setObjectName("ToolPaletteTB")
+        self._tool_tb.setMovable(False)
+        self._tool_tb.setFloatable(False)
+        self._tool_tb.setOrientation(Qt.Orientation.Vertical)
+        self._tool_tb.setStyleSheet(
+            "QToolBar#ToolPaletteTB { background: #f0f0f0; "
+            "border-right: 1px solid #c8c8c8; padding: 0; spacing: 0; }"
+        )
+        self._tool_tb.addWidget(self._tool_palette)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self._tool_tb)
 
-        self.setCentralWidget(content)
+        # ── Options bar — full-width QToolBar below main toolbar ──────────────
+        self._build_options_bar()
 
-        # Dockable project panel with custom dark title bar
+        # ── Project panel (RIGHT dock, top half) ──────────────────────────────
         self._project_panel = ProjectPanel(self._state, self)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_panel)
+        self._project_panel.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
+                           self._project_panel)
         self._setup_project_panel_title_bar()
 
-        # Properties panel (Phase 3) — docked below project panel
+        # ── Properties panel (RIGHT dock, bottom half) ────────────────────────
         from cross_section_tool.views.properties_panel import PropertiesPanel
         self._properties_panel = PropertiesPanel(self._state, self)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea,
+        self._properties_panel.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
                            self._properties_panel)
+        # Stack them vertically in the right dock area
+        self.splitDockWidget(self._project_panel, self._properties_panel,
+                             Qt.Orientation.Vertical)
 
-        # Status bar
+        # ── Status bar ────────────────────────────────────────────────────────
+        self.statusBar().setStyleSheet(
+            "QStatusBar { background: #f8f8f8; border-top: 1px solid #ddd; "
+            "font-size: 8pt; }"
+        )
         self._status_label = QLabel("New project")
-        self.statusBar().addWidget(self._status_label)
+        self.statusBar().addWidget(self._status_label, 1)
+        self._hint_label = QLabel("")
+        self._hint_label.setStyleSheet("color: #888; font-style: italic;")
+        self.statusBar().addPermanentWidget(self._hint_label)
+
+    def _build_options_bar(self) -> None:
+        """Phase 3 — full-width context-sensitive options bar (top QToolBar)."""
+        from cross_section_tool.views.context_toolbar import ContextToolbar
+        self._options_bar_tb = QToolBar("Options")
+        self._options_bar_tb.setObjectName("OptionsBar")
+        self._options_bar_tb.setMovable(False)
+        self._options_bar_tb.setFloatable(False)
+        self._options_bar_tb.setStyleSheet(
+            "QToolBar#OptionsBar { background: #e8e8e8; "
+            "border-bottom: 1px solid #ccc; padding: 0 4px; spacing: 4px; }"
+        )
+        self._options_bar_tb.setFixedHeight(32)
+        self._ctx = ContextToolbar(self._state)
+        self._ctx.action_requested.connect(self._on_context_toolbar_action)
+        self._ctx.action_requested.connect(
+            lambda a: self._section_view._on_context_action(a)
+            if hasattr(self._section_view, "_on_context_action") else None
+        )
+        self._options_bar_tb.addWidget(self._ctx)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._options_bar_tb)
 
     def _setup_project_panel_title_bar(self) -> None:
         """Replace the dock's default title bar with a dark custom one."""
@@ -199,7 +247,9 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         mb = self.menuBar()
 
-        # ---- File ----
+        # ================================================================
+        # File
+        # ================================================================
         file_menu = mb.addMenu("&File")
 
         self._new_action = QAction("&New Project", self)
@@ -230,105 +280,206 @@ class MainWindow(QMainWindow):
         self._import_las_action.triggered.connect(self._on_import_las)
         file_menu.addAction(self._import_las_action)
 
-        self._import_segy_action = QAction("Import Se&ismic (SEG-Y)…", self)
+        # Import submenu
+        import_menu = QMenu("&Import", self)
+        self._import_las_action = QAction("LAS Well Log…", self)
+        self._import_las_action.triggered.connect(self._on_import_las)
+        import_menu.addAction(self._import_las_action)
+        self._import_segy_action = QAction("SEG-Y Seismic…", self)
         self._import_segy_action.triggered.connect(self._on_import_segy)
-        file_menu.addAction(self._import_segy_action)
+        import_menu.addAction(self._import_segy_action)
+        file_menu.addMenu(import_menu)
 
-        file_menu.addSeparator()
-
-        self._export_img_action = QAction("Export Section &Image…", self)
+        # Export submenu
+        export_menu = QMenu("&Export", self)
+        self._export_img_action = QAction("Section Image (PNG/SVG/PDF)…", self)
         self._export_img_action.triggered.connect(self._on_export_section_image)
-        file_menu.addAction(self._export_img_action)
-
-        self._export_csv_action = QAction("Export Horizons to &CSV…", self)
+        export_menu.addAction(self._export_img_action)
+        self._export_csv_action = QAction("Horizons to CSV…", self)
         self._export_csv_action.triggered.connect(self._on_export_horizons_csv)
-        file_menu.addAction(self._export_csv_action)
+        export_menu.addAction(self._export_csv_action)
+        file_menu.addMenu(export_menu)
 
         file_menu.addSeparator()
-
         self._exit_action = QAction("E&xit", self)
         self._exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         self._exit_action.triggered.connect(self.close)
         file_menu.addAction(self._exit_action)
 
-        # ---- Section ----
-        section_menu = mb.addMenu("&Section")
+        # ================================================================
+        # Edit
+        # ================================================================
+        edit_menu = mb.addMenu("&Edit")
+        undo_a = QAction("&Undo", self)
+        undo_a.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_a.triggered.connect(self._state.undo)
+        edit_menu.addAction(undo_a)
+        redo_a = QAction("&Redo", self)
+        redo_a.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        redo_a.triggered.connect(self._state.redo)
+        edit_menu.addAction(redo_a)
+        edit_menu.addSeparator()
+        selall_a = QAction("Select &All", self)
+        selall_a.setShortcut(QKeySequence("Ctrl+A"))
+        edit_menu.addAction(selall_a)
 
-        self._new_section_action = QAction("New Section (east–west default)", self)
-        self._new_section_action.triggered.connect(self._on_new_section)
+        # ================================================================
+        # View
+        # ================================================================
+        view_menu = mb.addMenu("&View")
+        # Panel toggles
+        self._view_project_action = QAction("Project Panel", self)
+        self._view_project_action.setCheckable(True)
+        self._view_project_action.setChecked(True)
+        self._view_project_action.setShortcut(QKeySequence("Ctrl+4"))
+        self._view_project_action.toggled.connect(
+            lambda v: self._project_panel.setVisible(v))
+        view_menu.addAction(self._view_project_action)
+        self._view_props_action = QAction("Properties Panel", self)
+        self._view_props_action.setCheckable(True)
+        self._view_props_action.setChecked(True)
+        self._view_props_action.setShortcut(QKeySequence("Ctrl+5"))
+        self._view_props_action.toggled.connect(
+            lambda v: self._properties_panel.setVisible(v))
+        view_menu.addAction(self._view_props_action)
+        view_menu.addSeparator()
+        zfit_a = QAction("Zoom to &Fit", self)
+        zfit_a.setShortcut(QKeySequence("Ctrl+0"))
+        zfit_a.triggered.connect(self._zoom_to_fit)
+        view_menu.addAction(zfit_a)
+        view_menu.addSeparator()
+        self._vd_action = QAction("Variable &Density Display", self)
+        self._vd_action.triggered.connect(
+            lambda: self._section_view.set_display_mode("variable_density"))
+        view_menu.addAction(self._vd_action)
+        self._wiggle_action = QAction("&Wiggle Display", self)
+        self._wiggle_action.triggered.connect(
+            lambda: self._section_view.set_display_mode("wiggle"))
+        view_menu.addAction(self._wiggle_action)
+
+        # ================================================================
+        # Section
+        # ================================================================
+        section_menu = mb.addMenu("Se&ction")
+        self._new_section_action = QAction("New Section (draw on map)  S", self)
+        self._new_section_action.triggered.connect(
+            lambda: self._tool_palette.set_active_tool("new_section"))
         section_menu.addAction(self._new_section_action)
-
+        ew_action = QAction("New Section (east–west default)", self)
+        ew_action.triggered.connect(self._on_new_section)
+        section_menu.addAction(ew_action)
         section_menu.addSeparator()
         self._gen_polygons_action = QAction("Generate Polygons From Boundaries…", self)
         self._gen_polygons_action.triggered.connect(self._on_generate_polygons)
         section_menu.addAction(self._gen_polygons_action)
-
         section_menu.addSeparator()
         self._strat_column_action = QAction("Edit Stratigraphic Column…", self)
         self._strat_column_action.triggered.connect(self._on_edit_strat_column)
         section_menu.addAction(self._strat_column_action)
 
-        # ---- View ----
-        view_menu = mb.addMenu("&View")
-
-        self._pick_action = QAction("&Horizon Pick Mode", self)
-        self._pick_action.setCheckable(True)
-        # Shortcut now handled by tool palette (P key → horizon_pick)
-        self._pick_action.toggled.connect(self._section_view.set_picking_active)
-        view_menu.addAction(self._pick_action)
-
-        view_menu.addSeparator()
-
-        self._vd_action = QAction("Variable &Density Display", self)
-        self._vd_action.triggered.connect(
-            lambda: self._section_view.set_display_mode("variable_density")
-        )
-        view_menu.addAction(self._vd_action)
-
-        self._wiggle_action = QAction("&Wiggle Display", self)
-        self._wiggle_action.triggered.connect(
-            lambda: self._section_view.set_display_mode("wiggle")
-        )
-        view_menu.addAction(self._wiggle_action)
-
-        # ---- Reference Lines ----
-        ref_menu = mb.addMenu("&Reference")
-        self._add_hline_action = QAction("Add &Horizontal Line…", self)
+        # ================================================================
+        # Interpret
+        # ================================================================
+        interp_menu = mb.addMenu("&Interpret")
+        new_h_a = QAction("New &Horizon…", self)
+        new_h_a.triggered.connect(self._add_new_horizon)
+        interp_menu.addAction(new_h_a)
+        new_f_a = QAction("New &Fault…", self)
+        new_f_a.triggered.connect(self._add_new_fault)
+        interp_menu.addAction(new_f_a)
+        interp_menu.addSeparator()
+        ref_sub = QMenu("New &Reference Line", self)
+        self._add_hline_action = QAction("&Horizontal…", self)
         self._add_hline_action.triggered.connect(
             lambda: self._add_reference_line_kind("horizontal"))
-        ref_menu.addAction(self._add_hline_action)
-        self._add_vline_action = QAction("Add &Vertical Line…", self)
+        ref_sub.addAction(self._add_hline_action)
+        self._add_vline_action = QAction("&Vertical…", self)
         self._add_vline_action.triggered.connect(
             lambda: self._add_reference_line_kind("vertical"))
-        ref_menu.addAction(self._add_vline_action)
+        ref_sub.addAction(self._add_vline_action)
+        interp_menu.addMenu(ref_sub)
 
-        # ---- Help ----
+        # Kept for sync with pick_action toggle in tests
+        self._pick_action = QAction("&Horizon Pick Mode", self)
+        self._pick_action.setCheckable(True)
+        self._pick_action.toggled.connect(self._section_view.set_picking_active)
+        interp_menu.addSeparator()
+        interp_menu.addAction(self._pick_action)
+
+        # ================================================================
+        # Tools
+        # ================================================================
+        tools_menu = mb.addMenu("&Tools")
+        for tid, label, key in [
+            ("select",       "Select Object",      "V"),
+            ("node_edit",    "Direct Select / Nodes", "A"),
+            ("pan",          "Pan",                "H"),
+            ("zoom",         "Zoom",               "Z"),
+            ("new_section",  "Draw Section",       "S"),
+            ("horizon_pick", "Horizon Pick",       "P"),
+            ("fault_pick",   "Fault Pick",         "F"),
+            ("polygon",      "Polygon",            "G"),
+            ("measure",      "Measure",            "M"),
+        ]:
+            a = QAction(f"{label}\t{key}", self)
+            a.triggered.connect(
+                lambda _checked, t=tid: self._tool_palette.set_active_tool(t))
+            tools_menu.addAction(a)
+            if tid in ("zoom", "new_section", "polygon"):
+                tools_menu.addSeparator()
+
+        # ================================================================
+        # Help
+        # ================================================================
         help_menu = mb.addMenu("&Help")
-
-        self._about_action = QAction("&About", self)
+        self._about_action = QAction("&About Cross Section Tool…", self)
         self._about_action.triggered.connect(self._on_about)
         help_menu.addAction(self._about_action)
 
     def _build_toolbar(self) -> None:
+        """Slim icon-only main toolbar: file ops + undo/redo + export."""
         style = self.style()
-        self._new_action.setIcon(
-            style.standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        )
-        self._open_action.setIcon(
-            style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
-        )
-        self._save_action.setIcon(
-            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
-        )
+        SP = QStyle.StandardPixmap
+        self._new_action.setIcon(style.standardIcon(SP.SP_FileIcon))
+        self._open_action.setIcon(style.standardIcon(SP.SP_DirOpenIcon))
+        self._save_action.setIcon(style.standardIcon(SP.SP_DialogSaveButton))
+        self._save_as_action.setIcon(style.standardIcon(SP.SP_DialogSaveButton))
 
         tb: QToolBar = self.addToolBar("Main")
         tb.setObjectName("MainToolBar")
         tb.setMovable(False)
-        tb.setIconSize(QSize(20, 20))
+        tb.setIconSize(QSize(18, 18))
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        tb.setStyleSheet(
+            "QToolBar { background: #f8f8f8; border-bottom: 1px solid #ddd; }"
+        )
+
         tb.addAction(self._new_action)
         tb.addAction(self._open_action)
         tb.addAction(self._save_action)
+        tb.addSeparator()
+
+        # Undo / Redo
+        self._undo_tb_action = QAction("Undo", self)
+        self._undo_tb_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self._undo_tb_action.setIcon(style.standardIcon(SP.SP_ArrowBack))
+        self._undo_tb_action.setToolTip("Undo  (Ctrl+Z)")
+        self._undo_tb_action.triggered.connect(self._state.undo)
+        tb.addAction(self._undo_tb_action)
+
+        self._redo_tb_action = QAction("Redo", self)
+        self._redo_tb_action.setIcon(style.standardIcon(SP.SP_ArrowForward))
+        self._redo_tb_action.setToolTip("Redo  (Ctrl+Shift+Z)")
+        self._redo_tb_action.triggered.connect(self._state.redo)
+        tb.addAction(self._redo_tb_action)
+        tb.addSeparator()
+
+        # Export
+        self._export_tb_action = QAction("Export Image", self)
+        self._export_tb_action.setIcon(style.standardIcon(SP.SP_ArrowRight))
+        self._export_tb_action.setToolTip("Export Section Image…")
+        self._export_tb_action.triggered.connect(self._on_export_section_image)
+        tb.addAction(self._export_tb_action)
 
     def _connect_signals(self) -> None:
         s = self._state
@@ -349,9 +500,7 @@ class MainWindow(QMainWindow):
         self._section_view.pick_ended.connect(
             lambda: self._tool_palette.set_active_tool("select")
         )
-        # Context toolbar → new horizon/fault flow
-        self._section_view._context_toolbar.action_requested.connect(
-            self._on_context_toolbar_action)
+        # Options bar context toolbar already connected in _build_options_bar
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
@@ -439,14 +588,29 @@ class MainWindow(QMainWindow):
         prefix = "* " if self._state.is_modified else ""
         self.setWindowTitle(f"{prefix}{name} — {self.APP_NAME}")
 
+    _TOOL_HINTS = {
+        "select":       "Click object to select  ·  Double-click for node editing  ·  Drag to move",
+        "node_edit":    "Click node to select  ·  Drag to move  ·  Delete to remove",
+        "pan":          "Drag to pan  ·  Scroll to zoom",
+        "zoom":         "Scroll to zoom  ·  Shift+Z to fit",
+        "new_section":  "Click to place nodes  ·  Double-click or Enter to finish  ·  Escape to cancel",
+        "horizon_pick": "Click to place pick  ·  Right-click or Escape to end",
+        "fault_pick":   "Click to place pick  ·  Right-click or Escape to end",
+        "polygon":      "Click to place vertices  ·  Right-click to close",
+        "h_ref":        "Click on section to place horizontal guide",
+        "v_ref":        "Click on section to place vertical guide",
+        "a_ref":        "1st click: anchor  ·  2nd click: direction",
+        "measure":      "Click start point  ·  Click end point",
+    }
+
     def _update_status(self, *_args) -> None:
         path = self._state.project_path
         msg = os.path.basename(path) if path else "New project"
         if self._state.is_modified:
-            msg += "  [unsaved]"
+            msg += "  ✎"
         n_sec  = len(self._state.project.sections)
         n_well = len(self._state.project.wells)
-        msg += f"  |  {n_sec} section(s)  {n_well} well(s)"
+        msg += f"  |  {n_sec}S  {n_well}W"
         cat = self._state.active_pick_category
         idx = self._state.active_pick_index
         if cat is not None and idx is not None:
@@ -454,9 +618,14 @@ class MainWindow(QMainWindow):
             picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
             if idx < len(picks):
                 obj_name = picks[idx].name or f"{cat[:-1]} {idx + 1}"
-                tool_label = self._state.active_tool.replace("_", " ").title()
-                msg += f"  |  Active: {obj_name}  |  Tool: {tool_label}"
+                msg += f"  |  Active: {obj_name}"
+        tool = self._state.active_tool
+        msg += f"  |  {tool.replace('_', ' ').title()}"
         self._status_label.setText(msg)
+        # Hint in permanent label
+        hint = self._TOOL_HINTS.get(tool, "")
+        if hasattr(self, "_hint_label"):
+            self._hint_label.setText(hint)
 
     # ------------------------------------------------------------------
     # Unsaved-changes guard
@@ -1113,7 +1282,21 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(MainWindow.APP_NAME)
     app.setApplicationVersion(MainWindow.APP_VERSION)
     app.setOrganizationName("Geoscience")
-    app.setStyleSheet("QToolTip { padding: 4px; }")
+    # Global stylesheet: accent colour, panels, separators, tooltips
+    app.setStyleSheet("""
+        QToolTip       { padding: 4px; background: #fff; border: 1px solid #aaa; }
+        QMenuBar       { background: #f8f8f8; border-bottom: 1px solid #ddd; }
+        QMenu          { background: #fff; border: 1px solid #bbb; }
+        QMenu::item:selected { background: #3B82F6; color: white; }
+        QTabWidget::pane { border: 1px solid #ccc; }
+        QTabBar::tab   { padding: 4px 12px; font-size: 9pt; }
+        QTabBar::tab:selected { background: white; border-bottom: 2px solid #3B82F6; }
+        QDockWidget::title { background: #383838; color: #c8c8c8;
+                             padding: 3px 6px; font-size: 9pt; font-weight: bold; }
+        QSplitter::handle { background: #ddd; }
+        QTreeWidget    { font-size: 9pt; }
+        QStatusBar     { font-size: 8pt; }
+    """)
     # 500ms tooltip delay
     from PySide6.QtWidgets import QToolTip
     from PySide6.QtGui import QFont

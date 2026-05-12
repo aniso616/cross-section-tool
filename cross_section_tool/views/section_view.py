@@ -144,8 +144,9 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig    = Figure(figsize=(10, 6), tight_layout=True)
+        self._fig    = Figure(figsize=(10, 6), tight_layout=True, facecolor="white")
         self._ax     = self._fig.add_subplot(111)
+        self._ax.set_facecolor("white")
         self._canvas = FigureCanvasQTAgg(self._fig)
 
         # Hidden toolbar — kept for zoom stack; NOT in the layout.
@@ -207,16 +208,10 @@ class SectionView(QWidget):
         )
         hl.addWidget(self._ve_lock_btn)
 
-        # Context toolbar (Phase 4) — inserted between header and canvas
-        from cross_section_tool.views.context_toolbar import ContextToolbar
-        self._context_toolbar = ContextToolbar(self._state)
-        self._context_toolbar.action_requested.connect(self._on_context_action)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._header)
-        layout.addWidget(self._context_toolbar)
         layout.addWidget(self._canvas, stretch=1)
 
         # Matplotlib events

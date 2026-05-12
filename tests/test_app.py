@@ -154,17 +154,17 @@ class TestStatusBar:
 
     def test_status_shows_unsaved_after_change(self, win, state):
         state.add_section(Section([(0, 0), (1000, 0)]))
-        assert "unsaved" in win._status_label.text().lower()
+        assert "✎" in win._status_label.text()
 
     def test_status_section_count(self, win, state):
         state.add_section(Section([(0, 0), (1000, 0)], name="L1"))
         state.add_section(Section([(0, 0), (2000, 0)], name="L2"))
-        assert "2 section" in win._status_label.text()
+        assert "2S" in win._status_label.text()
 
     def test_status_well_count(self, win, state):
         from cross_section_tool.core.wells import Well
         state.add_well(Well("W1", 500, 0))
-        assert "1 well" in win._status_label.text()
+        assert "1W" in win._status_label.text()
 
 
 # ---------------------------------------------------------------------------
@@ -406,5 +406,5 @@ class TestIntegration:
         state.add_well(Well("W2", 1500, 0))
         assert len(state.project.sections) == 3
         assert len(state.project.wells) == 2
-        assert "3 section" in win._status_label.text()
-        assert "2 well" in win._status_label.text()
+        assert "3S" in win._status_label.text()
+        assert "2W" in win._status_label.text()

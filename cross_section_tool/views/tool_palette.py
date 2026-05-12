@@ -100,7 +100,7 @@ QPushButton:hover {{
     background: rgba(0, 0, 0, 0.12);
 }}
 QPushButton:checked {{
-    background: #1f77b4;
+    background: #3B82F6;
     color: white;
     border-radius: 5px;
 }}
