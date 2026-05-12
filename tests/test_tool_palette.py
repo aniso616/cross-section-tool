@@ -27,7 +27,7 @@ class TestConstruction:
         assert palette.isWidgetType()
 
     def test_fixed_width(self, palette):
-        assert palette.width() == 40
+        assert palette.width() == 56
 
     def test_has_all_tool_ids(self, palette):
         assert set(palette.tool_ids) == set(_TOOL_IDS)

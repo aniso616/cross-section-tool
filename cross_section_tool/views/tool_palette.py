@@ -4,7 +4,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -16,116 +15,133 @@ from PySide6.QtWidgets import (
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-# (tool_id, unicode_icon, short_label, tooltip_text)
-# None inserts a group separator; str inserts a category header label.
+# Each entry is one of:
+#   (tool_id, icon, label, tooltip)  — a tool button
+#   str                              — a category header ("Navigate" etc.)
+#   None                             — a thin separator line
 
 _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
-    "NAV",
-    ("select",       "↖", "Sel",
-     "Select (V)\nSelect and edit objects — click to select, double-click to edit nodes"),
+    "Navigate",
+    ("select",       "↖", "Select",
+     "Select  (V)\n"
+     "Click to select an object, double-click to edit its nodes.\n"
+     "Drag a selected object to move it."),
     ("pan",          "⊕", "Pan",
-     "Pan (H)\nMiddle-drag or left-drag to pan the active view"),
+     "Pan  (H)\n"
+     "Left-drag or middle-drag to pan the view."),
     ("zoom",         "⊙", "Zoom",
-     "Zoom (Z)\nScroll wheel to zoom in / out centred on cursor"),
+     "Zoom  (Z)\n"
+     "Scroll wheel zooms in/out centred on the cursor."),
     None,
-    "DRAW",
-    ("new_section",  "╱", "Sec",
-     "New Section (S)\nDraw a section trace on the map — click nodes, Enter to finish"),
-    ("edit_nodes",   "◉", "Nod",
-     "Edit Nodes (E)\nSelect, move, insert, or delete section nodes"),
+    "Draw",
+    ("new_section",  "╱", "Section",
+     "New Section  (S)\n"
+     "Draw a section trace on the map — click nodes, Enter to finish."),
+    ("edit_nodes",   "◉", "Nodes",
+     "Edit Nodes  (E)\n"
+     "Select, move, insert or delete section nodes."),
     None,
-    "PICK",
-    ("horizon_pick", "─", "Hrz",
-     "Horizon Pick (P)\nLeft-click on the section view to place horizon picks\n"
-     "Click a horizon in the panel first to select the target"),
-    ("fault_pick",   "╲", "Flt",
-     "Fault Pick (F)\nDraw a fault trace on the section view"),
-    ("polygon",      "▭", "Ply",
-     "Polygon (G)\nDraw a filled polygon on the section view — right-click to close"),
+    "Interpret",
+    ("horizon_pick", "─", "Horizon",
+     "Horizon Pick  (P)\n"
+     "Click on the section view to place horizon picks.\n"
+     "Right-click or double-click to end the pick sequence."),
+    ("fault_pick",   "╲", "Fault",
+     "Fault Pick  (F)\n"
+     "Draw a fault trace on the section view.\n"
+     "Right-click or double-click to end."),
+    ("polygon",      "▭", "Polygon",
+     "Polygon  (G)\n"
+     "Draw a filled polygon — right-click to close."),
     None,
-    "TOOL",
-    ("measure",      "↔", "Msr",
-     "Measure (M)\nMeasure distances along the section or on the map"),
+    "Tools",
+    ("measure",      "↔", "Measure",
+     "Measure  (M)\n"
+     "Measure distances along the section or on the map."),
 ]
 
-_TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS
-                         if isinstance(t, tuple)]
+_TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if isinstance(t, tuple)]
 
-_BTN_ICON_STYLE = """
-    QPushButton {{
-        background: transparent;
-        border: none;
-        border-radius: 4px;
-        color: {fg};
-        font-size: 14px;
-        padding: 0px;
-        margin: 0px;
-    }}
-    QPushButton:hover {{
-        background: rgba(0, 0, 0, 0.10);
-    }}
-    QPushButton:checked {{
-        background: #1f77b4;
-        color: white;
-        border-radius: 4px;
-    }}
+# ---------------------------------------------------------------------------
+# Styles
+# ---------------------------------------------------------------------------
+
+_BTN_STYLE = """
+QPushButton {{
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    color: {fg};
+    font-size: 20px;
+    padding: 0px;
+    margin: 0px;
+}}
+QPushButton:hover {{
+    background: rgba(0, 0, 0, 0.12);
+}}
+QPushButton:checked {{
+    background: #1f77b4;
+    color: white;
+    border-radius: 5px;
+}}
 """
 
-_CAT_STYLE = (
-    "QLabel { color: #999999; font-size: 7px; font-weight: bold; "
-    "padding: 3px 0 0 0; margin: 0; }"
-)
-_SHORT_STYLE = (
-    "QLabel { color: #666666; font-size: 7px; padding: 0; margin: 0; }"
+_CATEGORY_STYLE = (
+    "QLabel { color: #888888; font-size: 7pt; font-weight: bold; "
+    "padding: 5px 0 1px 4px; }"
 )
 
+_LABEL_STYLE = (
+    "QLabel { color: #555555; font-size: 7pt; padding: 0; margin: 0; }"
+)
+
+
+# ---------------------------------------------------------------------------
+# Tool button widget
+# ---------------------------------------------------------------------------
 
 class _ToolButton(QWidget):
-    """36×46 widget: icon button (36×30) + centred short label (×16)."""
+    """40×40 icon button + 12px short-label row = ~52px total height."""
 
     clicked = Signal()
 
-    def __init__(self, tool_id: str, icon: str, short: str,
+    def __init__(self, tool_id: str, icon: str, label: str,
                  tooltip: str, parent=None) -> None:
         super().__init__(parent)
         self.tool_id = tool_id
-        self.setFixedWidth(36)
+        self.setFixedWidth(48)
 
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(1, 0, 1, 2)
+        vbox.setContentsMargins(4, 0, 4, 2)
         vbox.setSpacing(0)
 
-        icon_font = QFont()
-        icon_font.setPointSize(13)
-
         self._btn = QPushButton(icon)
-        self._btn.setFixedSize(36, 30)
+        self._btn.setFixedSize(40, 40)
         self._btn.setCheckable(True)
         self._btn.setFlat(True)
-        self._btn.setFont(icon_font)
         self._btn.setToolTip(tooltip)
-        self._btn.setStyleSheet(_BTN_ICON_STYLE.format(fg="#444444"))
+        self._btn.setStyleSheet(_BTN_STYLE.format(fg="#222222"))
         self._btn.clicked.connect(self.clicked)
         vbox.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        lbl = QLabel(short)
+        lbl = QLabel(label)
         lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        lbl.setStyleSheet(_SHORT_STYLE)
+        lbl.setStyleSheet(_LABEL_STYLE)
         vbox.addWidget(lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-    @property
-    def is_checked(self) -> bool:
+    def isChecked(self) -> bool:
         return self._btn.isChecked()
 
     def set_checked(self, val: bool) -> None:
         self._btn.setChecked(val)
 
-    def isChecked(self) -> bool:
-        return self._btn.isChecked()
 
+# ---------------------------------------------------------------------------
+# Palette
+# ---------------------------------------------------------------------------
 
 class ToolPalette(QWidget):
-    """Vertical tool palette with grouped icons and short labels.
+    """Vertical tool palette — 40×40 icons with labels, grouped by category.
 
     Signals
     -------
@@ -146,37 +162,44 @@ class ToolPalette(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self.setFixedWidth(40)
+        self.setFixedWidth(56)
         self.setObjectName("ToolPalette")
         self.setStyleSheet(
-            "QWidget#ToolPalette { background: #efefef; "
+            "QWidget#ToolPalette { background: #f0f0f0; "
             "border-right: 1px solid #c8c8c8; }"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 4, 2, 4)
-        layout.setSpacing(0)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(1)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         for item in _TOOL_DEFS:
             if item is None:
                 sep = QFrame()
                 sep.setFrameShape(QFrame.Shape.HLine)
-                sep.setStyleSheet("color: #c8c8c8; margin: 2px 4px;")
-                sep.setFixedHeight(5)
+                sep.setStyleSheet(
+                    "QFrame { color: #d0d0d0; margin: 2px 6px; }"
+                )
+                sep.setFixedHeight(4)
                 layout.addWidget(sep)
                 continue
 
             if isinstance(item, str):
-                # Category label
                 lbl = QLabel(item)
-                lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-                lbl.setStyleSheet(_CAT_STYLE)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                lbl.setStyleSheet(_CATEGORY_STYLE)
                 layout.addWidget(lbl)
+                # thin underline
+                line = QFrame()
+                line.setFrameShape(QFrame.Shape.HLine)
+                line.setStyleSheet("QFrame { color: #d8d8d8; margin: 0 4px; }")
+                line.setFixedHeight(3)
+                layout.addWidget(line)
                 continue
 
-            tool_id, icon, short, tooltip = item
-            tbtn = _ToolButton(tool_id, icon, short, tooltip)
+            tool_id, icon, label, tooltip = item
+            tbtn = _ToolButton(tool_id, icon, label, tooltip)
             tbtn.clicked.connect(
                 lambda tid=tool_id: self._on_button_clicked(tid)
             )

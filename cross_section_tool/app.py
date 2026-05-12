@@ -318,6 +318,10 @@ class MainWindow(QMainWindow):
         s.well_removed.connect(lambda _: self._update_status())
         # horizon_pick_requested removed — section view now writes directly to AppState
         self._section_view.polygon_finished.connect(self._state.add_polygon)
+        # FIX 1: right-click / double-click during picking → return to select
+        self._section_view.pick_ended.connect(
+            lambda: self._tool_palette.set_active_tool("select")
+        )
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)

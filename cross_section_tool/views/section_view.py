@@ -66,6 +66,7 @@ class SectionView(QWidget):
 
     polygon_vertex_added = Signal(float, float)
     polygon_finished     = Signal(object)
+    pick_ended           = Signal()   # FIX 1: emitted when pick sequence ends
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
@@ -109,6 +110,12 @@ class SectionView(QWidget):
 
         # drag preview (set during motion, consumed on release)
         self._object_drag_preview = None
+
+        # FIX 2: track whether axis limits have been initialised for the
+        # current section; reset to False whenever the section changes so
+        # the first render gets default limits, subsequent renders preserve
+        # the user's zoom/pan state.
+        self._ax_limits_set: bool = False
 
         # ---- pan state ----
         self._sv_pan_anchor: tuple[float, float] | None = None
@@ -300,12 +307,20 @@ class SectionView(QWidget):
 
     def render(self, *_args) -> None:
         """Full redraw of the active section."""
+        # FIX 2: save user's zoom/pan limits before the clear wipes them
+        if self._ax_limits_set:
+            _saved_xl = self._ax.get_xlim()
+            _saved_yl = self._ax.get_ylim()
+        else:
+            _saved_xl = _saved_yl = None
+
         self._ax.clear()
         section = self._state.active_section
         if section is None:
             self._section_name_label.setText("— no section —")
             self._ve_spin.setEnabled(False)
             self._depth_units_combo.setEnabled(False)
+            self._ax_limits_set = False
             self._canvas.draw_idle()
             return
 
@@ -323,7 +338,14 @@ class SectionView(QWidget):
             self._ve_spin.setValue(section.vertical_exaggeration)
             self._ve_spin.blockSignals(False)
 
-        self._setup_axes(section)
+        self._setup_axes(section)          # sets default limits
+        # FIX 2: restore user zoom/pan if limits were already customised
+        if _saved_xl is not None:
+            self._ax.set_xlim(_saved_xl)
+            self._ax.set_ylim(_saved_yl)
+        else:
+            self._ax_limits_set = True     # default limits now active
+
         self._render_seismic(section)
         self._render_grid(section)
         self._render_section_ends(section)
@@ -812,6 +834,15 @@ class SectionView(QWidget):
     # VE spinbox
     # ------------------------------------------------------------------
 
+    def _end_pick_sequence(self) -> None:
+        """FIX 1: finish picking, return to select mode."""
+        self._picking_active = False
+        self._fault_picking  = False
+        self._cursor_data    = None
+        self._snap_point     = None
+        self.pick_ended.emit()
+        self.render()
+
     def _on_depth_units_changed(self, index: int) -> None:
         section = self._state.active_section
         if section is None:
@@ -881,9 +912,17 @@ class SectionView(QWidget):
             self._sv_pan_inv    = self._ax.transData.inverted()
             return
 
+        # ---- FIX 1: right-click ends pick sequence ----
+        if event.button == 3 and (self._picking_active or self._fault_picking):
+            self._end_pick_sequence()
+            return
+
         # ---- Picking / polygon (tool-active modes) ----
         if event.button == 1 and (self._picking_active or self._fault_picking):
+            is_dbl = getattr(event, "dblclick", False)
             self._add_pick_to_active_target(x, y)
+            if is_dbl:
+                self._end_pick_sequence()
             return
 
         if event.button == 1 and self._polygon_drawing:
@@ -1151,6 +1190,7 @@ class SectionView(QWidget):
                 self._delete_selected_object_with_confirm()
 
     def _on_active_section_changed(self, section) -> None:
+        self._ax_limits_set = False   # FIX 2: new section gets default limits
         if section is not None and self._ve_lock_btn.isChecked():
             locked_ve = self._ve_spin.value()
             if abs(getattr(section, "vertical_exaggeration", 1.0) - locked_ve) > 0.001:
