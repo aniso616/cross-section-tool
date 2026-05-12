@@ -54,6 +54,23 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
      "Polygon  (G)\n"
      "Draw a filled polygon — right-click to close."),
     None,
+    "Construct",
+    ("h_ref",        "═", "H-Ref",
+     "Horizontal Reference Line\n"
+     "Click on the section view to place a horizontal guide at that depth."),
+    ("v_ref",        "‖", "V-Ref",
+     "Vertical Reference Line\n"
+     "Click on the section view to place a vertical guide at that distance."),
+    ("a_ref",        "╱", "A-Ref",
+     "Angled Reference Line\n"
+     "Click to set anchor, click again to set direction (angle shown in status bar)."),
+    ("extend",       "→|", "Extend",
+     "Extend  —  click an endpoint, then click the target line to extend to it."),
+    ("trim",         "|←", "Trim",
+     "Trim  —  click a pick line, then the cutting line."),
+    ("parallel",     "‗", "Parallel",
+     "Parallel  —  click a source line, then place a parallel copy at click position."),
+    None,
     "Tools",
     ("measure",      "↔", "Measure",
      "Measure  (M)\n"

@@ -9,6 +9,7 @@ from typing import Any
 import h5py
 import numpy as np
 
+from cross_section_tool.core.formation import Formation, StratigraphicColumn
 from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
@@ -83,6 +84,7 @@ class Project:
         self.fault_picks: list[HorizonPick] = []
         self.polygons: list[SectionPolygon] = []
         self.reference_lines: list[ReferenceLine] = []
+        self.strat_column: StratigraphicColumn = StratigraphicColumn()
 
     # ------------------------------------------------------------------
     # Persistence
@@ -103,6 +105,7 @@ class Project:
             _save_horizon_picks_group(f, "fault_picks", self.fault_picks)
             _save_polygons(f, self.polygons)
             _save_reference_lines(f, self.reference_lines)
+            _save_strat_column(f, self.strat_column)
 
     @classmethod
     def load(cls, path: str | os.PathLike) -> "Project":
@@ -120,6 +123,7 @@ class Project:
             proj.fault_picks     = _load_horizon_picks_group(f, "fault_picks")
             proj.polygons        = _load_polygons(f)
             proj.reference_lines = _load_reference_lines(f)
+            proj.strat_column    = _load_strat_column(f)
         return proj
 
     def __repr__(self) -> str:
@@ -412,17 +416,38 @@ def _load_polygons(f: h5py.File) -> list[SectionPolygon]:
     ]
 
 
+def _save_strat_column(f: h5py.File, col: StratigraphicColumn) -> None:
+    import json
+    grp = f.create_group("strat_column")
+    grp.attrs["data"] = json.dumps(col.to_list())
+
+
+def _load_strat_column(f: h5py.File) -> StratigraphicColumn:
+    import json
+    if "strat_column" not in f:
+        return StratigraphicColumn()
+    raw = f["strat_column"].attrs.get("data", "[]")
+    try:
+        data = json.loads(raw)
+        return StratigraphicColumn.from_list(data)
+    except Exception:
+        return StratigraphicColumn()
+
+
 def _save_reference_lines(
     f: h5py.File, lines: list[ReferenceLine]
 ) -> None:
     grp = f.create_group("reference_lines")
     for i, rl in enumerate(lines):
         sg = grp.create_group(str(i))
-        sg.attrs["kind"]    = rl.kind
-        sg.attrs["value"]   = rl.value
-        sg.attrs["name"]    = rl.name
-        sg.attrs["visible"] = int(rl.visible)
-        sg.attrs["color"]   = rl.color
+        sg.attrs["kind"]      = rl.kind
+        sg.attrs["value"]     = rl.value
+        sg.attrs["name"]      = rl.name
+        sg.attrs["visible"]   = int(rl.visible)
+        sg.attrs["color"]     = rl.color
+        sg.attrs["angle_deg"] = rl.angle_deg
+        sg.attrs["anchor_x"]  = rl.anchor_x
+        sg.attrs["anchor_y"]  = rl.anchor_y
 
 
 def _load_reference_lines(f: h5py.File) -> list[ReferenceLine]:
@@ -438,6 +463,9 @@ def _load_reference_lines(f: h5py.File) -> list[ReferenceLine]:
             name=_str(sg.attrs.get("name", "")),
             visible=bool(int(sg.attrs.get("visible", 1))),
             color=_str(sg.attrs.get("color", "#999999")),
+            angle_deg=float(sg.attrs.get("angle_deg", 0.0)),
+            anchor_x=float(sg.attrs.get("anchor_x", 0.0)),
+            anchor_y=float(sg.attrs.get("anchor_y", 0.0)),
         ))
     return result
 

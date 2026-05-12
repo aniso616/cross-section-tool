@@ -37,6 +37,7 @@ class SectionPolygon:
         fill_alpha: float = 0.6,
         edge_color: str = "#555555",
         edge_width: float = 1.0,
+        formation: str = "",
     ) -> None:
         verts = np.asarray(vertices, dtype=float)
         if verts.ndim != 2 or verts.shape[1] != 2:
@@ -49,6 +50,7 @@ class SectionPolygon:
         self.fill_alpha = float(np.clip(fill_alpha, 0.0, 1.0))
         self.edge_color = edge_color
         self.edge_width = float(edge_width)
+        self.formation: str = formation   # Phase 5: reference to Formation.name
 
     # ------------------------------------------------------------------
     # Properties
@@ -61,6 +63,20 @@ class SectionPolygon:
     @property
     def n_vertices(self) -> int:
         return len(self._vertices)
+
+    @property
+    def area(self) -> float:
+        """Signed area in section-space units² (Shoelace formula).
+
+        Always returns the absolute value (positive).
+        """
+        v = self._vertices
+        n = len(v)
+        a = 0.0
+        for i in range(n):
+            j = (i + 1) % n
+            a += v[i, 0] * v[j, 1] - v[j, 0] * v[i, 1]
+        return abs(a) * 0.5
 
     # ------------------------------------------------------------------
     # Coordinate conversion

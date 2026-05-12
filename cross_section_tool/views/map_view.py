@@ -70,6 +70,9 @@ class MapView(QWidget):
         self._drag_active:   bool                   = False
         self._drag_section_copy: Section | None     = None
 
+        # ---- Phase 1: undo for node deletion ----
+        self._last_delete_for_undo: dict | None = None
+
         # ---- pan state ----
         self._pan_anchor:  tuple[float, float] | None = None  # display px
         self._pan_xlim0:   tuple[float, float] | None = None
@@ -496,6 +499,8 @@ class MapView(QWidget):
         elif event.key == "delete":
             if self._selected_node is not None and not self._drag_active:
                 self._delete_selected_node()
+        elif event.key == "ctrl+z":
+            self._undo_last_delete()
 
     # ------------------------------------------------------------------
     # Hover state
@@ -525,12 +530,47 @@ class MapView(QWidget):
         sec_idx, node_idx = self._selected_node
         section = self._state.project.sections[sec_idx]
         if section.n_nodes <= 2:
-            return  # must keep at least 2 nodes
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Cannot Delete",
+                                    "A section must keep at least 2 nodes.")
+            return
+        # Store for Ctrl+Z undo
+        self._last_delete_for_undo = {
+            "sec_idx":   sec_idx,
+            "node_idx":  node_idx,
+            "x":         float(section.nodes[node_idx, 0]),
+            "y":         float(section.nodes[node_idx, 1]),
+        }
         sec_copy = copy.deepcopy(section)
         sec_copy.delete_node(node_idx)
         self._selected_node     = None
         self._drag_section_copy = None
         self._state.update_section(sec_idx, sec_copy)
+
+    def _undo_last_delete(self) -> None:
+        """Phase 1: restore the last deleted section node."""
+        u = self._last_delete_for_undo
+        if u is None:
+            return
+        self._last_delete_for_undo = None
+        sec_idx = u["sec_idx"]
+        proj = self._state.project
+        if sec_idx >= len(proj.sections):
+            return
+        sec_copy = copy.deepcopy(proj.sections[sec_idx])
+        # Re-insert at original position
+        nodes = sec_copy.nodes
+        new_nodes = np.insert(nodes, u["node_idx"], [u["x"], u["y"]], axis=0)
+        import cross_section_tool.core.section as _sec_mod
+        restored = _sec_mod.Section(
+            new_nodes,
+            name=sec_copy.name,
+            depth_domain=sec_copy.depth_domain,
+            depth_units=sec_copy.depth_units,
+            vertical_exaggeration=sec_copy.vertical_exaggeration,
+            crs_epsg=sec_copy.crs_epsg,
+        )
+        self._state.update_section(sec_idx, restored)
 
     # ------------------------------------------------------------------
     # Slots

@@ -217,6 +217,42 @@ class Section:
     # Dunder helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Phase 5: snapshot / restore (foundation for restoration workflows)
+    # ------------------------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """Serialise the section's geometry and metadata to a plain dict.
+
+        Can be deep-copied, modified, and reloaded with :meth:`load_snapshot`
+        without touching the original section.
+
+        Returns a dictionary with keys: nodes, name, depth_domain, depth_units,
+        vertical_exaggeration, crs_epsg.
+        """
+        return {
+            "nodes":                  self._nodes.copy(),
+            "name":                   self.name,
+            "depth_domain":           self.depth_domain,
+            "depth_units":            self.depth_units,
+            "vertical_exaggeration":  self.vertical_exaggeration,
+            "crs_epsg":               self.crs_epsg,
+        }
+
+    def load_snapshot(self, snap: dict) -> None:
+        """Restore geometry and metadata from a snapshot dict in-place."""
+        import numpy as _np
+        nodes = _np.asarray(snap["nodes"], dtype=float)
+        if nodes.ndim != 2 or nodes.shape[1] != 2 or len(nodes) < 2:
+            raise ValueError("snapshot 'nodes' must be an (N≥2, 2) array")
+        self._nodes               = nodes.copy()
+        self.name                 = snap.get("name", self.name)
+        self.depth_domain         = snap.get("depth_domain", self.depth_domain)
+        self.depth_units          = snap.get("depth_units", self.depth_units)
+        self.vertical_exaggeration = float(snap.get("vertical_exaggeration",
+                                                     self.vertical_exaggeration))
+        self.crs_epsg             = int(snap.get("crs_epsg", self.crs_epsg))
+
     def __repr__(self) -> str:
         return (
             f"Section(name={self.name!r}, n_nodes={self.n_nodes}, "

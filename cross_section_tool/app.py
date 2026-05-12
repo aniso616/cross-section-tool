@@ -241,6 +241,16 @@ class MainWindow(QMainWindow):
         self._new_section_action.triggered.connect(self._on_new_section)
         section_menu.addAction(self._new_section_action)
 
+        section_menu.addSeparator()
+        self._gen_polygons_action = QAction("Generate Polygons From Boundaries…", self)
+        self._gen_polygons_action.triggered.connect(self._on_generate_polygons)
+        section_menu.addAction(self._gen_polygons_action)
+
+        section_menu.addSeparator()
+        self._strat_column_action = QAction("Edit Stratigraphic Column…", self)
+        self._strat_column_action.triggered.connect(self._on_edit_strat_column)
+        section_menu.addAction(self._strat_column_action)
+
         # ---- View ----
         view_menu = mb.addMenu("&View")
 
@@ -653,6 +663,58 @@ class MainWindow(QMainWindow):
         self._state.set_active_pick_target("Horizons", idx)
         self._tool_palette.set_active_tool("horizon_pick")
 
+    def _on_generate_polygons(self) -> None:
+        """Phase 4: detect and import closed regions as polygons."""
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "No Section",
+                                    "Activate a section first.")
+            return
+        from cross_section_tool.core.polygon_detection import detect_polygons
+        from cross_section_tool.core.polygons import SectionPolygon
+        try:
+            polys = detect_polygons(
+                self._state.project.horizon_picks,
+                self._state.project.fault_picks,
+                self._state.project.reference_lines,
+                section,
+                section_name=section.name,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Detection Error", str(exc))
+            return
+        if not polys:
+            QMessageBox.information(self, "No Polygons Found",
+                                    "No closed regions were detected.")
+            return
+        # Simple dialog: ask user to confirm import
+        reply = QMessageBox.question(
+            self, "Import Polygons",
+            f"{len(polys)} closed region(s) detected.\nImport all as polygons?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        existing = len(self._state.project.polygons)
+        import numpy as np
+        for i, shp in enumerate(polys):
+            coords = list(shp.exterior.coords)
+            if coords[0] == coords[-1]:
+                coords = coords[:-1]  # drop duplicate closing vertex
+            if len(coords) < 3:
+                continue
+            poly = SectionPolygon(
+                vertices=np.array(coords),
+                name=f"Region {existing + i + 1}",
+            )
+            self._state.add_polygon(poly)
+
+    def _on_edit_strat_column(self) -> None:
+        """Phase 5: open stratigraphic column editor (stub)."""
+        from cross_section_tool.views.strat_column_dialog import StratColumnDialog
+        dlg = StratColumnDialog(self._state, self)
+        dlg.exec()
+
     def _add_reference_line_kind(self, kind: str) -> None:
         from PySide6.QtWidgets import QInputDialog
         from cross_section_tool.core.reference_line import ReferenceLine
@@ -738,6 +800,7 @@ class MainWindow(QMainWindow):
         self._section_view.set_picking_active(tool_id == "horizon_pick")
         self._section_view.set_fault_picking(tool_id == "fault_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
+        self._section_view.set_ref_line_tool(tool_id)
         # Keep menu action in sync without triggering a re-entry loop
         self._pick_action.blockSignals(True)
         self._pick_action.setChecked(tool_id == "horizon_pick")

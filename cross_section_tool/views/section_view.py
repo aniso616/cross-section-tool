@@ -79,6 +79,12 @@ class SectionView(QWidget):
         self._picking_active:  bool = False   # horizon_pick tool
         self._fault_picking:   bool = False   # fault_pick tool
         self._polygon_drawing: bool = False
+        # Phase 2: reference-line placement tool
+        self._ref_line_tool:   str | None = None   # "h_ref"|"v_ref"|"a_ref"|None
+        # Phase 2: A-Ref two-click anchor
+        self._aref_anchor:     tuple[float, float] | None = None
+        # Phase 3: stub tools
+        self._construct_tool:  str | None = None   # "extend"|"trim"|"parallel"
 
         # ---- polygon in-progress ----
         self._polygon_vertices: list[tuple[float, float]] = []
@@ -110,6 +116,9 @@ class SectionView(QWidget):
 
         # drag preview (set during motion, consumed on release)
         self._object_drag_preview = None
+
+        # Phase 1: single-level undo for pick deletion
+        self._last_delete_for_undo: dict | None = None
 
         # FIX 2: track whether axis limits have been initialised for the
         # current section; reset to False whenever the section changes so
@@ -261,6 +270,14 @@ class SectionView(QWidget):
     def set_display_mode(self, mode: Literal["variable_density", "wiggle"]) -> None:
         self._display_mode = mode
         self.render()
+
+    def set_ref_line_tool(self, tool_id: str) -> None:
+        """Phase 2+3: activate/deactivate reference-line and construct tools."""
+        ref_tools     = {"h_ref", "v_ref", "a_ref"}
+        construct_tools = {"extend", "trim", "parallel"}
+        self._ref_line_tool  = tool_id if tool_id in ref_tools      else None
+        self._construct_tool = tool_id if tool_id in construct_tools else None
+        self._aref_anchor    = None  # reset any in-progress A-Ref
 
     def set_picking_active(self, active: bool) -> None:
         """Enable/disable horizon pick mode."""
@@ -438,7 +455,7 @@ class SectionView(QWidget):
         self._ax.plot([total, total], [ylo, yhi], **kw)
 
     def _render_reference_lines(self, section: Section) -> None:
-        """Phase 4: horizontal and vertical construction lines."""
+        """Phase 2/4: horizontal, vertical, and angled construction lines."""
         xl = self._ax.get_xlim()
         yl = self._ax.get_ylim()
         ylo, yhi = min(yl), max(yl)
@@ -446,17 +463,43 @@ class SectionView(QWidget):
         for rl in self._state.project.reference_lines:
             if not rl.visible:
                 continue
+            label = rl.name or ""
             if rl.kind == "horizontal":
                 self._ax.axhline(rl.value, **kw)
-                label = f" {rl.name or rl.value}"
-                self._ax.text(xl[1], rl.value, label, fontsize=6,
-                              color="#999", va="center", ha="right", zorder=1)
+                if label:
+                    self._ax.text(xl[1], rl.value, f" {label}", fontsize=6,
+                                  color="#999", va="center", ha="right", zorder=1)
             elif rl.kind == "vertical":
                 self._ax.axvline(rl.value, **kw)
-                label = f" {rl.name or rl.value}"
-                self._ax.text(rl.value, ylo, label, fontsize=6,
-                              color="#999", va="bottom", ha="left",
-                              rotation=90, zorder=1)
+                if label:
+                    self._ax.text(rl.value, ylo, f" {label}", fontsize=6,
+                                  color="#999", va="bottom", ha="left",
+                                  rotation=90, zorder=1)
+            elif rl.kind == "angled":
+                # Extend far beyond view in both directions, clip to axes
+                ang = math.radians(rl.angle_deg)
+                far = max(abs(xl[1] - xl[0]), abs(yhi - ylo)) * 10
+                dx  = math.cos(ang) * far
+                dy  = -math.sin(ang) * far   # depth increases downward
+                self._ax.plot(
+                    [rl.anchor_x - dx, rl.anchor_x + dx],
+                    [rl.anchor_y - dy, rl.anchor_y + dy],
+                    **kw,
+                )
+                if label:
+                    self._ax.text(rl.anchor_x, rl.anchor_y, f" {label}",
+                                  fontsize=6, color="#999", zorder=1)
+
+        # A-Ref rubber band (anchor set, cursor pending)
+        if self._ref_line_tool == "a_ref" and self._aref_anchor and self._cursor_data:
+            ax_, ay_ = self._aref_anchor
+            cx, cy   = self._cursor_data
+            dx, dy   = cx - ax_, cy - ay_
+            ang_d    = math.degrees(math.atan2(-dy, dx))
+            self._ax.plot([ax_, cx], [ay_, cy],
+                          color="#888", lw=1.0, linestyle="--", zorder=9)
+            self._ax.text(cx, cy, f"  {ang_d:.0f}°", fontsize=7,
+                          color="#555", zorder=9)
 
     def _render_snap_indicator(self) -> None:
         """Phase 5: small crosshair at the snapped cursor position."""
@@ -625,11 +668,17 @@ class SectionView(QWidget):
                           "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10)
 
     def _render_rubber_band(self, section: Section) -> None:
-        """V-shaped dashed ghost line connecting cursor to its neighbouring picks."""
+        """V-shaped dashed ghost line; shows angle-snap guide when Shift held."""
         if not (self._picking_active or self._fault_picking):
             return
         if self._cursor_data is None:
             return
+        # Phase 3: Shift → angle-snap guide
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt as _Qt
+        shift_held = bool(
+            QApplication.keyboardModifiers() & _Qt.KeyboardModifier.ShiftModifier
+        )
         cat = self._state.active_pick_category
         idx = self._state.active_pick_index
         if cat is None or idx is None:
@@ -645,6 +694,10 @@ class SectionView(QWidget):
         d, z     = hp.distances, hp.depths
         color    = hp.color
         rb_kw    = dict(linestyle="--", color=color, linewidth=1.0, alpha=0.6, zorder=8)
+        # If Shift held, override cursor with angle-snapped position
+        if shift_held:
+            cx, cy = self._apply_angle_snap(cx, cy)
+
         left     = d < cx
         right    = d > cx
         if left.any():
@@ -653,6 +706,20 @@ class SectionView(QWidget):
         if right.any():
             ri = int(np.where(right)[0][0])
             self._ax.plot([cx, d[ri]], [cy, z[ri]], **rb_kw)
+
+        # Phase 3: show angle-snap guide line
+        if shift_held:
+            _, last_d, last_z = self._get_active_pick_last_point()
+            if last_d is not None:
+                # Draw full guide line through snap direction
+                ang = math.atan2(-(cy - last_z), cx - last_d)
+                xl = self._ax.get_xlim()
+                far = abs(xl[1] - xl[0])
+                self._ax.plot(
+                    [last_d - far * math.cos(ang), last_d + far * math.cos(ang)],
+                    [last_z + far * math.sin(ang), last_z - far * math.sin(ang)],
+                    color=color, lw=0.5, linestyle=":", alpha=0.4, zorder=7,
+                )
 
     def _render_wells(self, section: Section) -> None:
         for well in self._state.project.wells:
@@ -834,6 +901,49 @@ class SectionView(QWidget):
     # VE spinbox
     # ------------------------------------------------------------------
 
+    def _apply_angle_snap(self, x: float, y: float) -> tuple[float, float]:
+        """Phase 3: constrain (x,y) to 15° increments from the last pick."""
+        _, last_d, last_z = self._get_active_pick_last_point()
+        if last_d is None:
+            return x, y
+        dx = x - last_d
+        dy = y - last_z
+        dist = math.hypot(dx, dy)
+        if dist < 1e-9:
+            return x, y
+        ang = math.degrees(math.atan2(-dy, dx))  # note: depth inverted
+        snapped = round(ang / 15.0) * 15.0
+        rad = math.radians(snapped)
+        return last_d + dist * math.cos(rad), last_z - dist * math.sin(rad)
+
+    def _place_reference_line(self, x: float, y: float) -> None:
+        """Phase 2: place a reference line at the clicked position."""
+        from cross_section_tool.core.reference_line import ReferenceLine
+        tool = self._ref_line_tool
+        if tool == "h_ref":
+            rl = ReferenceLine(kind="horizontal", value=y,
+                               name=f"H {y:.0f}")
+            self._state.add_reference_line(rl)
+        elif tool == "v_ref":
+            rl = ReferenceLine(kind="vertical", value=x,
+                               name=f"V {x:.0f}")
+            self._state.add_reference_line(rl)
+        elif tool == "a_ref":
+            if self._aref_anchor is None:
+                self._aref_anchor = (x, y)
+                # Show status hint
+                return
+            else:
+                ax_, ay_ = self._aref_anchor
+                dx = x - ax_
+                dy = y - ay_
+                angle_deg = math.degrees(math.atan2(-dy, dx))
+                rl = ReferenceLine(kind="angled", anchor_x=ax_, anchor_y=ay_,
+                                   angle_deg=angle_deg,
+                                   name=f"{angle_deg:.0f}°")
+                self._aref_anchor = None
+                self._state.add_reference_line(rl)
+
     def _end_pick_sequence(self) -> None:
         """FIX 1: finish picking, return to select mode."""
         self._picking_active = False
@@ -920,6 +1030,11 @@ class SectionView(QWidget):
         # ---- Picking / polygon (tool-active modes) ----
         if event.button == 1 and (self._picking_active or self._fault_picking):
             is_dbl = getattr(event, "dblclick", False)
+            # Phase 3: Shift → 15° angle snap from last pick
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt as _Qt
+            if QApplication.keyboardModifiers() & _Qt.KeyboardModifier.ShiftModifier:
+                x, y = self._apply_angle_snap(x, y)
             self._add_pick_to_active_target(x, y)
             if is_dbl:
                 self._end_pick_sequence()
@@ -932,6 +1047,17 @@ class SectionView(QWidget):
             return
         if event.button == 3 and self._polygon_drawing:
             self.finish_polygon()
+            return
+
+        # ---- Phase 2: reference line placement ----
+        if event.button == 1 and self._ref_line_tool:
+            self._place_reference_line(x, y)
+            return
+
+        # ---- Phase 3: construct tool stubs ----
+        if event.button == 1 and self._construct_tool:
+            from cross_section_tool.app_state import AppState as _AS
+            self._state.set_active_tool("select")
             return
 
         # ---- Phase 2: Object selection state machine ----
@@ -1117,8 +1243,10 @@ class SectionView(QWidget):
                     self.render()
                     return
 
-        # ---- Rubber band / snap ----
-        if self._picking_active or self._fault_picking or self._snap_point is not None:
+        # ---- Rubber band / snap / ref-line preview ----
+        if (self._picking_active or self._fault_picking
+                or self._snap_point is not None
+                or self._ref_line_tool == "a_ref"):
             self.render()
 
     def _on_sv_release(self, event) -> None:
@@ -1188,6 +1316,8 @@ class SectionView(QWidget):
                 "object_selected", "edit_mode"
             ):
                 self._delete_selected_object_with_confirm()
+        elif event.key == "ctrl+z":
+            self._undo_last_delete()
 
     def _on_active_section_changed(self, section) -> None:
         self._ax_limits_set = False   # FIX 2: new section gets default limits
@@ -1271,24 +1401,50 @@ class SectionView(QWidget):
         self._pick_selected = None
         self._pick_copy     = None
 
-        if cat == "Horizons":
-            picks = self._state.project.horizon_picks
-            if oi >= len(picks):
-                return
-            hp = copy.deepcopy(picks[oi])
-            if hp.n_picks <= 1:
-                return  # keep at least 1 point
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if oi >= len(picks):
+            return
+        hp = copy.deepcopy(picks[oi])
+
+        # Store for Ctrl+Z undo
+        self._last_delete_for_undo = {
+            "type": "pick", "category": cat, "obj_idx": oi,
+            "distance":     float(hp._distances[pi]),
+            "depth":        float(hp._depths[pi]),
+            "section_name": str(hp._section_names[pi]),
+        }
+
+        if hp.n_picks <= 1:
+            # Allow object to become empty (Phase 1 spec)
+            hp._distances     = np.array([], dtype=float)
+            hp._depths        = np.array([], dtype=float)
+            hp._section_names = np.array([], dtype=object)
+        else:
             hp.delete_pick(pi)
+
+        if cat == "Horizons":
             self._state.update_horizon_pick(oi, hp)
-        elif cat == "Faults":
-            picks = self._state.project.fault_picks
-            if oi >= len(picks):
-                return
-            fp = copy.deepcopy(picks[oi])
-            if fp.n_picks <= 1:
-                return
-            fp.delete_pick(pi)
-            self._state.update_fault_pick(oi, fp)
+        else:
+            self._state.update_fault_pick(oi, hp)
+
+    def _undo_last_delete(self) -> None:
+        """Phase 1: restore the last deleted pick point."""
+        u = self._last_delete_for_undo
+        if u is None:
+            return
+        self._last_delete_for_undo = None
+        cat, oi = u["category"], u["obj_idx"]
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if oi >= len(picks):
+            return
+        hp = copy.deepcopy(picks[oi])
+        hp.insert_pick(u["distance"], u["depth"], u["section_name"])
+        if cat == "Horizons":
+            self._state.update_horizon_pick(oi, hp)
+        else:
+            self._state.update_fault_pick(oi, hp)
 
 
 # ---------------------------------------------------------------------------
