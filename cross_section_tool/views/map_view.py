@@ -73,6 +73,10 @@ class MapView(QWidget):
         # ---- Phase 1: undo for node deletion ----
         self._last_delete_for_undo: dict | None = None
 
+        # ---- Phase 7: interactive section drawing ----
+        self._new_sec_nodes: list[tuple[float, float]] = []
+        self._new_sec_cursor: tuple[float, float] | None = None
+
         # ---- pan state ----
         self._pan_anchor:  tuple[float, float] | None = None  # display px
         self._pan_xlim0:   tuple[float, float] | None = None
@@ -159,8 +163,31 @@ class MapView(QWidget):
         self._render_surfaces()
         self._render_sections()
         self._render_wells()
+        self._render_new_section_preview()
         self._render_graticule()
+
+        # Sensible default extent when nothing is loaded
+        proj = self._state.project
+        if not proj.sections and not proj.wells and not proj.surfaces:
+            self._ax.set_xlim(-500, 10500)
+            self._ax.set_ylim(-500, 10500)
+
         self._canvas.draw_idle()
+
+    def _render_new_section_preview(self) -> None:
+        """Phase 7: draw the in-progress section trace."""
+        nodes = self._new_sec_nodes
+        if not nodes:
+            return
+        xs = [n[0] for n in nodes]
+        ys = [n[1] for n in nodes]
+        self._ax.plot(xs, ys, "o--", color="#ff7f0e", lw=1.5,
+                      markersize=5, zorder=8)
+        # Rubber-band to cursor
+        if self._new_sec_cursor is not None:
+            cx, cy = self._new_sec_cursor
+            self._ax.plot([xs[-1], cx], [ys[-1], cy],
+                          ":", color="#ff7f0e", lw=1.2, alpha=0.6, zorder=8)
 
     def _render_graticule(self) -> None:
         xmin, xmax = self._ax.get_xlim()
@@ -372,6 +399,21 @@ class MapView(QWidget):
             return
 
         if event.button == 1:
+            # ---- Interactive section drawing (Phase 7) ----
+            if tool == "new_section":
+                x, y = event.xdata, event.ydata
+                if x is None or y is None:
+                    return
+                is_dbl = getattr(event, "dblclick", False)
+                if is_dbl and len(self._new_sec_nodes) >= 1:
+                    # Double-click: add final node and finish
+                    self._new_sec_nodes.append((float(x), float(y)))
+                    self._finish_new_section()
+                else:
+                    self._new_sec_nodes.append((float(x), float(y)))
+                    self.render()
+                return
+
             if tool == "pan":
                 self._start_pan(event)
                 return
@@ -414,6 +456,15 @@ class MapView(QWidget):
                     self.render()
 
     def _on_canvas_motion(self, event) -> None:
+        # ---- New section rubber-band ----
+        if self._new_sec_nodes and self._state.active_tool == "new_section":
+            if event.xdata is not None and event.ydata is not None:
+                self._new_sec_cursor = (float(event.xdata), float(event.ydata))
+            else:
+                self._new_sec_cursor = None
+            self.render()
+            return
+
         # ---- Pan ----
         if self._pan_anchor is not None:
             self._continue_pan(event)
@@ -484,6 +535,11 @@ class MapView(QWidget):
 
     def _on_key_press(self, event) -> None:
         if event.key == "escape":
+            if self._new_sec_nodes:
+                self._new_sec_nodes.clear()
+                self._new_sec_cursor = None
+                self.render()
+                return
             if self._drag_active:
                 self._drag_active       = False
                 self._drag_section_copy = copy.deepcopy(
@@ -503,6 +559,9 @@ class MapView(QWidget):
             self._state.undo()
         elif event.key in ("ctrl+shift+z", "ctrl+y"):
             self._state.redo()
+        elif event.key == "enter":
+            if self._new_sec_nodes and self._state.active_tool == "new_section":
+                self._finish_new_section()
 
     # ------------------------------------------------------------------
     # Hover state
@@ -532,10 +591,7 @@ class MapView(QWidget):
         sec_idx, node_idx = self._selected_node
         section = self._state.project.sections[sec_idx]
         if section.n_nodes <= 2:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "Cannot Delete",
-                                    "A section must keep at least 2 nodes.")
-            return
+            return  # must keep at least 2 nodes
         # Store for Ctrl+Z undo
         self._last_delete_for_undo = {
             "sec_idx":   sec_idx,
@@ -575,6 +631,30 @@ class MapView(QWidget):
         self._state.update_section(sec_idx, restored)
 
     # ------------------------------------------------------------------
+    # Section drawing helpers
+    # ------------------------------------------------------------------
+
+    def _finish_new_section(self) -> None:
+        """Phase 7: commit the in-progress section trace to AppState."""
+        nodes = self._new_sec_nodes
+        self._new_sec_nodes = []
+        self._new_sec_cursor = None
+        if len(nodes) < 2:
+            self.render()
+            return
+        from cross_section_tool.core.section import Section as _Sec
+        n_existing = len(self._state.project.sections)
+        sec = _Sec(
+            nodes,
+            name=f"Section {n_existing + 1}",
+            crs_epsg=self._state.project.crs_epsg,
+        )
+        self._state.add_section(sec)
+        self._state.set_active_section(sec)
+        # Return to select tool after drawing
+        self._state.set_active_tool("select")
+
+    # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
 
@@ -591,6 +671,11 @@ class MapView(QWidget):
         self.render()
 
     def _on_tool_changed(self, tool_id: str) -> None:
+        # Cancel section drawing when switching away
+        if tool_id != "new_section" and self._new_sec_nodes:
+            self._new_sec_nodes.clear()
+            self._new_sec_cursor = None
+            self.render()
         # Clear editing state when leaving an edit tool
         if tool_id not in _EDIT_TOOLS:
             if self._drag_active:

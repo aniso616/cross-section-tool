@@ -35,8 +35,9 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
     None,
     "Draw",
     ("new_section",  "╱", "Section",
-     "New Section  (S)\n"
-     "Draw a section trace on the map — click nodes, Enter to finish."),
+     "Draw Section  (S)\n"
+     "Click nodes on the map to draw a section trace.\n"
+     "Double-click or press Enter to finish.  Escape to cancel."),
     ("edit_nodes",   "◉", "Nodes",
      "Edit Nodes  (E)\n"
      "Select, move, insert or delete section nodes."),

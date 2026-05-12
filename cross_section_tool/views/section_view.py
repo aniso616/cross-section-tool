@@ -176,7 +176,7 @@ class SectionView(QWidget):
         # VE spinbox
         hl.addWidget(QLabel("VE:"))
         self._ve_spin = QDoubleSpinBox()
-        self._ve_spin.setRange(0.1, 20.0)
+        self._ve_spin.setRange(0.5, 20.0)
         self._ve_spin.setSingleStep(0.5)
         self._ve_spin.setValue(1.0)
         self._ve_spin.setFixedWidth(60)
@@ -1233,23 +1233,27 @@ class SectionView(QWidget):
             self._state.set_active_tool("select")
             return
 
-        # ---- Phase 2: Object selection state machine ----
+        # ---- Phase 3 polish: node hit test has priority in ALL modes ----
         if event.button == 1 and tool in ("select", "edit_nodes"):
             is_dbl = getattr(event, "dblclick", False)
 
+            # Check for nearby pick node FIRST (any mode)
+            hit_node = self._find_nearest_pick_px(x, y)
+            if hit_node is not None:
+                self._pick_selected = hit_node
+                self._pick_drag     = False
+                self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
+                cat, oi, _ = hit_node
+                picks = (self._state.project.horizon_picks if cat == "Horizons"
+                         else self._state.project.fault_picks)
+                self._pick_copy = copy.deepcopy(picks[oi])
+                self._sv_mode = "edit_mode"
+                self._selected_object = (cat, oi)
+                self.render()
+                return
+
             if self._sv_mode == "edit_mode":
-                # In edit mode: click on node → select; click on line → insert; empty → exit
-                hit_node = self._find_nearest_pick_px(x, y)
-                if hit_node is not None:
-                    self._pick_selected = hit_node
-                    self._pick_drag     = False
-                    self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
-                    cat, oi, _ = hit_node
-                    picks = (self._state.project.horizon_picks if cat == "Horizons"
-                             else self._state.project.fault_picks)
-                    self._pick_copy = copy.deepcopy(picks[oi])
-                    self.render()
-                    return
+                # In edit mode but no nearby node: click on line → insert; empty → exit
                 # Click near line (not a node) → insert pick there
                 if self._selected_object is not None:
                     cat, oi = self._selected_object
@@ -1395,15 +1399,19 @@ class SectionView(QWidget):
             self.render()
             return
 
-        # ---- Hover: pick-node in edit mode ----
+        # ---- Hover: pick-node in ALL modes (Phase 3 polish) ----
         tool = self._state.active_tool
-        if tool in ("select", "edit_nodes") and self._sv_mode == "edit_mode":
+        if tool in ("select", "edit_nodes"):
             if event.xdata is not None:
                 new_hover = self._find_nearest_pick_px(
                     float(event.xdata), float(event.ydata)
                 )
                 if new_hover != self._pick_hover:
                     self._pick_hover = new_hover
+                    if new_hover is not None:
+                        self._canvas.setCursor(Qt.CursorShape.SizeAllCursor)
+                    else:
+                        self._canvas.unsetCursor()
                     self.render()
                     return
 

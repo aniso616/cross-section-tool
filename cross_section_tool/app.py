@@ -116,6 +116,7 @@ class MainWindow(QMainWindow):
 
         # Map panel: view + collapse strip (always visible on right edge)
         self._map_view.setMinimumWidth(0)
+        self._map_view.setMinimumHeight(300)   # Phase 4: stable minimum
         self._map_collapse_strip = _CollapseStrip(self)
         self._map_collapse_strip.clicked.connect(self._toggle_map_panel)
         self._map_collapse_strip.setToolTip("Collapse / expand map panel  (Ctrl+2)")
@@ -500,8 +501,22 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_new(self) -> None:
-        if self._check_unsaved_changes():
-            self._new_project()
+        if not self._check_unsaved_changes():
+            return
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, "New Project", "Project name:", text="Untitled"
+        )
+        if not ok:
+            return
+        crs, ok2 = QInputDialog.getInt(
+            self, "New Project",
+            "Coordinate Reference System (EPSG code):",
+            value=32632, min=1, max=999999,
+        )
+        if not ok2:
+            return
+        self._new_project(name=name.strip() or "Untitled", crs_epsg=crs)
 
     def _on_open(self) -> None:
         if not self._check_unsaved_changes():
@@ -938,6 +953,8 @@ class MainWindow(QMainWindow):
         self._section_view.set_fault_picking(tool_id == "fault_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
         self._section_view.set_ref_line_tool(tool_id)
+        # new_section tool: enter drawing mode on map (interactive, not auto-create)
+        # The map view handles clicks when active_tool == "new_section"
         # Keep menu action in sync without triggering a re-entry loop
         self._pick_action.blockSignals(True)
         self._pick_action.setChecked(tool_id == "horizon_pick")
