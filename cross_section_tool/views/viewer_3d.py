@@ -100,16 +100,13 @@ def build_horizon_pick_3d(
     pick: HorizonPick,
     section: Section,
 ) -> pv.PolyData | None:
-    """Return a 3D line :class:`pv.PolyData` for *pick* back-projected via *section*.
-
-    Samples 200 evenly-spaced points along the pick, converts each
-    ``(distance, depth)`` pair to ``(x, y, -depth)`` using
-    :meth:`Section.section_to_map`, and builds a polyline.
-    Returns ``None`` if the pick has no valid samples in this section.
-    """
+    """Return a 3D line for *pick* on *section*, using only that section's picks."""
+    d_sec, z_sec = pick.picks_for_section(section.name)
+    if len(d_sec) < 2:
+        return None
     total = section.total_length()
     distances = np.linspace(0.0, total, 200)
-    depths = pick.sample_many(distances)
+    depths = np.interp(distances, d_sec, z_sec, left=np.nan, right=np.nan)
     valid = ~np.isnan(depths)
     if not np.any(valid):
         return None
@@ -274,6 +271,11 @@ class Viewer3D(QWidget):
         """Phase 1: Show picks from ALL sections in the 3D view."""
         for section in self._state.project.sections:
             for pick in self._state.project.horizon_picks:
+                if pick.n_picks == 0:
+                    continue
+                # Only render if this section has picks for this horizon
+                if pick.n_picks_for_section(section.name) == 0:
+                    continue
                 self._safe_add_mesh(
                     build_horizon_pick_3d(pick, section),
                     color=pick.color,
