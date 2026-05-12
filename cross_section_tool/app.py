@@ -337,6 +337,8 @@ class MainWindow(QMainWindow):
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
         # Project panel pick-target selection → auto-switch tool
         self._project_panel.pick_target_selected.connect(self._on_pick_target_selected)
+        # Properties dialogs (Phase A/B/E)
+        self._project_panel.properties_requested.connect(self._on_panel_properties)
         # Project panel → AppState mutations
         self._project_panel.object_deleted.connect(self._on_panel_delete)
         self._project_panel.object_renamed.connect(self._on_panel_rename)
@@ -649,15 +651,16 @@ class MainWindow(QMainWindow):
             self._add_reference_line_dialog()
 
     def _add_new_horizon(self) -> None:
-        from PySide6.QtWidgets import QInputDialog, QColorDialog
-        name, ok = QInputDialog.getText(self, "New Horizon", "Horizon name:",
-                                        text=f"Horizon {len(self._state.project.horizon_picks)+1}")
-        if not ok or not name.strip():
-            return
-        color = QColorDialog.getColor(parent=self)
-        col = color.name() if color.isValid() else "#2ca02c"
+        from cross_section_tool.views.horizon_dialog import HorizonDialog
         from cross_section_tool.core.surfaces import HorizonPick
-        hp = HorizonPick.empty(name=name.strip(), color=col)
+        default_name = f"Horizon {len(self._state.project.horizon_picks) + 1}"
+        dlg = HorizonDialog(self, name=default_name)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
+            return
+        hp = HorizonPick.empty(name=dlg.name, color=dlg.color,
+                               contact_type=dlg.contact_type,
+                               formation_above=dlg.formation_above,
+                               formation_below=dlg.formation_below)
         self._state.add_horizon_pick(hp)
         idx = len(self._state.project.horizon_picks) - 1
         self._state.set_active_pick_target("Horizons", idx)
@@ -742,17 +745,59 @@ class MainWindow(QMainWindow):
         self._state.add_reference_line(rl)
 
     def _add_new_fault(self) -> None:
-        from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "New Fault", "Fault name:",
-                                        text=f"Fault {len(self._state.project.fault_picks)+1}")
-        if not ok or not name.strip():
-            return
+        from cross_section_tool.views.fault_dialog import FaultDialog
         from cross_section_tool.core.surfaces import HorizonPick
-        fp = HorizonPick.empty(name=name.strip(), color="#d62728")
+        default_name = f"Fault {len(self._state.project.fault_picks) + 1}"
+        dlg = FaultDialog(self, name=default_name)
+        if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
+            return
+        fp = HorizonPick.empty(name=dlg.name, color=dlg.color,
+                               fault_type=dlg.fault_type,
+                               dip_direction=dlg.dip_direction)
         self._state.add_fault_pick(fp)
         idx = len(self._state.project.fault_picks) - 1
         self._state.set_active_pick_target("Faults", idx)
         self._tool_palette.set_active_tool("fault_pick")
+
+    def _horizon_properties(self, index: int) -> None:
+        """Phase A: edit horizon attributes."""
+        import copy
+        from cross_section_tool.views.horizon_dialog import HorizonDialog
+        picks = self._state.project.horizon_picks
+        if index >= len(picks):
+            return
+        hp = picks[index]
+        dlg = HorizonDialog(self, name=hp.name, contact_type=hp.contact_type,
+                            color=hp.color, formation_above=hp.formation_above,
+                            formation_below=hp.formation_below)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        hp2 = copy.deepcopy(hp)
+        hp2.name            = dlg.name
+        hp2.contact_type    = dlg.contact_type
+        hp2.color           = dlg.color
+        hp2.formation_above = dlg.formation_above
+        hp2.formation_below = dlg.formation_below
+        self._state.update_horizon_pick(index, hp2)
+
+    def _fault_properties(self, index: int) -> None:
+        """Phase B: edit fault attributes."""
+        import copy
+        from cross_section_tool.views.fault_dialog import FaultDialog
+        picks = self._state.project.fault_picks
+        if index >= len(picks):
+            return
+        fp = picks[index]
+        dlg = FaultDialog(self, name=fp.name, fault_type=fp.fault_type,
+                          color=fp.color, dip_direction=fp.dip_direction)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        fp2 = copy.deepcopy(fp)
+        fp2.name          = dlg.name
+        fp2.fault_type    = dlg.fault_type
+        fp2.color         = dlg.color
+        fp2.dip_direction = dlg.dip_direction
+        self._state.update_fault_pick(index, fp2)
 
     def _toggle_map_panel(self) -> None:
         """Collapse / expand the map panel."""
@@ -785,6 +830,12 @@ class MainWindow(QMainWindow):
             self._status_label.setText(msg)
         else:
             self._update_status()
+
+    def _on_panel_properties(self, cat: str, idx: int) -> None:
+        if cat == "Horizons":
+            self._horizon_properties(idx)
+        elif cat == "Faults":
+            self._fault_properties(idx)
 
     def _on_pick_target_selected(self, cat: str, idx: int) -> None:
         """Clicking a horizon/fault in the panel also activates the matching tool."""

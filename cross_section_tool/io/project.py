@@ -180,6 +180,18 @@ def _save_horizon_picks_group(
         sg.attrs["color"]      = hp.color
         sg.attrs["line_width"] = float(getattr(hp, "line_width", 1.5))
         sg.attrs["line_style"] = str(getattr(hp, "line_style", "solid"))
+        # Phase A / B attributes
+        sg.attrs["contact_type"]      = str(getattr(hp, "contact_type", "conformable"))
+        sg.attrs["formation_above"]   = str(getattr(hp, "formation_above", ""))
+        sg.attrs["formation_below"]   = str(getattr(hp, "formation_below", ""))
+        sg.attrs["confidence"]        = float(getattr(hp, "confidence", 1.0))
+        sg.attrs["fault_type"]        = str(getattr(hp, "fault_type", "normal"))
+        sg.attrs["dip_direction"]     = str(getattr(hp, "dip_direction", "right"))
+        sg.attrs["sense_of_slip"]     = str(getattr(hp, "sense_of_slip", "dip_slip"))
+        if getattr(hp, "age_ma", None) is not None:
+            sg.attrs["age_ma"] = float(hp.age_ma)
+        if getattr(hp, "displacement", None) is not None:
+            sg.attrs["displacement"] = float(hp.displacement)
         sg.create_dataset("distances", data=hp._distances, dtype="float64")
         sg.create_dataset("depths",    data=hp._depths,    dtype="float64")
         snames = getattr(hp, "_section_names", None)
@@ -306,14 +318,29 @@ def _load_horizon_picks_group(
                              for s in raw]
         else:
             section_names = None
+        contact_type    = _str(sg.attrs.get("contact_type", "conformable"))
+        formation_above = _str(sg.attrs.get("formation_above", ""))
+        formation_below = _str(sg.attrs.get("formation_below", ""))
+        confidence      = float(sg.attrs.get("confidence", 1.0))
+        fault_type      = _str(sg.attrs.get("fault_type", "normal"))
+        dip_direction   = _str(sg.attrs.get("dip_direction", "right"))
+        sense_of_slip   = _str(sg.attrs.get("sense_of_slip", "dip_slip"))
+        age_ma          = float(sg.attrs["age_ma"]) if "age_ma" in sg.attrs else None
+        displacement    = float(sg.attrs["displacement"]) if "displacement" in sg.attrs else None
+        extra = dict(contact_type=contact_type, formation_above=formation_above,
+                     formation_below=formation_below, confidence=confidence,
+                     fault_type=fault_type, dip_direction=dip_direction,
+                     sense_of_slip=sense_of_slip, age_ma=age_ma, displacement=displacement)
         if len(distances) == 0:
             hp = HorizonPick.empty(name=name, z_units=z_units, color=color,
                                    line_width=line_width, line_style=line_style)
+            for k, v in extra.items():
+                setattr(hp, k, v)
         else:
             hp = HorizonPick(distances=distances, depths=depths, name=name,
                              z_units=z_units, color=color,
                              line_width=line_width, line_style=line_style,
-                             section_names=section_names)
+                             section_names=section_names, **extra)
         result.append(hp)
     return result
 

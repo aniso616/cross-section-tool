@@ -550,7 +550,20 @@ class SectionView(QWidget):
             return
 
         lw       = getattr(hp, "line_width", 1.5)
-        ls       = self._mpl_linestyle(getattr(hp, "line_style", default_ls))
+        ct       = getattr(hp, "contact_type", "conformable") if category == "Horizons" else None
+        ft       = getattr(hp, "fault_type", "normal")        if category == "Faults"   else None
+        # Phase A/B: contact/fault type overrides line style for non-conformable
+        decorated = (
+            (ct is not None and ct != "conformable" and ct != "marker_bed")
+            or (ft is not None and ft != "strike_slip")
+        )
+        if ct == "marker_bed":
+            ls = (0, (8, 4))        # custom dash pattern
+        elif decorated:
+            ls = "-"                # decorations handle the style
+        else:
+            ls = self._mpl_linestyle(getattr(hp, "line_style", default_ls))
+
         is_active   = self._is_active_pick(category, obj_idx)
         is_selected = (self._selected_object == (category, obj_idx))
         is_edit     = (self._sv_mode == "edit_mode" and is_selected)
@@ -564,8 +577,15 @@ class SectionView(QWidget):
                           linewidth=render_lw * 3, alpha=0.20,
                           zorder=zorder - 1, solid_capstyle="round")
 
-        self._ax.plot(d_sec, z_sec, color=hp.color,
-                      linewidth=render_lw, linestyle=ls, zorder=zorder)
+        # Only draw the main line for non-decorated types (decorated types
+        # draw their own lines in _render_line_decoration)
+        if not decorated:
+            self._ax.plot(d_sec, z_sec, color=hp.color,
+                          linewidth=render_lw, linestyle=ls, zorder=zorder)
+
+        # Phase A/B: contact-type / fault-type decorations
+        if len(d_sec) >= 2:
+            self._render_line_decoration(hp, d_sec, z_sec, category, lw)
 
         # Phase 2: nodes only in edit mode for this object
         if is_edit:
@@ -576,6 +596,69 @@ class SectionView(QWidget):
                 self._ax.plot(d, z, marker,
                               markersize=ms, markerfacecolor=fc,
                               markeredgecolor=ec, markeredgewidth=ew, zorder=5)
+
+    def _render_line_decoration(
+        self, hp, d_sec: np.ndarray, z_sec: np.ndarray,
+        category: str, base_lw: float
+    ) -> None:
+        """Phase A/B: draw decorations derived from contact_type / fault_type."""
+        ct = getattr(hp, "contact_type", "conformable") if category == "Horizons" \
+             else None
+        ft = getattr(hp, "fault_type",   "normal") if category == "Faults" \
+             else None
+
+        if ct in ("unconformity", "angular_unconformity"):
+            xw, yw = _wavy_coords(self._ax, d_sec, z_sec, 3.0, 20.0)
+            self._ax.plot(xw, yw, color=hp.color, lw=base_lw, zorder=3)
+
+        elif ct == "disconformity":
+            xw, yw = _wavy_coords(self._ax, d_sec, z_sec, 3.0, 20.0)
+            self._ax.plot(xw, yw, color=hp.color, lw=base_lw,
+                          linestyle="--", zorder=3)
+
+        elif ct == "intrusive_contact":
+            ticks = _line_ticks(self._ax, d_sec, z_sec, 30.0, 6.0, 1.0)
+            for x0, y0, x1, y1 in ticks:
+                self._ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                                  arrowprops=dict(arrowstyle="x", color=hp.color,
+                                                  lw=0.8), zorder=4)
+
+        elif ct == "sequence_boundary":
+            self._ax.plot(d_sec, z_sec, color=hp.color, lw=2.5, zorder=3)
+
+        elif ct == "maximum_flooding_surface":
+            tris = _line_triangles(self._ax, d_sec, z_sec, 40.0, 7.0, -1.0)
+            from matplotlib.patches import Polygon as MplPoly
+            for verts in tris:
+                patch = MplPoly(verts, closed=True,
+                                facecolor=hp.color, edgecolor=hp.color,
+                                lw=0.5, zorder=4)
+                self._ax.add_patch(patch)
+
+        elif ft == "reverse" or ft == "thrust":
+            lw_line = base_lw * (1.3 if ft == "thrust" else 1.0)
+            self._ax.plot(d_sec, z_sec, color=hp.color, lw=lw_line, zorder=3)
+            side = 1.0 if getattr(hp, "dip_direction", "right") == "right" else -1.0
+            tris = _line_triangles(self._ax, d_sec, z_sec, 40.0, 8.0, side)
+            from matplotlib.patches import Polygon as MplPoly
+            for verts in tris:
+                patch = MplPoly(verts, closed=True,
+                                facecolor=hp.color, edgecolor=hp.color,
+                                lw=0.5, zorder=4)
+                self._ax.add_patch(patch)
+
+        elif ft in ("normal", "growth_fault"):
+            self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw, zorder=3)
+            side = 1.0 if getattr(hp, "dip_direction", "right") == "right" else -1.0
+            ticks = _line_ticks(self._ax, d_sec, z_sec, 40.0, 8.0, side)
+            for x0, y0, x1, y1 in ticks:
+                self._ax.plot([x0, x1], [y0, y1],
+                              color=hp.color, lw=0.9, zorder=4)
+
+        elif ft == "detachment":
+            self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw * 2, zorder=3)
+
+        # else: conformable / strike_slip / marker_bed — rendered by main plot above
 
     def _render_horizons(self, section: Section) -> None:
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
@@ -647,10 +730,30 @@ class SectionView(QWidget):
             verts = poly.vertices
             if len(verts) < 3:
                 continue
+            # Resolve formation for lithology pattern (Phase D)
+            hatch = None
+            formation_name = getattr(poly, "formation", "")
+            if formation_name:
+                fm = self._state.project.strat_column.get_formation(formation_name)
+                if fm is not None and fm.lithology_pattern != "none":
+                    raw_hatch = _LITHOLOGY_HATCH.get(fm.primary_lithology)
+                    if raw_hatch:
+                        # Scale density: default pattern_scale=1.0 → hatch twice
+                        reps = max(1, round(1.0 / max(fm.pattern_scale, 0.1)))
+                        hatch = raw_hatch * reps
+
             patch = MplPolygon(verts, closed=True,
                                facecolor=poly.fill_color, alpha=poly.fill_alpha,
-                               edgecolor=poly.edge_color, linewidth=poly.edge_width, zorder=2)
+                               edgecolor=poly.edge_color, linewidth=poly.edge_width,
+                               hatch=hatch, zorder=2)
             self._ax.add_patch(patch)
+            # Hatch overlay in a separate transparent patch so hatch color = black
+            if hatch:
+                hatch_patch = MplPolygon(verts, closed=True,
+                                         facecolor="none", alpha=0.35,
+                                         edgecolor="black", linewidth=0,
+                                         hatch=hatch, zorder=2)
+                self._ax.add_patch(hatch_patch)
             if poly.name:
                 cx, cy = float(verts[:, 0].mean()), float(verts[:, 1].mean())
                 self._ax.text(cx, cy, poly.name, fontsize=6,
@@ -1450,6 +1553,148 @@ class SectionView(QWidget):
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Lithology pattern → matplotlib hatch mapping (Phase D)
+# ---------------------------------------------------------------------------
+
+_LITHOLOGY_HATCH: dict[str, str] = {
+    "sandstone":   "....",
+    "shale":       "----",
+    "siltstone":   ".-.-",
+    "limestone":   "++++",
+    "dolomite":    "xxxx",
+    "conglomerate":"oooo",
+    "coal":        "////",
+    "salt":        "****",
+    "basement":    "++++",
+    "volcanic":    "////",
+}
+
+
+# ---------------------------------------------------------------------------
+# Line-decoration helpers (Phase A / B)
+# ---------------------------------------------------------------------------
+
+def _wavy_coords(
+    ax,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    amplitude_px: float = 3.0,
+    wavelength_px: float = 20.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sinusoidal perpendicular offset of a polyline (screen-pixel units)."""
+    if len(xs) < 2:
+        return xs, ys
+    pts = np.column_stack([xs, ys])
+    try:
+        pts_px = ax.transData.transform(pts)
+    except Exception:
+        return xs, ys
+    diffs = np.diff(pts_px, axis=0)
+    arc = np.concatenate([[0.0], np.cumsum(np.hypot(diffs[:, 0], diffs[:, 1]))])
+    total = arc[-1]
+    if total < 1.0:
+        return xs, ys
+    n = max(60, int(total))
+    t = np.linspace(0.0, total, n)
+    xp = np.interp(t, arc, pts_px[:, 0])
+    yp = np.interp(t, arc, pts_px[:, 1])
+    dxt = np.gradient(xp, t)
+    dyt = np.gradient(yp, t)
+    nrm = np.hypot(dxt, dyt)
+    nrm[nrm < 1e-12] = 1.0
+    nx, ny = -dyt / nrm, dxt / nrm
+    wave = amplitude_px * np.sin(2.0 * math.pi * t / wavelength_px)
+    try:
+        wavy_data = ax.transData.inverted().transform(
+            np.column_stack([xp + nx * wave, yp + ny * wave])
+        )
+        return wavy_data[:, 0], wavy_data[:, 1]
+    except Exception:
+        return xs, ys
+
+
+def _line_ticks(
+    ax,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    spacing_px: float = 40.0,
+    length_px: float = 8.0,
+    side: float = 1.0,
+) -> list[tuple]:
+    """Return [(x0,y0,x1,y1), …] tick segments perpendicular to a polyline."""
+    if len(xs) < 2:
+        return []
+    pts_px = ax.transData.transform(np.column_stack([xs, ys]))
+    diffs = np.diff(pts_px, axis=0)
+    seg_lens = np.hypot(diffs[:, 0], diffs[:, 1])
+    arc = np.concatenate([[0.0], np.cumsum(seg_lens)])
+    total = arc[-1]
+    result = []
+    inv = ax.transData.inverted()
+    for t in np.arange(spacing_px / 2.0, total, spacing_px):
+        xi = float(np.interp(t, arc, pts_px[:, 0]))
+        yi = float(np.interp(t, arc, pts_px[:, 1]))
+        si = min(int(np.searchsorted(arc[1:], t)), len(diffs) - 1)
+        sl = float(seg_lens[si])
+        if sl < 1e-10:
+            continue
+        dx, dy = diffs[si, 0] / sl, diffs[si, 1] / sl
+        nx, ny = -dy * side, dx * side
+        try:
+            p0 = inv.transform([xi, yi])
+            p1 = inv.transform([xi + nx * length_px, yi + ny * length_px])
+            result.append((float(p0[0]), float(p0[1]), float(p1[0]), float(p1[1])))
+        except Exception:
+            pass
+    return result
+
+
+def _line_triangles(
+    ax,
+    xs: np.ndarray,
+    ys: np.ndarray,
+    spacing_px: float = 40.0,
+    size_px: float = 8.0,
+    side: float = 1.0,
+) -> list[np.ndarray]:
+    """Return list of (3,2) vertex arrays for filled triangles along a polyline."""
+    if len(xs) < 2:
+        return []
+    pts_px = ax.transData.transform(np.column_stack([xs, ys]))
+    diffs  = np.diff(pts_px, axis=0)
+    seg_lens = np.hypot(diffs[:, 0], diffs[:, 1])
+    arc  = np.concatenate([[0.0], np.cumsum(seg_lens)])
+    total = arc[-1]
+    result = []
+    inv = ax.transData.inverted()
+    for t in np.arange(spacing_px / 2.0, total, spacing_px):
+        xi = float(np.interp(t, arc, pts_px[:, 0]))
+        yi = float(np.interp(t, arc, pts_px[:, 1]))
+        si = min(int(np.searchsorted(arc[1:], t)), len(diffs) - 1)
+        sl = float(seg_lens[si])
+        if sl < 1e-10:
+            continue
+        dx, dy = diffs[si, 0] / sl, diffs[si, 1] / sl
+        nx, ny = -dy * side, dx * side
+        h = size_px
+        w = size_px * 0.6
+        # tip on the line, base on the hanging-wall side
+        tip   = [xi, yi]
+        base1 = [xi + nx * h - dx * w / 2, yi + ny * h - dy * w / 2]
+        base2 = [xi + nx * h + dx * w / 2, yi + ny * h + dy * w / 2]
+        try:
+            verts = np.array([
+                inv.transform(tip),
+                inv.transform(base1),
+                inv.transform(base2),
+            ])
+            result.append(verts)
+        except Exception:
+            pass
+    return result
+
 
 def _seg_dist(px: float, py: float,
               ax: float, ay: float,

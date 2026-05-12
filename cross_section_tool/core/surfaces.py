@@ -169,6 +169,20 @@ class HorizonPick:
         line_width: float = 1.5,
         line_style: str = "solid",
         section_names: list | np.ndarray | None = None,
+        # Phase A: horizon / contact attributes
+        contact_type: str = "conformable",
+        formation_above: str = "",
+        formation_below: str = "",
+        age_ma: float | None = None,
+        confidence: float = 1.0,
+        event_id: int | None = None,
+        # Phase B: fault attributes
+        fault_type: str = "normal",
+        dip_direction: str = "right",
+        sense_of_slip: str = "dip_slip",
+        displacement: float | None = None,
+        age_activation_ma: float | None = None,
+        age_cessation_ma: float | None = None,
     ) -> None:
         distances = np.asarray(distances, dtype=float)
         depths = np.asarray(depths, dtype=float)
@@ -193,6 +207,20 @@ class HorizonPick:
         self.color = color
         self.line_width: float = float(line_width)
         self.line_style: str = str(line_style)
+        # Phase A: horizon / contact attributes
+        self.contact_type:    str            = str(contact_type)
+        self.formation_above: str            = str(formation_above)
+        self.formation_below: str            = str(formation_below)
+        self.age_ma:          float | None   = age_ma
+        self.confidence:      float          = float(confidence)
+        self.event_id:        int | None     = event_id
+        # Phase B: fault attributes
+        self.fault_type:       str          = str(fault_type)
+        self.dip_direction:    str          = str(dip_direction)
+        self.sense_of_slip:    str          = str(sense_of_slip)
+        self.displacement:     float | None = displacement
+        self.age_activation_ma: float | None = age_activation_ma
+        self.age_cessation_ma:  float | None = age_cessation_ma
 
     # ------------------------------------------------------------------
     # Properties
@@ -312,6 +340,14 @@ class HorizonPick:
             line_width=self.line_width,
             line_style=self.line_style,
             section_names=self._section_names.tolist(),
+            contact_type=self.contact_type,
+            formation_above=self.formation_above,
+            formation_below=self.formation_below,
+            age_ma=self.age_ma,
+            confidence=self.confidence,
+            event_id=self.event_id,
+            fault_type=self.fault_type,
+            dip_direction=self.dip_direction,
         )
 
     # ------------------------------------------------------------------
@@ -335,6 +371,19 @@ class HorizonPick:
         obj.color      = color
         obj.line_width = float(line_width)
         obj.line_style = str(line_style)
+        # Phase A/B defaults
+        obj.contact_type     = "conformable"
+        obj.formation_above  = ""
+        obj.formation_below  = ""
+        obj.age_ma           = None
+        obj.confidence       = 1.0
+        obj.event_id         = None
+        obj.fault_type       = "normal"
+        obj.dip_direction    = "right"
+        obj.sense_of_slip    = "dip_slip"
+        obj.displacement     = None
+        obj.age_activation_ma = None
+        obj.age_cessation_ma  = None
         return obj
 
     # ------------------------------------------------------------------

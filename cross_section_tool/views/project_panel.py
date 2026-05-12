@@ -201,6 +201,7 @@ class ProjectPanel(QDockWidget):
         Emitted when the + button is clicked.
     """
 
+    properties_requested     = Signal(str, int)   # Phase A/B/E
     visibility_changed       = Signal(str, int, bool)
     object_color_changed     = Signal(str, int, str)
     object_line_width_changed = Signal(str, int, float)
@@ -429,6 +430,10 @@ class ProjectPanel(QDockWidget):
         cat, idx = result
 
         menu = QMenu(self)
+        props_act  = None
+        if cat in ("Horizons", "Faults"):
+            props_act = menu.addAction("Properties…")
+            menu.addSeparator()
         rename_act = menu.addAction("Rename")
         menu.addSeparator()
         up_act = menu.addAction("Move Up")
@@ -437,7 +442,9 @@ class ProjectPanel(QDockWidget):
         del_act = menu.addAction("Delete")
 
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
-        if chosen is rename_act:
+        if props_act and chosen is props_act:
+            self.properties_requested.emit(cat, idx)
+        elif chosen is rename_act:
             self._rename_item(cat, idx)
         elif chosen is del_act:
             self.object_deleted.emit(cat, idx)
