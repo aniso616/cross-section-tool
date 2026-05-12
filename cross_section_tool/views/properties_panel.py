@@ -85,6 +85,7 @@ class PropertiesPanel(QDockWidget):
         self.setWidget(scroll)
         self.setMinimumHeight(180)
 
+        self._rebuilding = False   # re-entry guard
         self._connect_signals()
         self._rebuild()
 
@@ -113,11 +114,23 @@ class PropertiesPanel(QDockWidget):
 
     def _rebuild(self, *_) -> None:
         """Clear and rebuild content based on current selection."""
-        # Clear
+        if self._rebuilding:
+            return
+        self._rebuilding = True
+        try:
+            self._do_rebuild()
+        finally:
+            self._rebuilding = False
+
+    def _do_rebuild(self) -> None:
+        # Clear — block signals on every widget before deleting to prevent
+        # focus-lost/editingFinished firing into a dead widget
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                w.blockSignals(True)   # prevent editingFinished on focus loss
+                w.deleteLater()
 
         # Selected node has highest priority
         if self._selected_node is not None:
@@ -199,7 +212,9 @@ class PropertiesPanel(QDockWidget):
         ve_spin.setRange(0.5, 20.0)
         ve_spin.setSingleStep(0.5)
         ve_spin.setDecimals(1)
+        ve_spin.blockSignals(True)
         ve_spin.setValue(sec.vertical_exaggeration)
+        ve_spin.blockSignals(False)
         ve_spin.valueChanged.connect(lambda v: self._commit_section_ve(v))
         form.addRow("VE:", ve_spin)
 
@@ -221,7 +236,7 @@ class PropertiesPanel(QDockWidget):
         for ct in CONTACT_TYPES:
             ct_combo.addItem(ct.replace("_", " ").title(), ct)
         ci = CONTACT_TYPES.index(hp.contact_type) if hp.contact_type in CONTACT_TYPES else 0
-        ct_combo.setCurrentIndex(ci)
+        ct_combo.blockSignals(True); ct_combo.setCurrentIndex(ci); ct_combo.blockSignals(False)
         ct_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ct("Horizons", idx, ct_combo.currentData()))
         form.addRow("Contact type:", ct_combo)
@@ -232,7 +247,7 @@ class PropertiesPanel(QDockWidget):
 
         lw = QDoubleSpinBox()
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
-        lw.setValue(getattr(hp, "line_width", 1.5))
+        lw.blockSignals(True); lw.setValue(getattr(hp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Horizons", idx, v))
         form.addRow("Line width:", lw)
 
@@ -268,7 +283,7 @@ class PropertiesPanel(QDockWidget):
         for ft in FAULT_TYPES:
             ft_combo.addItem(ft.replace("_", " ").title(), ft)
         fi = FAULT_TYPES.index(fp.fault_type) if fp.fault_type in FAULT_TYPES else 0
-        ft_combo.setCurrentIndex(fi)
+        ft_combo.blockSignals(True); ft_combo.setCurrentIndex(fi); ft_combo.blockSignals(False)
         ft_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ft("Faults", idx, ft_combo.currentData()))
         form.addRow("Fault type:", ft_combo)
@@ -276,7 +291,8 @@ class PropertiesPanel(QDockWidget):
         # Dip direction
         dd_combo = QComboBox()
         dd_combo.addItems(["Right (hanging wall right)", "Left (hanging wall left)"])
-        dd_combo.setCurrentIndex(0 if getattr(fp, "dip_direction", "right") == "right" else 1)
+        _di = 0 if getattr(fp, "dip_direction", "right") == "right" else 1
+        dd_combo.blockSignals(True); dd_combo.setCurrentIndex(_di); dd_combo.blockSignals(False)
         dd_combo.currentIndexChanged.connect(
             lambda i: self._commit_pick_dd("Faults", idx,
                                             "right" if i == 0 else "left"))
@@ -288,7 +304,7 @@ class PropertiesPanel(QDockWidget):
 
         lw = QDoubleSpinBox()
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
-        lw.setValue(getattr(fp, "line_width", 1.5))
+        lw.blockSignals(True); lw.setValue(getattr(fp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Faults", idx, v))
         form.addRow("Line width:", lw)
 
@@ -330,7 +346,7 @@ class PropertiesPanel(QDockWidget):
         conf = float(hp._confidence[pi]) if len(hp._confidence) > pi else 1.0
         conf_spin = QDoubleSpinBox()
         conf_spin.setRange(0, 1); conf_spin.setSingleStep(0.1); conf_spin.setDecimals(2)
-        conf_spin.setValue(conf)
+        conf_spin.blockSignals(True); conf_spin.setValue(conf); conf_spin.blockSignals(False)
         conf_spin.valueChanged.connect(
             lambda v: self._commit_node_meta(cat, oi, pi, "confidence", v))
         form.addRow("Confidence:", conf_spin)
@@ -340,7 +356,7 @@ class PropertiesPanel(QDockWidget):
         qual_combo.addItems([q.title() for q in qual_vals])
         cur_q = str(hp._quality[pi]) if len(hp._quality) > pi else "picked"
         qi = qual_vals.index(cur_q) if cur_q in qual_vals else 0
-        qual_combo.setCurrentIndex(qi)
+        qual_combo.blockSignals(True); qual_combo.setCurrentIndex(qi); qual_combo.blockSignals(False)
         qual_combo.currentIndexChanged.connect(
             lambda i: self._commit_node_meta(cat, oi, pi, "quality", qual_vals[i]))
         form.addRow("Quality:", qual_combo)

@@ -35,6 +35,7 @@ class ContextToolbar(QWidget):
         self._layout.setContentsMargins(6, 2, 6, 2)
         self._layout.setSpacing(6)
 
+        self._rebuilding = False
         self._state.tool_changed.connect(self._on_tool_changed)
         self._state.active_pick_target_changed.connect(
             lambda *_: self._on_tool_changed(self._state.active_tool))
@@ -49,6 +50,9 @@ class ContextToolbar(QWidget):
                 item.widget().deleteLater()
 
     def _on_tool_changed(self, tool_id: str) -> None:
+        if self._rebuilding:
+            return
+        self._rebuilding = True
         self._clear()
         builders = {
             "select":       self._build_select,
@@ -64,6 +68,7 @@ class ContextToolbar(QWidget):
         fn = builders.get(tool_id, self._build_default)
         fn()
         self._layout.addStretch()
+        self._rebuilding = False
 
     # ------------------------------------------------------------------
     # Per-tool content
@@ -180,7 +185,9 @@ class ContextToolbar(QWidget):
 
         cur_idx = self._state.active_pick_index
         if cur_idx is not None and 0 <= cur_idx < len(picks):
+            combo.blockSignals(True)
             combo.setCurrentIndex(cur_idx)
+            combo.blockSignals(False)
 
         def _on_change(i):
             val = combo.itemData(i)

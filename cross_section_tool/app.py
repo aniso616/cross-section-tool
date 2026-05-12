@@ -1018,7 +1018,7 @@ class MainWindow(QMainWindow):
             self._fault_properties(idx)
 
     def _ensure_pick_target(self, tool_id: str) -> None:
-        """Phase 2: auto-select a pick target if none is set."""
+        """Phase 2: auto-select a pick target if none is set (non-blocking)."""
         cat = "Horizons" if tool_id == "horizon_pick" else "Faults"
         cur_cat = self._state.active_pick_category
         cur_idx = self._state.active_pick_index
@@ -1026,17 +1026,20 @@ class MainWindow(QMainWindow):
         picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
 
         if cur_cat == cat and cur_idx is not None and cur_idx < len(picks):
-            return  # already valid target
+            return  # already valid
 
         if picks:
             # Auto-select the first available object
             self._state.set_active_pick_target(cat, 0)
         else:
-            # Create a new object
-            if cat == "Horizons":
-                self._add_new_horizon()
-            else:
-                self._add_new_fault()
+            # No objects yet — prompt via status bar, don't open a blocking dialog
+            kind = "horizon" if cat == "Horizons" else "fault"
+            self._status_label.setText(
+                f"No {kind}s yet.  Right-click '{cat}' in Project panel → "
+                f"Add {kind.title()}…  then activate this tool."
+            )
+            # Return to select so the user isn't stuck in pick mode with no target
+            self._tool_palette.set_active_tool("select")
 
     def _update_pick_status(self) -> None:
         """Phase 2: show picking target + existing pick count in status bar."""

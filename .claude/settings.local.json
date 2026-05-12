@@ -20,7 +20,8 @@
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section_view.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_map_view.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_tool_palette.py tests/test_map_view.py tests/test_app_state.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
-      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_tool_palette.py tests/test_map_view.py tests/test_section_view.py tests/test_app_state.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_tool_palette.py tests/test_map_view.py tests/test_section_view.py tests/test_app_state.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_section_view.py tests/test_map_view.py tests/test_app_state.py tests/test_project.py -q --tb=short 2>&1; Write-Host \"EXIT:$LASTEXITCODE\")"
     ]
   }
 }
