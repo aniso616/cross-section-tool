@@ -24,16 +24,18 @@ class ContextToolbar(QWidget):
         super().__init__(parent)
         self._state = state
         self.setFixedHeight(32)
+        # Minimal own stylesheet — inherits global QSS for most widgets
         self.setStyleSheet(
-            "QWidget { background: #e8e8e8; border-bottom: 1px solid #ccc; }"
-            "QLabel  { font-size: 8pt; color: #444; }"
-            "QPushButton { font-size: 8pt; padding: 2px 8px; }"
-            "QComboBox { font-size: 8pt; }"
+            "QWidget#ContextToolbar { border-bottom: 1px solid #aaa; }"
+            "QLabel { font-size: 8pt; }"
+            "QPushButton { font-size: 8pt; padding: 2px 10px; }"
+            "QComboBox { font-size: 8pt; min-width: 90px; }"
         )
+        self.setObjectName("ContextToolbar")
 
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(6, 2, 6, 2)
-        self._layout.setSpacing(6)
+        self._layout.setContentsMargins(8, 2, 8, 2)
+        self._layout.setSpacing(4)
 
         self._rebuilding = False
         self._state.tool_changed.connect(self._on_tool_changed)
@@ -42,6 +44,23 @@ class ContextToolbar(QWidget):
         self._on_tool_changed(state.active_tool)
 
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _flat_btn(label: str, tooltip: str, sig: str,
+                  target, *, danger: bool = False) -> "QPushButton":
+        """Return a compact flat-style QPushButton wired to *target*."""
+        btn = QPushButton(label)
+        btn.setFlat(True)
+        btn.setFixedHeight(22)
+        btn.setToolTip(tooltip)
+        btn.setStyleSheet(
+            "QPushButton { border: none; border-radius: 3px; padding: 2px 8px; font-size: 8pt; }"
+            "QPushButton:hover { background: rgba(59,130,246,0.18); }"
+            "QPushButton:pressed { background: rgba(59,130,246,0.35); }"
+            + ("QPushButton { color: #c44; }" if danger else "")
+        )
+        btn.clicked.connect(lambda _, s=sig: target.emit(s))
+        return btn
 
     def _clear(self) -> None:
         while self._layout.count():
@@ -80,22 +99,31 @@ class ContextToolbar(QWidget):
             + "  |  Space to pan temporarily"))
 
     def _build_select(self) -> None:
-        self._layout.addWidget(QLabel("Select Object (V)  |"))
-        for label, sig in [("Delete", "delete_object"),
-                            ("Copy", "copy_object"),
-                            ("Paste", "paste_object")]:
-            btn = QPushButton(label)
-            btn.clicked.connect(lambda _, s=sig: self.action_requested.emit(s))
-            self._layout.addWidget(btn)
+        lbl = QLabel("Select Object (V)")
+        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px;")
+        self._layout.addWidget(lbl)
+        sep = QLabel("|"); sep.setStyleSheet("color: #888;")
+        self._layout.addWidget(sep)
+        self._layout.addWidget(self._flat_btn(
+            "Delete", "Delete selected object", "delete_object",
+            self.action_requested, danger=True))
+        self._layout.addWidget(self._flat_btn(
+            "Copy",   "Copy selected object",   "copy_object",   self.action_requested))
+        self._layout.addWidget(self._flat_btn(
+            "Paste",  "Paste object",            "paste_object",  self.action_requested))
 
     def _build_node_edit(self) -> None:
-        self._layout.addWidget(QLabel("Node Edit (A)  |"))
-        for label, sig in [("Insert Node", "insert_node"),
-                            ("Delete Node", "delete_node"),
-                            ("Smooth", "smooth_picks")]:
-            btn = QPushButton(label)
-            btn.clicked.connect(lambda _, s=sig: self.action_requested.emit(s))
-            self._layout.addWidget(btn)
+        lbl = QLabel("Node Edit (A)")
+        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px;")
+        self._layout.addWidget(lbl)
+        sep = QLabel("|"); sep.setStyleSheet("color: #888;")
+        self._layout.addWidget(sep)
+        self._layout.addWidget(self._flat_btn(
+            "Insert",  "Insert node at cursor", "insert_node", self.action_requested))
+        self._layout.addWidget(self._flat_btn(
+            "Delete",  "Delete selected node",  "delete_node", self.action_requested, danger=True))
+        self._layout.addWidget(self._flat_btn(
+            "Smooth",  "Smooth picks",          "smooth_picks", self.action_requested))
 
         self._layout.addWidget(QLabel("  Snap:"))
         snap_cb = QCheckBox()
@@ -121,10 +149,9 @@ class ContextToolbar(QWidget):
             ct_combo.addItem(ct.replace("_", " ").title(), ct)
         self._layout.addWidget(ct_combo)
 
-        end_btn = QPushButton("⏹ End Pick")
-        end_btn.setStyleSheet("QPushButton { color: #c00; font-weight: bold; }")
-        end_btn.clicked.connect(lambda: self.action_requested.emit("end_pick"))
-        self._layout.addWidget(end_btn)
+        self._layout.addWidget(self._flat_btn(
+            "⏹ End Pick", "Finish picking  (Right-click or Escape)",
+            "end_pick", self.action_requested, danger=True))
 
     def _build_fault_pick(self) -> None:
         self._layout.addWidget(QLabel("Target:"))
@@ -137,19 +164,19 @@ class ContextToolbar(QWidget):
             ft_combo.addItem(ft.replace("_", " ").title(), ft)
         self._layout.addWidget(ft_combo)
 
-        end_btn = QPushButton("⏹ End Pick")
-        end_btn.setStyleSheet("QPushButton { color: #c00; font-weight: bold; }")
-        end_btn.clicked.connect(lambda: self.action_requested.emit("end_pick"))
-        self._layout.addWidget(end_btn)
+        self._layout.addWidget(self._flat_btn(
+            "⏹ End Pick", "Finish picking  (Right-click or Escape)",
+            "end_pick", self.action_requested, danger=True))
 
     def _build_polygon(self) -> None:
-        self._layout.addWidget(QLabel("Polygon  |"))
-        close_btn = QPushButton("Close Polygon")
-        close_btn.clicked.connect(lambda: self.action_requested.emit("close_polygon"))
-        self._layout.addWidget(close_btn)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.clicked.connect(lambda: self.action_requested.emit("cancel_polygon"))
-        self._layout.addWidget(cancel_btn)
+        self._layout.addWidget(QLabel("Polygon"))
+        sep = QLabel("|"); sep.setStyleSheet("color: #888;")
+        self._layout.addWidget(sep)
+        self._layout.addWidget(self._flat_btn(
+            "Close", "Close polygon", "close_polygon", self.action_requested))
+        self._layout.addWidget(self._flat_btn(
+            "Cancel", "Cancel polygon", "cancel_polygon",
+            self.action_requested, danger=True))
 
     def _build_ref_line(self) -> None:
         tool = self._state.active_tool

@@ -244,6 +244,9 @@ class ProjectPanel(QDockWidget):
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(1)
         self._tree.setIndentation(12)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setStyleSheet(
+            "QTreeWidget::item { min-height: 22px; padding: 1px 2px; }")
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemDoubleClicked.connect(self._on_double_click)

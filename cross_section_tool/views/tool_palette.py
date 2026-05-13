@@ -90,29 +90,30 @@ _BTN_STYLE = """
 QPushButton {{
     background: transparent;
     border: none;
-    border-radius: 5px;
+    border-radius: 4px;
     color: {fg};
-    font-size: 14px;
+    font-size: 15px;
     padding: 0px;
     margin: 0px;
 }}
 QPushButton:hover {{
-    background: rgba(0, 0, 0, 0.12);
+    background: rgba(59, 130, 246, 0.15);
 }}
 QPushButton:checked {{
     background: #3B82F6;
     color: white;
-    border-radius: 5px;
+    border-radius: 4px;
+    border: 1px solid #2563EB;
 }}
 """
 
 _CATEGORY_STYLE = (
-    "QLabel { color: #888888; font-size: 7pt; font-weight: bold; "
-    "padding: 5px 0 1px 4px; }"
+    "QLabel { color: #AAAAAA; font-size: 8pt; font-weight: bold; "
+    "padding: 8px 0 2px 4px; }"
 )
 
 _LABEL_STYLE = (
-    "QLabel { color: #555555; font-size: 7pt; padding: 0; margin: 0; }"
+    "QLabel { color: #999999; font-size: 7pt; padding: 0; margin: 0; }"
 )
 
 
@@ -140,7 +141,7 @@ class _ToolButton(QWidget):
         self._btn.setCheckable(True)
         self._btn.setFlat(True)
         self._btn.setToolTip(tooltip)
-        self._btn.setStyleSheet(_BTN_STYLE.format(fg="#222222"))
+        self._btn.setStyleSheet(_BTN_STYLE.format(fg="#DDDDDD"))
         self._btn.clicked.connect(self.clicked)
         vbox.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -184,34 +185,35 @@ class ToolPalette(QWidget):
         self.setFixedWidth(56)
         self.setObjectName("ToolPalette")
         self.setStyleSheet(
-            "QWidget#ToolPalette { background: #f0f0f0; "
-            "border-right: 1px solid #c8c8c8; }"
+            "QWidget#ToolPalette { background: #2D2D2D; "
+            "border-right: 1px solid #444; }"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setContentsMargins(0, 6, 0, 6)
         layout.setSpacing(1)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        first_group = True
         for item in _TOOL_DEFS:
             if item is None:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.Shape.HLine)
-                sep.setStyleSheet("QFrame { color: #d0d0d0; margin: 2px 6px; }")
-                sep.setFixedHeight(4)
-                layout.addWidget(sep)
-                continue
+                continue   # explicit separators removed; groups already spaced by labels
 
             if isinstance(item, str):
-                lbl = QLabel(item)
+                # Thin rule above every group except the first
+                if not first_group:
+                    line = QFrame()
+                    line.setFrameShape(QFrame.Shape.HLine)
+                    line.setStyleSheet(
+                        "QFrame { color: #444; margin: 0 6px; }")
+                    line.setFixedHeight(1)
+                    layout.addWidget(line)
+                first_group = False
+
+                lbl = QLabel(item.upper())
                 lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
                 lbl.setStyleSheet(_CATEGORY_STYLE)
                 layout.addWidget(lbl)
-                line = QFrame()
-                line.setFrameShape(QFrame.Shape.HLine)
-                line.setStyleSheet("QFrame { color: #d8d8d8; margin: 0 4px; }")
-                line.setFixedHeight(3)
-                layout.addWidget(line)
                 continue
 
             tool_id, icon, label, tooltip = item

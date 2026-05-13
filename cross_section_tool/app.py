@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
         self._splitter.setSizes([360, 960])
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
-        self._splitter.setHandleWidth(2)
+        self._splitter.setHandleWidth(5)
         self.setCentralWidget(self._splitter)
 
         # ── Tool palette — QToolBar docked LEFT, not movable ─────────────────
@@ -1289,20 +1289,78 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(MainWindow.APP_NAME)
     app.setApplicationVersion(MainWindow.APP_VERSION)
     app.setOrganizationName("Geoscience")
-    # Global stylesheet: accent colour, panels, separators, tooltips
-    app.setStyleSheet("""
-        QToolTip       { padding: 4px; background: #fff; border: 1px solid #aaa; }
-        QMenuBar       { background: #f8f8f8; border-bottom: 1px solid #ddd; }
-        QMenu          { background: #fff; border: 1px solid #bbb; }
-        QMenu::item:selected { background: #3B82F6; color: white; }
-        QTabWidget::pane { border: 1px solid #ccc; }
-        QTabBar::tab   { padding: 4px 12px; font-size: 9pt; }
-        QTabBar::tab:selected { background: white; border-bottom: 2px solid #3B82F6; }
-        QDockWidget::title { background: #383838; color: #c8c8c8;
-                             padding: 3px 6px; font-size: 9pt; font-weight: bold; }
-        QSplitter::handle { background: #ddd; }
-        QTreeWidget    { font-size: 9pt; }
-        QStatusBar     { font-size: 8pt; }
+    # Detect dark / light system theme
+    _lum = app.palette().window().color().lightness()
+    _dark = _lum < 128
+    if _dark:
+        _bg      = "#2B2B2B"
+        _bg2     = "#333333"
+        _bg3     = "#3C3C3C"
+        _border  = "#555555"
+        _text    = "#E0E0E0"
+        _dim     = "#999999"
+        _menu_bg = "#2D2D2D"
+        _tab_sel = "#3C3C3C"
+        _handle  = "#4A4A4A"
+    else:
+        _bg      = "#F5F5F5"
+        _bg2     = "#EBEBEB"
+        _bg3     = "#E0E0E0"
+        _border  = "#C8C8C8"
+        _text    = "#1A1A1A"
+        _dim     = "#888888"
+        _menu_bg = "#FFFFFF"
+        _tab_sel = "#FFFFFF"
+        _handle  = "#CCCCCC"
+    app.setStyleSheet(f"""
+        QMainWindow                     {{ background: {_bg}; }}
+        QWidget                         {{ font-size: 9pt; color: {_text}; }}
+        QToolTip                        {{ padding: 4px 6px; background: {_menu_bg};
+                                          color: {_text}; border: 1px solid {_border};
+                                          font-size: 8pt; }}
+        QMenuBar                        {{ background: {_bg2}; border-bottom: 1px solid {_border}; font-size: 9pt; }}
+        QMenuBar::item:selected         {{ background: #3B82F6; color: white; }}
+        QMenu                           {{ background: {_menu_bg}; border: 1px solid {_border}; font-size: 9pt; }}
+        QMenu::item:selected            {{ background: #3B82F6; color: white; }}
+        QTabWidget::pane                {{ border: 1px solid {_border}; margin: 0; }}
+        QTabBar::tab                    {{ padding: 5px 14px; font-size: 9pt; background: {_bg2};
+                                          border: 1px solid {_border}; border-bottom: none;
+                                          min-width: 60px; }}
+        QTabBar::tab:selected           {{ background: {_tab_sel}; border-bottom: 2px solid #3B82F6; }}
+        QDockWidget::title              {{ background: #383838; color: #c8c8c8;
+                                          padding: 4px 6px; font-size: 9pt; font-weight: bold; }}
+        QSplitter::handle               {{ background: {_handle}; }}
+        QSplitter::handle:horizontal    {{ width: 5px; }}
+        QTreeWidget                     {{ font-size: 9pt; border: none; background: {_bg}; }}
+        QTreeWidget::item               {{ min-height: 22px; padding: 1px 2px; }}
+        QTreeWidget::item:selected      {{ background: #3B82F6; color: white; }}
+        QStatusBar                      {{ font-size: 8pt; background: {_bg2}; border-top: 1px solid {_border}; }}
+        QScrollBar:vertical             {{ width: 10px; background: {_bg}; }}
+        QScrollBar::handle:vertical     {{ background: {_border}; border-radius: 4px; min-height: 20px; }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical   {{ height: 0; }}
+        QSpinBox, QDoubleSpinBox        {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
+                                          background: {_bg2}; border: 1px solid {_border};
+                                          border-radius: 3px; }}
+        QComboBox                       {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
+                                          background: {_bg2}; border: 1px solid {_border};
+                                          border-radius: 3px; }}
+        QComboBox::drop-down            {{ width: 16px; }}
+        QLineEdit                       {{ font-size: 9pt; padding: 2px 4px;
+                                          background: {_bg2}; border: 1px solid {_border};
+                                          border-radius: 3px; }}
+        QPushButton                     {{ font-size: 8pt; padding: 3px 8px;
+                                          background: {_bg3}; border: 1px solid {_border};
+                                          border-radius: 3px; }}
+        QPushButton:hover               {{ background: #4A90D9; color: white; border-color: #3B82F6; }}
+        QPushButton:pressed             {{ background: #3B82F6; color: white; }}
+        QLabel                          {{ font-size: 9pt; background: transparent; }}
+        QCheckBox                       {{ font-size: 9pt; spacing: 5px; }}
+        QGroupBox                       {{ font-size: 9pt; font-weight: bold;
+                                          border: 1px solid {_border}; border-radius: 4px;
+                                          margin-top: 8px; padding-top: 4px; }}
+        QGroupBox::title                {{ subcontrol-origin: margin; left: 8px;
+                                          padding: 0 3px; }}
     """)
     # 500ms tooltip delay
     from PySide6.QtWidgets import QToolTip

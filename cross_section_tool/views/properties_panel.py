@@ -24,16 +24,33 @@ def _sep_label(text: str) -> QLabel:
     lbl = QLabel(text)
     font = QFont()
     font.setBold(True)
-    font.setPointSize(8)
+    font.setPointSize(10)
     lbl.setFont(font)
-    lbl.setStyleSheet("color: #555; margin-top: 6px;")
+    lbl.setStyleSheet(
+        "margin-top: 12px; margin-bottom: 2px; "
+        "border-bottom: 1px solid #555; padding-bottom: 3px;"
+    )
     return lbl
 
 
 def _val_label(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet("color: #222;")
+    if not text or not str(text).strip():
+        lbl = QLabel("—")
+        lbl.setStyleSheet("color: #999; font-style: italic;")
+    else:
+        lbl = QLabel(str(text))
     return lbl
+
+
+def _form() -> QFormLayout:
+    """Standard QFormLayout with consistent spacing."""
+    f = QFormLayout()
+    f.setVerticalSpacing(8)
+    f.setHorizontalSpacing(10)
+    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    f.setContentsMargins(0, 4, 0, 4)
+    return f
 
 
 def _swatch(color: str) -> QLabel:
@@ -79,11 +96,12 @@ class PropertiesPanel(QDockWidget):
         self._inner = QWidget()
         self._layout = QVBoxLayout(self._inner)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._layout.setSpacing(2)
-        self._layout.setContentsMargins(6, 4, 6, 4)
+        self._layout.setSpacing(0)
+        self._layout.setContentsMargins(8, 6, 8, 8)
         scroll.setWidget(self._inner)
         self.setWidget(scroll)
         self.setMinimumHeight(180)
+        self.setMinimumWidth(220)
 
         self._rebuilding = False   # re-entry guard
         self._connect_signals()
@@ -172,7 +190,7 @@ class PropertiesPanel(QDockWidget):
     def _build_default(self) -> None:
         proj = self._state.project
         self._layout.addWidget(_sep_label("Project"))
-        form = QFormLayout()
+        form = _form()
         form.addRow("Name:",      _val_label(proj.name or "Untitled"))
         form.addRow("CRS:",       _val_label(f"EPSG:{proj.crs_epsg}"))
         form.addRow("Sections:",  _val_label(str(len(proj.sections))))
@@ -184,8 +202,7 @@ class PropertiesPanel(QDockWidget):
 
     def _build_section(self, sec) -> None:
         self._layout.addWidget(_sep_label("Section"))
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form = _form()
 
         # Editable name
         name_ed = QLineEdit(sec.name)
@@ -223,8 +240,7 @@ class PropertiesPanel(QDockWidget):
 
     def _build_horizon(self, idx: int, hp) -> None:
         self._layout.addWidget(_sep_label("Horizon"))
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form = _form()
 
         name_ed = QLineEdit(hp.name)
         name_ed.editingFinished.connect(
@@ -270,8 +286,7 @@ class PropertiesPanel(QDockWidget):
 
     def _build_fault(self, idx: int, fp) -> None:
         self._layout.addWidget(_sep_label("Fault"))
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form = _form()
 
         name_ed = QLineEdit(fp.name)
         name_ed.editingFinished.connect(
@@ -317,8 +332,7 @@ class PropertiesPanel(QDockWidget):
 
     def _build_node(self, cat: str, oi: int, pi: int, hp) -> None:
         self._layout.addWidget(_sep_label(f"Node on: {hp.name or cat[:-1]}"))
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form = _form()
 
         d  = float(hp._distances[pi])
         z  = float(hp._depths[pi])

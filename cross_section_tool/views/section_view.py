@@ -144,7 +144,7 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig    = Figure(figsize=(10, 6), tight_layout=True, facecolor="white")
+        self._fig    = Figure(figsize=(10, 6), facecolor="white")
         self._ax     = self._fig.add_subplot(111)
         self._ax.set_facecolor("white")
         self._canvas = FigureCanvasQTAgg(self._fig)
@@ -283,7 +283,7 @@ class SectionView(QWidget):
         PNG/SVG/PDF without affecting the on-screen display.
         """
         from matplotlib.figure import Figure as _Figure
-        fig = _Figure(figsize=(width_inches, height_inches), tight_layout=True)
+        fig = _Figure(figsize=(width_inches, height_inches))
         ax  = fig.add_subplot(111)
         section = self._state.active_section
         if section is None:
@@ -462,6 +462,7 @@ class SectionView(QWidget):
         self._ax.set_xlabel(xlabel, fontsize=8)
         self._ax.set_ylabel(ylabel, fontsize=8)
         self._ax.tick_params(labelsize=7)
+        self._fig.subplots_adjust(left=0.10, right=0.97, top=0.97, bottom=0.09)
 
     def _compute_max_depth(self, section: Section) -> float:
         """Best estimate of maximum depth from loaded data."""
