@@ -26,7 +26,9 @@
       "PowerShell(python -m cross_section_tool.app)",
       "PowerShell(python -c \"import shapely; print\\(shapely.__version__\\)\")",
       "PowerShell(Out-File *)",
-      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; git diff main..worktree-agent-a520075bfcb30c095 -- cross_section_tool/views/section_view.py 2>&1 | Select-String \"^[-+]\\(?![-+][-+]\\)\" | Select-Object -First 100 | ForEach-Object { $_.Line })"
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; git diff main..worktree-agent-a520075bfcb30c095 -- cross_section_tool/views/section_view.py 2>&1 | Select-String \"^[-+]\\(?![-+][-+]\\)\" | Select-Object -First 100 | ForEach-Object { $_.Line })",
+      "PowerShell(Tee-Object *)",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short; echo \"EXIT:$LASTEXITCODE\")"
     ]
   }
 }

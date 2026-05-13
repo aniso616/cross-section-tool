@@ -351,6 +351,10 @@ class MainWindow(QMainWindow):
         self._import_img_action = QAction("Section Image…", self)
         self._import_img_action.triggered.connect(self._on_import_section_image)
         import_menu.addAction(self._import_img_action)
+        import_menu.addSeparator()
+        self._import_topo_action = QAction("Topography Profile (CSV)…", self)
+        self._import_topo_action.triggered.connect(self._on_import_topography)
+        import_menu.addAction(self._import_topo_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -428,6 +432,12 @@ class MainWindow(QMainWindow):
         self._strat_col_action.toggled.connect(
             lambda v: self._section_view.set_strat_column_visible(v))
         view_menu.addAction(self._strat_col_action)
+        self._sea_level_action = QAction("Show &Sea Level", self)
+        self._sea_level_action.setCheckable(True)
+        self._sea_level_action.setChecked(True)
+        self._sea_level_action.toggled.connect(
+            lambda v: self._section_view.set_sea_level_visible(v))
+        view_menu.addAction(self._sea_level_action)
         view_menu.addSeparator()
         self._fps_action = QAction("Show &FPS", self)
         self._fps_action.setCheckable(True)
@@ -934,6 +944,45 @@ class MainWindow(QMainWindow):
             dist_range=(d_start.value(), d_end.value()),
             depth_range=(z_top.value(), z_bot.value()),
         )
+
+    def _on_import_topography(self) -> None:
+        """Import topography profile from CSV (distance, elevation columns)."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Topography Profile", "",
+            "CSV Files (*.csv *.txt);;All Files (*)"
+        )
+        if not path:
+            return
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "No Active Section",
+                                    "Activate a section before importing topography.")
+            return
+        try:
+            import csv
+            import numpy as np
+            distances, elevations = [], []
+            with open(path, newline="", encoding="utf-8-sig") as fh:
+                reader = csv.reader(fh)
+                header = next(reader, None)
+                for row in reader:
+                    if len(row) >= 2:
+                        try:
+                            distances.append(float(row[0]))
+                            elevations.append(float(row[1]))
+                        except ValueError:
+                            continue
+            if len(distances) < 2:
+                raise ValueError("Need at least 2 data rows.")
+            self._section_view.set_topography(
+                section_name=section.name,
+                distances=np.array(distances),
+                elevations=np.array(elevations),
+            )
+            QMessageBox.information(self, "Import OK",
+                                    f"Topography loaded: {len(distances)} points.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", str(exc))
 
     def _on_import_well_tops(self) -> None:
         """Import well tops from a CSV file."""

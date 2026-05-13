@@ -44,6 +44,13 @@ _DEFAULT_DEPTH    = 5000.0
 
 _DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s", "m+ft"]
 
+# Tools where snap-to-pick-point/intersection is active
+_SNAP_TOOLS = frozenset({
+    "horizon_pick", "fault_pick", "polygon",
+    "extend", "trim", "parallel",
+    "node_edit",
+})
+
 # Seismic colormap name mapping: SeismicDisplaySettings.colormap → matplotlib
 _SEGY_CMAP = {
     "seismic_red_blue": "seismic",
@@ -108,6 +115,10 @@ class SectionView(QWidget):
         # ---- FPS tracking ----
         self._show_fps: bool = False
         self._strat_col_visible: bool = True
+        # ---- display toggles ----
+        self._show_sea_level: bool = True
+        # ---- topography per section: {section_name: (distances, elevations)} ----
+        self._topography: dict[str, tuple] = {}
 
         # ---- active tool flags (set by MainWindow._on_tool_changed) ----
         self._picking_active:  bool = False   # horizon_pick tool
@@ -513,6 +524,16 @@ class SectionView(QWidget):
         self._strat_ax.set_visible(visible)
         self.render()
 
+    def set_sea_level_visible(self, visible: bool) -> None:
+        self._show_sea_level = visible
+        self.render()
+
+    def set_topography(self, section_name: str,
+                       distances: "np.ndarray", elevations: "np.ndarray") -> None:
+        """Register a topography profile for *section_name* and redraw."""
+        self._topography[section_name] = (distances, elevations)
+        self.render()
+
     def set_fps_display(self, enabled: bool) -> None:
         self._show_fps = enabled
         if not enabled:
@@ -591,6 +612,8 @@ class SectionView(QWidget):
         self._render_image_overlays(section)  # zorder=0
         self._render_seismic(section)         # zorder=1
         self._render_grid(section)            # zorder=2
+        self._render_topography(section)      # zorder=2.2–2.3
+        self._render_sea_level(section)       # zorder=2.5
         self._render_section_ends(section)    # zorder=2
         self._render_reference_lines(section) # zorder=3
         self._render_polygons(section)        # zorder=4 (fills) + 5 (labels)
@@ -688,6 +711,46 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
     # Grid
     # ------------------------------------------------------------------
+
+    def _render_sea_level(self, section: Section) -> None:
+        """Render a sea level reference line at depth=0."""
+        if not self._show_sea_level:
+            return
+        yl = self._ax.get_ylim()
+        if min(yl) <= 0.0 <= max(yl):
+            self._ax.axhline(0.0, color="#4682B4", linewidth=1.5,
+                             linestyle="-", zorder=2.5, alpha=0.85)
+            xl = self._ax.get_xlim()
+            self._ax.text(xl[1], 0.0, "  Sea Level", fontsize=7,
+                          color="#4682B4", va="bottom", ha="right",
+                          zorder=2.5, alpha=0.85)
+
+    def _render_topography(self, section: Section) -> None:
+        """Render a topography profile if one has been loaded for this section."""
+        topo_data = self._topography.get(section.name)
+        if topo_data is None:
+            return
+        dists, elevs = topo_data
+        if len(dists) < 2:
+            return
+        # Sort by distance
+        order = np.argsort(dists)
+        dists, elevs = dists[order], elevs[order]
+
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        y_top = min(yl)  # depth axis is inverted (0 at top)
+
+        # Fill sky above the topography line (from y_top to elevation)
+        self._ax.fill_between(dists, y_top, elevs,
+                              color="#87CEEB", alpha=0.30, zorder=2.2,
+                              interpolate=True)
+        # Topography surface line (bold black)
+        self._ax.plot(dists, elevs, color="#222222", linewidth=2.0,
+                      zorder=2.3, solid_capstyle="round")
+        # Label at rightmost point
+        self._ax.text(float(dists[-1]), float(elevs[-1]), "  Surface",
+                      fontsize=7, color="#222222", va="bottom", zorder=2.3)
 
     def _render_grid(self, section: Section) -> None:
         xl  = self._ax.get_xlim()
@@ -1912,20 +1975,34 @@ class SectionView(QWidget):
                     self._show_pick_context_menu(hit, event)
 
     def _on_sv_motion(self, event) -> None:
-        # Track cursor + compute snap (Phase 5)
+        # Reset snap at the start of every move — only set it below if eligible
+        self._snap_point = None
+
         if event.xdata is not None and event.ydata is not None:
             cx, cy = float(event.xdata), float(event.ydata)
             self._cursor_data = (cx, cy)
-            self._snap_point  = self._compute_snap(cx, cy)
+
+            # Snap only in pick/edit modes — never in select/pan/zoom/measure
+            tool = self._state.active_tool
+            _snap_active = (
+                tool in _SNAP_TOOLS
+                or self._picking_active
+                or self._fault_picking
+                or self._polygon_drawing
+                or self._construct_tool is not None
+                or (tool == "node_edit" and self._pick_selected is not None)
+            )
+            if _snap_active:
+                self._snap_point = self._compute_snap(cx, cy)
+
             # Coordinate readout in status bar
             self._show_section_coords(cx, cy)
-            # Show snap hint in status bar when picking
+            # Snap hint during active picking
             if self._snap_point is not None and (self._picking_active or self._fault_picking):
                 sx, sz = self._snap_point
                 self._flash_hint(f"Snap: ({sx:.0f} m,  {sz:.0f} m depth)")
         else:
             self._cursor_data = None
-            self._snap_point  = None
 
         # ---- Pan ----
         if self._sv_pan_anchor is not None:
