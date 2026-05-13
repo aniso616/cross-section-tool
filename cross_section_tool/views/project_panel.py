@@ -295,51 +295,58 @@ class ProjectPanel(QDockWidget):
 
     def _rebuild(self, *_args) -> None:
         """Repopulate the tree from current project state."""
-        self._tree.clear()
-        proj = self._state.project
+        # Phase 6: suppress per-item signals during bulk rebuild
+        self._tree.blockSignals(True)
+        self._tree.setUpdatesEnabled(False)
+        try:
+            self._tree.clear()
+            proj = self._state.project
 
-        self._category_items: dict[str, QTreeWidgetItem] = {}
-        self._row_widgets: dict[tuple[str, int], _ObjectRow] = {}
+            self._category_items: dict[str, QTreeWidgetItem] = {}
+            self._row_widgets: dict[tuple[str, int], _ObjectRow] = {}
 
-        for cat in _CATEGORIES:
-            cat_item = QTreeWidgetItem([cat])
-            cat_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            )
-            font = QFont()
-            font.setBold(True)
-            font.setPointSize(9)
-            cat_item.setFont(0, font)
-            self._tree.addTopLevelItem(cat_item)
-            self._category_items[cat] = cat_item
-
-            objects = self._objects_for_category(cat)
-            show_stroke = cat in ("Horizons", "Faults")
-            for idx, (name, color, lw, ls) in enumerate(objects):
-                child = QTreeWidgetItem()
-                child.setFlags(
+            for cat in _CATEGORIES:
+                cat_item = QTreeWidgetItem([cat])
+                cat_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 )
-                cat_item.addChild(child)
+                font = QFont()
+                font.setBold(True)
+                font.setPointSize(9)
+                cat_item.setFont(0, font)
+                self._tree.addTopLevelItem(cat_item)
+                self._category_items[cat] = cat_item
 
-                row = _ObjectRow(name, color, line_width=lw, line_style=ls,
-                                 show_stroke=show_stroke)
-                row.visibility_changed.connect(
-                    lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v)
-                )
-                row.color_changed.connect(
-                    lambda col, c=cat, i=idx: self.object_color_changed.emit(c, i, col)
-                )
-                row.line_width_changed.connect(
-                    lambda w, c=cat, i=idx: self.object_line_width_changed.emit(c, i, w)
-                )
-                row.line_style_changed.connect(
-                    lambda s, c=cat, i=idx: self.object_line_style_changed.emit(c, i, s)
-                )
-                self._tree.setItemWidget(child, 0, row)
-                self._row_widgets[(cat, idx)] = row
+                objects = self._objects_for_category(cat)
+                show_stroke = cat in ("Horizons", "Faults")
+                for idx, (name, color, lw, ls) in enumerate(objects):
+                    child = QTreeWidgetItem()
+                    child.setFlags(
+                        Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                    )
+                    cat_item.addChild(child)
 
-            cat_item.setExpanded(True)
+                    row = _ObjectRow(name, color, line_width=lw, line_style=ls,
+                                     show_stroke=show_stroke)
+                    row.visibility_changed.connect(
+                        lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v)
+                    )
+                    row.color_changed.connect(
+                        lambda col, c=cat, i=idx: self.object_color_changed.emit(c, i, col)
+                    )
+                    row.line_width_changed.connect(
+                        lambda w, c=cat, i=idx: self.object_line_width_changed.emit(c, i, w)
+                    )
+                    row.line_style_changed.connect(
+                        lambda s, c=cat, i=idx: self.object_line_style_changed.emit(c, i, s)
+                    )
+                    self._tree.setItemWidget(child, 0, row)
+                    self._row_widgets[(cat, idx)] = row
+
+                cat_item.setExpanded(True)
+        finally:
+            self._tree.blockSignals(False)
+            self._tree.setUpdatesEnabled(True)
 
     def _objects_for_category(
         self, category: str

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import copy
 import math
+import time
 from typing import Literal
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MultipleLocator
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -41,6 +44,30 @@ _DEFAULT_DEPTH    = 5000.0
 
 _DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s"]
 
+# Seismic colormap name mapping: SeismicDisplaySettings.colormap → matplotlib
+_SEGY_CMAP = {
+    "seismic_red_blue": "seismic",
+    "grey":             "gray",
+    "viridis":          "viridis",
+    "inferno":          "inferno",
+    "jet":              "jet",
+}
+
+# Max perpendicular distance for well projection onto section
+_WELL_MAX_PERP = 2000.0   # metres
+
+
+def _fm_color(fm, fallback: str) -> str:
+    """Return hex color string for a Formation (or fallback if fm is None)."""
+    if fm is None:
+        return fallback
+    try:
+        r, g, b = fm.color
+        return "#{:02x}{:02x}{:02x}".format(int(r), int(g), int(b))
+    except Exception:
+        return fallback
+
+
 # Pick-point visual states: (radius_pt, face, edge, ew)
 _PP_NORMAL   = (5,  "white",   "#555", 0.8)
 _PP_HOVER    = (7,  "#ffffaa", "#555", 0.8)
@@ -68,6 +95,7 @@ class SectionView(QWidget):
     polygon_finished     = Signal(object)
     pick_ended           = Signal()       # emitted when pick sequence ends
     node_selected        = Signal(str, int, int)   # Phase 3: (cat, obj_idx, pt_idx)
+    frame_time_ms        = Signal(float)  # Phase 6: FPS display
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
@@ -75,6 +103,11 @@ class SectionView(QWidget):
 
         # ---- seismic cache ----
         self._seismic_cache: dict[str, SeismicDataset] = {}
+        # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
+        self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
+        # ---- FPS tracking ----
+        self._show_fps: bool = False
+        self._strat_col_visible: bool = True
 
         # ---- active tool flags (set by MainWindow._on_tool_changed) ----
         self._picking_active:  bool = False   # horizon_pick tool
@@ -144,8 +177,26 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig    = Figure(figsize=(10, 6), facecolor="white")
-        self._ax     = self._fig.add_subplot(111)
+        self._fig = Figure(figsize=(10, 6), facecolor="white")
+        # Phase 4: reserve left column for stratigraphic column, share Y axis
+        self._gs = GridSpec(
+            1, 2,
+            figure=self._fig,
+            width_ratios=[1, 8],
+            left=0.01, right=0.97,
+            top=0.97, bottom=0.09,
+            wspace=0.02,
+        )
+        self._strat_ax = self._fig.add_subplot(self._gs[0, 0])
+        self._strat_ax.set_facecolor("white")
+        self._strat_ax.tick_params(
+            left=False, bottom=False, labelbottom=False, labelleft=False
+        )
+        self._strat_ax.spines["top"].set_visible(False)
+        self._strat_ax.spines["right"].set_visible(False)
+        self._strat_ax.spines["bottom"].set_visible(False)
+
+        self._ax = self._fig.add_subplot(self._gs[0, 1], sharey=self._strat_ax)
         self._ax.set_facecolor("white")
         self._canvas = FigureCanvasQTAgg(self._fig)
 
@@ -320,6 +371,7 @@ class SectionView(QWidget):
             if self._ax_limits_set:
                 self._ax.set_xlim(old_ax.get_xlim())
                 self._ax.set_ylim(old_ax.get_ylim())
+            self._render_image_overlays(section)
             self._render_seismic(section)
             self._render_grid(section)
             self._render_section_ends(section)
@@ -421,12 +473,38 @@ class SectionView(QWidget):
     def clear_seismic_cache(self) -> None:
         self._seismic_cache.clear()
 
+    def set_strat_column_visible(self, visible: bool) -> None:
+        self._strat_col_visible = visible
+        self._strat_ax.set_visible(visible)
+        self.render()
+
+    def set_fps_display(self, enabled: bool) -> None:
+        self._show_fps = enabled
+        if not enabled:
+            self.frame_time_ms.emit(-1.0)
+
+    def add_image_overlay(
+        self,
+        path: str,
+        section_name: str,
+        dist_range: tuple[float, float],
+        depth_range: tuple[float, float],
+    ) -> None:
+        """Register a raster image to display as a section background."""
+        self._image_overlays = [
+            o for o in self._image_overlays if o[1] != section_name
+        ]
+        self._image_overlays.append((path, section_name, dist_range, depth_range))
+        self.render()
+
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
 
     def render(self, *_args) -> None:
         """Full redraw of the active section."""
+        _t0 = time.perf_counter()
+
         # FIX 2: save user's zoom/pan limits before the clear wipes them
         if self._ax_limits_set:
             _saved_xl = self._ax.get_xlim()
@@ -435,6 +513,14 @@ class SectionView(QWidget):
             _saved_xl = _saved_yl = None
 
         self._ax.clear()
+        self._strat_ax.clear()
+        self._strat_ax.tick_params(
+            left=False, bottom=False, labelbottom=False, labelleft=False
+        )
+        for sp in ("top", "right", "bottom"):
+            self._strat_ax.spines[sp].set_visible(False)
+        self._strat_ax.set_facecolor("white")
+
         section = self._state.active_section
         if section is None:
             self._section_name_label.setText("— no section —")
@@ -466,20 +552,31 @@ class SectionView(QWidget):
         else:
             self._ax_limits_set = True     # default limits now active
 
-        self._render_seismic(section)
-        self._render_grid(section)
-        self._render_section_ends(section)
-        self._render_reference_lines(section)
-        self._render_polygons(section)
-        self._render_surfaces(section)
-        self._render_faults(section)
-        self._render_horizons(section)
-        self._render_wells(section)
-        self._render_rubber_band(section)
-        self._render_snap_indicator()
-        self._render_polygon_in_progress()
-        self._render_annotations(section)
+        # Render order: back → front (z-orders are explicit in each renderer)
+        self._render_image_overlays(section)  # zorder=0
+        self._render_seismic(section)         # zorder=1
+        self._render_grid(section)            # zorder=2
+        self._render_section_ends(section)    # zorder=2
+        self._render_reference_lines(section) # zorder=3
+        self._render_polygons(section)        # zorder=4 (fills) + 5 (labels)
+        self._render_surfaces(section)        # zorder=6
+        self._render_faults(section)          # zorder=7
+        self._render_horizons(section)        # zorder=8
+        self._render_wells(section)           # zorder=9
+        self._render_rubber_band(section)     # zorder=12
+        self._render_snap_indicator()         # zorder=13
+        self._render_polygon_in_progress()    # zorder=14
+        self._render_annotations(section)     # zorder=15
+
+        # Phase 4: stratigraphic column (shared Y)
+        if self._strat_col_visible:
+            self._render_strat_column(section)
+
         self._canvas.draw_idle()
+
+        if self._show_fps:
+            ms = (time.perf_counter() - _t0) * 1000.0
+            self.frame_time_ms.emit(ms)
 
     # ------------------------------------------------------------------
     # Axis setup
@@ -508,7 +605,6 @@ class SectionView(QWidget):
         self._ax.set_xlabel(xlabel, fontsize=8)
         self._ax.set_ylabel(ylabel, fontsize=8)
         self._ax.tick_params(labelsize=7)
-        self._fig.subplots_adjust(left=0.10, right=0.97, top=0.97, bottom=0.09)
 
     def _compute_max_depth(self, section: Section) -> float:
         """Best estimate of maximum depth from loaded data."""
@@ -538,7 +634,7 @@ class SectionView(QWidget):
         yl  = self._ax.get_ylim()
         span = max(abs(xl[1] - xl[0]), abs(yl[1] - yl[0]))
         interval = _nice_interval(span / 5)
-        grid_kw = dict(color="#e0e0e0", linewidth=0.5, linestyle="--", zorder=0)
+        grid_kw = dict(color="#e0e0e0", linewidth=0.5, linestyle="--", zorder=2)
         xs = np.arange(math.floor(xl[0] / interval) * interval, xl[1] + interval, interval)
         ys = np.arange(math.floor(min(yl) / interval) * interval, max(yl) + interval, interval)
         for x in xs:
@@ -565,13 +661,13 @@ class SectionView(QWidget):
                     fontsize=ann.font_size, color=color,
                     rotation=ann.rotation_degrees,
                     arrowprops=dict(arrowstyle="-", color=color, lw=0.8),
-                    zorder=11,
+                    zorder=15,
                 )
             else:
                 self._ax.text(
                     px, pz, ann.text,
                     fontsize=ann.font_size, color=color,
-                    rotation=ann.rotation_degrees, zorder=11,
+                    rotation=ann.rotation_degrees, zorder=15,
                 )
 
     def _render_section_ends(self, section: Section) -> None:
@@ -699,7 +795,8 @@ class SectionView(QWidget):
         is_edit     = (self._sv_mode == "edit_mode" and is_selected)
 
         render_lw = lw * 1.6 if is_active else lw
-        zorder    = 4 if (is_active or is_selected) else 3
+        base_z = 8 if category == "Horizons" else 7
+        zorder = base_z + 1 if (is_active or is_selected) else base_z
 
         # Selection glow (Phase 2)
         if is_selected:
@@ -725,7 +822,7 @@ class SectionView(QWidget):
                 ms, fc, ec, ew = self._pick_point_style(category, obj_idx, fi_full)
                 self._ax.plot(d, z, marker,
                               markersize=ms, markerfacecolor=fc,
-                              markeredgecolor=ec, markeredgewidth=ew, zorder=5)
+                              markeredgecolor=ec, markeredgewidth=ew, zorder=11)
 
     def _render_line_decoration(
         self, hp, d_sec: np.ndarray, z_sec: np.ndarray,
@@ -810,28 +907,59 @@ class SectionView(QWidget):
             return _PP_HOVER
         return _PP_NORMAL
 
+    def _render_image_overlays(self, section: Section) -> None:
+        """Render registered raster image overlays at zorder=0."""
+        for path, sec_name, (d0, d1), (z0, z1) in self._image_overlays:
+            if sec_name != section.name:
+                continue
+            try:
+                import matplotlib.image as mpimg
+                img = mpimg.imread(path)
+                self._ax.imshow(
+                    img,
+                    aspect="auto",
+                    extent=[d0, d1, z1, z0],
+                    origin="upper",
+                    zorder=0,
+                )
+            except Exception:
+                pass
+
     def _render_seismic(self, section: Section) -> None:
+        sds = getattr(section, "seismic_display", None)
+        clip_pct   = sds.clip_percentile if sds else 99.0
+        gain       = sds.gain            if sds else 1.0
+        opacity    = sds.opacity         if sds else 1.0
+        cmap_key   = sds.colormap        if sds else "seismic_red_blue"
+        show_wig   = (sds.show_wiggle if sds else False) or (self._display_mode == "wiggle")
+        cmap_name  = _SEGY_CMAP.get(cmap_key, "seismic")
+
         for ref in self._state.project.seismic_refs:
             ds = self._get_or_load_seismic(ref)
             if ds is None or ds.n_traces == 0:
                 continue
-            distances, data, _ = ds.traces_sorted_by_section(section)
+            distances, data, perps = ds.traces_sorted_by_section(section)
+            # Filter by perpendicular distance (±500 m by default)
+            mask = np.abs(perps) <= 500.0
+            if mask.sum() >= 2:
+                distances, data = distances[mask], data[mask]
             if len(distances) < 2:
                 continue
-            vmax = float(np.percentile(np.abs(data), 95)) or 1.0
-            if self._display_mode == "variable_density":
+            vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
+            if show_wig:
+                self._render_wiggle(distances, data, ds.samples)
+            else:
                 self._ax.imshow(
                     data.T,
                     aspect="auto",
                     extent=[distances[0], distances[-1], ds.samples[-1], ds.samples[0]],
                     origin="upper",
-                    cmap="seismic",
+                    cmap=cmap_name,
                     vmin=-vmax, vmax=vmax,
                     interpolation="bilinear",
+                    alpha=opacity,
+                    zorder=1,
                 )
-                self._ax.set_ylim(ds.samples[-1], ds.samples[0])
-            else:
-                self._render_wiggle(distances, data, ds.samples)
 
     def _render_wiggle(self, distances, data, samples) -> None:
         if len(distances) < 2:
@@ -852,7 +980,7 @@ class SectionView(QWidget):
                 continue
             self._ax.plot(distances[valid], z_values[valid],
                           color="darkorange", linewidth=1.5, linestyle="--",
-                          alpha=0.85, zorder=3)
+                          alpha=0.85, zorder=6)
 
     def _render_polygons(self, section: Section) -> None:
         from matplotlib.patches import Polygon as MplPolygon
@@ -875,19 +1003,56 @@ class SectionView(QWidget):
             patch = MplPolygon(verts, closed=True,
                                facecolor=poly.fill_color, alpha=poly.fill_alpha,
                                edgecolor=poly.edge_color, linewidth=poly.edge_width,
-                               hatch=hatch, zorder=2)
+                               hatch=hatch, zorder=4)
             self._ax.add_patch(patch)
             # Hatch overlay in a separate transparent patch so hatch color = black
             if hatch:
                 hatch_patch = MplPolygon(verts, closed=True,
                                          facecolor="none", alpha=0.35,
                                          edgecolor="black", linewidth=0,
-                                         hatch=hatch, zorder=2)
+                                         hatch=hatch, zorder=4)
                 self._ax.add_patch(hatch_patch)
-            if poly.name:
+
+            # Phase 5: formation label inside polygon
+            label = getattr(poly, "formation", "") or poly.name
+            if label:
+                # Representative point (inside polygon, not just centroid)
                 cx, cy = float(verts[:, 0].mean()), float(verts[:, 1].mean())
-                self._ax.text(cx, cy, poly.name, fontsize=6,
-                              ha="center", va="center", zorder=3)
+                try:
+                    from shapely.geometry import Polygon as _SPoly
+                    shp = _SPoly(verts)
+                    if shp.is_valid:
+                        pt = shp.representative_point()
+                        cx, cy = float(pt.x), float(pt.y)
+                except Exception:
+                    pass
+
+                # Font size based on polygon screen area
+                try:
+                    pts_s = self._ax.transData.transform(verts)
+                    xs_s, ys_s = pts_s[:, 0], pts_s[:, 1]
+                    n = len(xs_s)
+                    scr_area = abs(sum(
+                        xs_s[i] * ys_s[(i+1) % n] - xs_s[(i+1) % n] * ys_s[i]
+                        for i in range(n)
+                    )) * 0.5
+                    fontsize = max(7, min(14, 7 + scr_area / 6000))
+                except Exception:
+                    fontsize = 8
+
+                # Auto-contrast text color
+                try:
+                    from matplotlib.colors import to_rgb as _to_rgb
+                    r, g, b = _to_rgb(poly.fill_color)
+                    lum = r * 0.299 + g * 0.587 + b * 0.114
+                    text_color = "black" if lum > 0.55 else "white"
+                except Exception:
+                    text_color = "black"
+
+                self._ax.text(cx, cy, label,
+                              fontsize=fontsize, color=text_color,
+                              ha="center", va="center",
+                              clip_on=True, zorder=5)
 
     def _render_polygon_in_progress(self) -> None:
         if not self._polygon_drawing or not self._polygon_vertices:
@@ -955,26 +1120,187 @@ class SectionView(QWidget):
                 )
 
     def _render_wells(self, section: Section) -> None:
+        """Render wells projected onto section with formation tops and offset labels."""
+        # Pixel → data-unit conversion for tick widths
+        try:
+            inv = self._ax.transData.inverted()
+            p0 = inv.transform([0, 0])
+            p1 = inv.transform([8, 0])
+            tick_w = abs(float(p1[0]) - float(p0[0]))
+        except Exception:
+            tick_w = section.total_length() * 0.006
+
         for well in self._state.project.wells:
+            collar_dist, perp = well.project_to_section(section)
+            if abs(perp) > _WELL_MAX_PERP:
+                continue  # too far off-section
+
             distances, tvds = well.section_track(section)
-            collar_dist, _ = well.project_to_section(section)
-            self._ax.plot(distances, tvds, color="#8B4513", linewidth=2.0,
-                          solid_capstyle="round", zorder=4)
+
+            # Well stick
+            self._ax.plot(distances, tvds, color="#4A3728", linewidth=1.5,
+                          solid_capstyle="round", zorder=9)
+
+            # Name + perpendicular offset annotation
             if len(tvds) > 0:
+                direction = "E" if perp >= 0 else "W"
+                label = f"{well.name}  ({abs(perp):.0f}m {direction})"
                 self._ax.annotate(
-                    well.name, xy=(collar_dist, tvds[0]),
-                    xytext=(3, 3), textcoords="offset points",
-                    fontsize=7, color="#8B4513", zorder=5,
+                    label,
+                    xy=(collar_dist, tvds[0]),
+                    xytext=(4, 4), textcoords="offset points",
+                    fontsize=7, color="#4A3728", zorder=10,
+                    ha="left", va="bottom",
                 )
+
+            # Formation tops: small horizontal ticks + name labels
             for top_name in well.formation_tops:
                 try:
                     td, tz = well.formation_top_in_section(top_name, section)
                 except KeyError:
                     continue
-                self._ax.plot(td, tz, marker="<", markersize=6,
-                              color="green", zorder=5)
-                self._ax.text(td + section.total_length() * 0.005, tz,
-                              top_name, fontsize=6, color="green", va="center", zorder=5)
+                self._ax.plot([td - tick_w, td + tick_w], [tz, tz],
+                              color="#2a7d2a", linewidth=1.2, zorder=9)
+                self._ax.text(
+                    td + tick_w * 1.4, tz, top_name,
+                    fontsize=6, color="#2a7d2a", va="center", zorder=9,
+                )
+
+            # Optional GR log as filled wiggle trace
+            gr_name = next(
+                (n for n in well.log_names
+                 if "GR" in n.upper() or n.upper() in ("GAMMA", "GR")),
+                None,
+            )
+            if gr_name:
+                self._render_gr_log(well, gr_name, collar_dist, section)
+
+    def _render_gr_log(self, well, gr_name: str, collar_dist: float,
+                       section: Section) -> None:
+        """Render a GR log as a filled wiggle alongside the well stick."""
+        try:
+            curve = well.get_log(gr_name)
+        except KeyError:
+            return
+        tvd_depths = curve.depths
+        values = curve.values
+        if len(tvd_depths) < 2:
+            return
+        # Normalize to [0, 1]
+        vmin, vmax = float(np.nanmin(values)), float(np.nanmax(values))
+        if vmax - vmin < 1.0:
+            return
+        norm = (values - vmin) / (vmax - vmin)
+        # Map to section-space: 50m track width centred on well
+        track_w = 50.0
+        xs = collar_dist + (norm - 0.5) * track_w
+        # Draw wiggle + fills
+        self._ax.plot(xs, tvd_depths, color="#8B4513", linewidth=0.6, zorder=9)
+        # Sand fill (left side, low GR) — yellow
+        self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
+                                where=(norm < 0.5),
+                                color="#f5d06e", alpha=0.6, zorder=9)
+        # Shale fill (right side, high GR) — grey
+        self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
+                                where=(norm >= 0.5),
+                                color="#888888", alpha=0.4, zorder=9)
+
+    def _render_strat_column(self, section: Section) -> None:
+        """Phase 4: render the left-side stratigraphic column sharing the Y axis."""
+        self._strat_ax.set_xlim(0, 1)
+        self._strat_ax.set_facecolor("white")
+
+        # Gather horizons with picks on this section, sorted by depth
+        horizon_picks = self._state.project.horizon_picks
+        strat_col = self._state.project.strat_column
+
+        section_horizons: list[tuple[float, object]] = []
+        for hp in horizon_picks:
+            sec_idxs = hp.section_indices(section.name)
+            if len(sec_idxs) > 0:
+                depths = hp._depths[sec_idxs]
+                median_d = float(np.median(depths))
+                section_horizons.append((median_d, hp))
+        section_horizons.sort(key=lambda x: x[0])
+
+        if not section_horizons:
+            self._strat_ax.text(
+                0.5, 0.5, "No\npicks", fontsize=6, ha="center", va="center",
+                color="#aaa", transform=self._strat_ax.transAxes,
+            )
+            return
+
+        # Draw formation bodies between consecutive horizon pairs
+        yl = self._ax.get_ylim()
+        y_top = min(yl)
+        y_bot = max(yl)
+
+        # Body above the shallowest horizon
+        top_d, top_hp = section_horizons[0]
+        fm_above_name = getattr(top_hp, "formation_above", "")
+        if fm_above_name:
+            fm = strat_col.get_formation(fm_above_name)
+            color = _fm_color(fm, top_hp.color)
+            self._draw_strat_body(y_top, top_d, fm_above_name, color, strat_col)
+
+        for i in range(len(section_horizons) - 1):
+            d_top_val, hp_top = section_horizons[i]
+            d_bot_val, _hp_bot = section_horizons[i + 1]
+            fm_name = getattr(hp_top, "formation_below", "")
+            if not fm_name:
+                fm_name = getattr(_hp_bot, "formation_above", "")
+            fm = strat_col.get_formation(fm_name) if fm_name else None
+            color = _fm_color(fm, hp_top.color)
+            self._draw_strat_body(d_top_val, d_bot_val, fm_name or f"Unit {i+1}",
+                                  color, strat_col)
+
+        # Body below the deepest horizon
+        bot_d, bot_hp = section_horizons[-1]
+        fm_below_name = getattr(bot_hp, "formation_below", "")
+        if fm_below_name:
+            fm = strat_col.get_formation(fm_below_name)
+            color = _fm_color(fm, bot_hp.color)
+            self._draw_strat_body(bot_d, y_bot, fm_below_name, color, strat_col)
+
+        # Draw horizon tick lines
+        for d_val, hp in section_horizons:
+            self._strat_ax.axhline(d_val, color=hp.color, lw=0.8, zorder=3)
+
+        # Title
+        self._strat_ax.set_title("Strat", fontsize=6, pad=2)
+        self._strat_ax.yaxis.set_visible(False)
+
+    def _draw_strat_body(self, top: float, bot: float, name: str,
+                         color: str, strat_col) -> None:
+        """Render one formation body rectangle in the strat column."""
+        if abs(bot - top) < 1e-6:
+            return
+        self._strat_ax.fill_betweenx([top, bot], 0, 1,
+                                      color=color, alpha=0.75, zorder=2)
+        # Text if there's screen space
+        try:
+            y0_s = self._strat_ax.transData.transform([0, top])[1]
+            y1_s = self._strat_ax.transData.transform([0, bot])[1]
+            height_px = abs(y1_s - y0_s)
+        except Exception:
+            height_px = 20.0
+        if height_px >= 14:
+            try:
+                from matplotlib.colors import to_rgb as _tr
+                r, g, b = _tr(color)
+                lum = r * 0.299 + g * 0.587 + b * 0.114
+                tc = "black" if lum > 0.55 else "white"
+            except Exception:
+                tc = "black"
+            fontsize = max(5, min(8, 5 + height_px / 30))
+            mid = (top + bot) * 0.5
+            # Shorten name if needed
+            disp = name if len(name) <= 10 else name[:9] + "…"
+            self._strat_ax.text(
+                0.5, mid, disp, fontsize=fontsize, color=tc,
+                ha="center", va="center", clip_on=True,
+                rotation=90 if height_px < 60 else 0, zorder=3,
+            )
 
     # ------------------------------------------------------------------
     # Pick-node interaction helpers
@@ -1186,6 +1512,28 @@ class SectionView(QWidget):
                 self._aref_anchor = None
                 self._state.add_reference_line(rl)
 
+    def _on_strat_col_click(self, event) -> None:
+        """Phase 4: click on strat column → select the horizon nearest clicked depth."""
+        clicked_depth = event.ydata
+        if clicked_depth is None:
+            return
+        section = self._state.active_section
+        if section is None:
+            return
+        # Find the horizon whose median depth on this section is nearest
+        best_idx, best_dist = None, float("inf")
+        for i, hp in enumerate(self._state.project.horizon_picks):
+            sec_idxs = hp.section_indices(section.name)
+            if len(sec_idxs) == 0:
+                continue
+            median_d = float(np.median(hp._depths[sec_idxs]))
+            d = abs(median_d - clicked_depth)
+            if d < best_dist:
+                best_dist = d
+                best_idx = i
+        if best_idx is not None:
+            self._state.set_active_pick_target("Horizons", best_idx)
+
     def _end_pick_sequence(self) -> None:
         """FIX 1: finish picking, return to select mode."""
         self._picking_active = False
@@ -1233,6 +1581,10 @@ class SectionView(QWidget):
         self._on_sv_press(event)
 
     def _on_sv_press(self, event) -> None:
+        # Strat column click: select formation as pick target and return
+        if event.inaxes is self._strat_ax and event.button == 1:
+            self._on_strat_col_click(event)
+            return
         if event.inaxes is not self._ax:
             return
         try:

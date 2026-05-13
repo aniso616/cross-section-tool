@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 # (tool_id, icon, label, tooltip) | str (group header) | None (separator)
 
 _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
-    "Navigate",
+    "Nav",
     ("select",      "↖", "Select",
      "Select Object  (V)\n"
      "Click an object to select it. Double-click to enter node-edit mode.\n"
@@ -45,7 +45,7 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
      "Double-click or Enter to finish.  Escape to cancel.\n"
      "Section → New Section (east-west default) for a quick default."),
     None,
-    "Interpret",
+    "Pick",
     ("horizon_pick","─", "Horizon",
      "Horizon Pick  (P)\n"
      "Click on the section view to add picks to the active horizon.\n"
@@ -57,7 +57,7 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
      "Polygon  (G)\n"
      "Click to place vertices; right-click to close the polygon."),
     None,
-    "Construct",
+    "Build",
     ("h_ref",       "═", "H-Ref",
      "Horizontal Reference Line  (R)\n"
      "Click on the section to place a horizontal guide at that depth."),

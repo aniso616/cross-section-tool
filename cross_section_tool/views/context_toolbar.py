@@ -4,7 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout,
-    QLabel, QPushButton, QSizePolicy, QWidget,
+    QLabel, QPushButton, QSizePolicy, QToolButton, QWidget,
 )
 
 from cross_section_tool.app_state import AppState
@@ -62,6 +62,23 @@ class ContextToolbar(QWidget):
         btn.clicked.connect(lambda _, s=sig: target.emit(s))
         return btn
 
+    @staticmethod
+    def _icon_tool_btn(label: str, tooltip: str, sig: str,
+                       target, *, danger: bool = False) -> "QToolButton":
+        """Return a 20×20 flat QToolButton (icon-only, no border, hover only)."""
+        btn = QToolButton()
+        btn.setText(label)
+        btn.setFixedSize(20, 20)
+        btn.setToolTip(tooltip)
+        danger_style = "color: #c44;" if danger else ""
+        btn.setStyleSheet(
+            f"QToolButton {{ border: none; border-radius: 3px; font-size: 8pt; {danger_style} }}"
+            "QToolButton:hover { background: rgba(0,0,0,0.10); }"
+            "QToolButton:pressed { background: rgba(0,0,0,0.20); }"
+        )
+        btn.clicked.connect(lambda _, s=sig: target.emit(s))
+        return btn
+
     def _clear(self) -> None:
         while self._layout.count():
             item = self._layout.takeAt(0)
@@ -110,13 +127,13 @@ class ContextToolbar(QWidget):
         self._layout.addWidget(lbl)
         sep = QLabel("|"); sep.setStyleSheet("color: #888;")
         self._layout.addWidget(sep)
-        self._layout.addWidget(self._flat_btn(
-            "Delete", "Delete selected object", "delete_object",
+        self._layout.addWidget(self._icon_tool_btn(
+            "✕", "Delete selected object  (Del)", "delete_object",
             self.action_requested, danger=True))
-        self._layout.addWidget(self._flat_btn(
-            "Copy",   "Copy selected object",   "copy_object",   self.action_requested))
-        self._layout.addWidget(self._flat_btn(
-            "Paste",  "Paste object",            "paste_object",  self.action_requested))
+        self._layout.addWidget(self._icon_tool_btn(
+            "⎘", "Copy selected object  (Ctrl+C)", "copy_object", self.action_requested))
+        self._layout.addWidget(self._icon_tool_btn(
+            "⎙", "Paste object  (Ctrl+V)", "paste_object", self.action_requested))
 
     def _build_node_edit(self) -> None:
         lbl = QLabel("Node Edit (A)")

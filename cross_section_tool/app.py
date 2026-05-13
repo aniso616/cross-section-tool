@@ -287,9 +287,16 @@ class MainWindow(QMainWindow):
         self._import_las_action = QAction("LAS Well Log…", self)
         self._import_las_action.triggered.connect(self._on_import_las)
         import_menu.addAction(self._import_las_action)
+        self._import_well_tops_action = QAction("Well Tops CSV…", self)
+        self._import_well_tops_action.triggered.connect(self._on_import_well_tops)
+        import_menu.addAction(self._import_well_tops_action)
+        import_menu.addSeparator()
         self._import_segy_action = QAction("SEG-Y Seismic…", self)
         self._import_segy_action.triggered.connect(self._on_import_segy)
         import_menu.addAction(self._import_segy_action)
+        self._import_img_action = QAction("Section Image…", self)
+        self._import_img_action.triggered.connect(self._on_import_section_image)
+        import_menu.addAction(self._import_img_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -358,6 +365,20 @@ class MainWindow(QMainWindow):
         self._wiggle_action.triggered.connect(
             lambda: self._section_view.set_display_mode("wiggle"))
         view_menu.addAction(self._wiggle_action)
+        view_menu.addSeparator()
+        self._strat_col_action = QAction("Stratigraphic &Column", self)
+        self._strat_col_action.setCheckable(True)
+        self._strat_col_action.setChecked(True)
+        self._strat_col_action.toggled.connect(
+            lambda v: self._section_view.set_strat_column_visible(v))
+        view_menu.addAction(self._strat_col_action)
+        view_menu.addSeparator()
+        self._fps_action = QAction("Show &FPS", self)
+        self._fps_action.setCheckable(True)
+        self._fps_action.setChecked(False)
+        self._fps_action.toggled.connect(
+            lambda v: self._section_view.set_fps_display(v))
+        view_menu.addAction(self._fps_action)
 
         # ================================================================
         # Section
@@ -546,6 +567,8 @@ class MainWindow(QMainWindow):
         s.annotation_added.connect(lambda _: self._section_view.render())
         s.annotation_removed.connect(lambda _: self._section_view.render())
         s.annotation_modified.connect(lambda *_: self._section_view.render())
+        # FPS display from section view
+        self._section_view.frame_time_ms.connect(self._on_frame_time)
         # Keyboard shortcuts for tools (application-wide)
         _tool_keys = {
             "V": "select",    "A": "node_edit",
@@ -777,12 +800,113 @@ class MainWindow(QMainWindow):
         )
         for path in paths:
             from cross_section_tool.io.project import SeismicRef
+            from cross_section_tool.views.seismic_import_dialog import SeismicImportDialog
+            fname = os.path.basename(path)
+            dlg = SeismicImportDialog(
+                sections=self._state.project.sections,
+                filename=fname,
+                parent=self,
+            )
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                continue
             ref = SeismicRef(
                 path=path,
-                name=os.path.splitext(os.path.basename(path))[0],
+                name=os.path.splitext(fname)[0],
+                x_field=dlg.x_field,
+                y_field=dlg.y_field,
+                apply_scalar=dlg.apply_scalar,
+                domain=dlg.domain,
+                depth_units=dlg.depth_units,
                 crs_epsg=self._state.project.crs_epsg,
             )
             self._state.add_seismic_ref(ref)
+
+    def _on_import_section_image(self) -> None:
+        """Import a raster image (scanned section) as a section background."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Section Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.tiff *.tif *.bmp);;All Files (*)",
+        )
+        if not path:
+            return
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "No Active Section",
+                                    "Activate a section first, then import an image.")
+            return
+        from PySide6.QtWidgets import QDoubleSpinBox, QDialog, QFormLayout, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Section Image Range")
+        fl = QFormLayout(dlg)
+        total = section.total_length()
+        max_d = 10000.0
+
+        def _spin(lo, hi, val, dec=0):
+            s = QDoubleSpinBox()
+            s.setRange(lo, hi); s.setValue(val); s.setDecimals(dec)
+            return s
+
+        d_start = _spin(0, 1e8, 0.0, 1)
+        d_end   = _spin(0, 1e8, total, 1)
+        z_top   = _spin(-1e6, 1e6, 0.0, 1)
+        z_bot   = _spin(-1e6, 1e6, max_d, 1)
+        fl.addRow("Distance start (m):", d_start)
+        fl.addRow("Distance end (m):",   d_end)
+        fl.addRow("Depth top (m):",      z_top)
+        fl.addRow("Depth bottom (m):",   z_bot)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        fl.addRow(bb)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        self._section_view.add_image_overlay(
+            path=path,
+            section_name=section.name,
+            dist_range=(d_start.value(), d_end.value()),
+            depth_range=(z_top.value(), z_bot.value()),
+        )
+
+    def _on_import_well_tops(self) -> None:
+        """Import well tops from a CSV file."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Well Tops CSV", "",
+            "CSV Files (*.csv *.txt);;All Files (*)"
+        )
+        if not path:
+            return
+        from cross_section_tool.views.well_tops_dialog import WellTopsDialog
+        dlg = WellTopsDialog(path, crs_epsg=self._state.project.crs_epsg, parent=self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        try:
+            wells = dlg.load_wells()
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Error", str(exc))
+            return
+        added = 0
+        for well in wells:
+            # Check if well already exists
+            existing = next(
+                (w for w in self._state.project.wells if w.name == well.name), None
+            )
+            if existing is not None:
+                # Merge formation tops into existing well
+                import copy
+                idx = self._state.project.wells.index(existing)
+                updated = copy.deepcopy(existing)
+                for name, md in well.formation_tops.items():
+                    updated.add_formation_top(name, md)
+                self._state.update_well(idx, updated)
+            else:
+                self._state.add_well(well)
+                added += 1
+        QMessageBox.information(
+            self, "Import Complete",
+            f"Imported {added} new well(s), tops merged into existing wells."
+        )
 
     def _on_new_section(self) -> None:
         """Add a simple 10-km east–west section centred on existing data."""
@@ -1180,6 +1304,11 @@ class MainWindow(QMainWindow):
             self._tool_palette.set_active_tool(self._space_prev_tool)
             del self._space_prev_tool
         super().keyReleaseEvent(event)
+
+    def _on_frame_time(self, ms: float) -> None:
+        """Show render frame time in the permanent hint label."""
+        fps = 1000.0 / max(ms, 0.1)
+        self._hint_label.setText(f"{ms:.0f} ms  |  {fps:.0f} fps")
 
     def _flash_status(self, msg: str) -> None:
         """Phase 7: briefly show *msg* in the status bar, then restore."""
