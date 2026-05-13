@@ -370,7 +370,8 @@ class ProjectPanel(QDockWidget):
                      rl.color, _dw, _ds)
                     for rl in proj.reference_lines]
         if category == "Polygons":
-            return []
+            return [(p.name or f"Polygon {i+1}", p.fill_color, 1.5, "solid")
+                    for i, p in enumerate(proj.polygons)]
         return []
 
     # ------------------------------------------------------------------

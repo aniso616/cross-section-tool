@@ -10,6 +10,13 @@ from PySide6.QtWidgets import (
 from cross_section_tool.app_state import AppState
 
 
+def _qlbl(text: str) -> QLabel:
+    """Return a QLabel with explicit dark style for the light options bar."""
+    lbl = QLabel(text)
+    lbl.setStyleSheet("font-size: 8pt; color: #333333;")
+    return lbl
+
+
 class ContextToolbar(QWidget):
     """Slim 32px bar directly below the section header.
 
@@ -118,12 +125,12 @@ class ContextToolbar(QWidget):
         if sec is not None:
             parts.append(f"Section: {sec.name or 'Unnamed'}")
         lbl = QLabel("  |  ".join(parts))
-        lbl.setStyleSheet("font-size: 8pt; color: #888;")
+        lbl.setStyleSheet("font-size: 8pt; color: #555555;")
         self._layout.addWidget(lbl)
 
     def _build_select(self) -> None:
         lbl = QLabel("Select Object (V)")
-        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px;")
+        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px; color: #333333;")
         self._layout.addWidget(lbl)
         sep = QLabel("|"); sep.setStyleSheet("color: #888;")
         self._layout.addWidget(sep)
@@ -137,7 +144,7 @@ class ContextToolbar(QWidget):
 
     def _build_node_edit(self) -> None:
         lbl = QLabel("Node Edit (A)")
-        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px;")
+        lbl.setStyleSheet("font-size: 8pt; padding-right: 6px; color: #333333;")
         self._layout.addWidget(lbl)
         sep = QLabel("|"); sep.setStyleSheet("color: #888;")
         self._layout.addWidget(sep)
@@ -148,24 +155,24 @@ class ContextToolbar(QWidget):
         self._layout.addWidget(self._flat_btn(
             "Smooth",  "Smooth picks",          "smooth_picks", self.action_requested))
 
-        self._layout.addWidget(QLabel("  Snap:"))
+        self._layout.addWidget(_qlbl("  Snap:"))
         snap_cb = QCheckBox()
         snap_cb.setChecked(True)
         snap_cb.stateChanged.connect(
             lambda s: self.action_requested.emit("snap_on" if s else "snap_off"))
         self._layout.addWidget(snap_cb)
-        self._layout.addWidget(QLabel("Tol:"))
+        self._layout.addWidget(_qlbl("Tol:"))
         tol = QDoubleSpinBox()
         tol.setRange(1, 50); tol.setValue(15); tol.setSuffix(" px"); tol.setFixedWidth(72)
         self._layout.addWidget(tol)
 
     def _build_horizon_pick(self) -> None:
-        self._layout.addWidget(QLabel("Target:"))
+        self._layout.addWidget(_qlbl("Target:"))
         combo = self._pick_target_combo("Horizons")
         self._layout.addWidget(combo)
 
         # Contact type quick-set
-        self._layout.addWidget(QLabel("  Type:"))
+        self._layout.addWidget(_qlbl("  Type:"))
         from cross_section_tool.views.horizon_dialog import CONTACT_TYPES
         ct_combo = QComboBox(); ct_combo.setFixedWidth(130)
         for ct in CONTACT_TYPES:
@@ -177,7 +184,7 @@ class ContextToolbar(QWidget):
             "end_pick", self.action_requested, danger=True))
 
     def _build_fault_pick(self) -> None:
-        self._layout.addWidget(QLabel("Target:"))
+        self._layout.addWidget(_qlbl("Target:"))
         combo = self._pick_target_combo("Faults")
         self._layout.addWidget(combo)
 
@@ -192,29 +199,39 @@ class ContextToolbar(QWidget):
             "end_pick", self.action_requested, danger=True))
 
     def _build_polygon(self) -> None:
-        self._layout.addWidget(QLabel("Polygon"))
+        self._layout.addWidget(_qlbl("Target:"))
+        combo = QComboBox(); combo.setMinimumWidth(120)
+        proj = self._state.project
+        for i, p in enumerate(proj.polygons):
+            combo.addItem(p.name or f"Polygon {i+1}", i)
+        combo.addItem("+ New Polygon…", -1)
+        combo.currentIndexChanged.connect(lambda i: (
+            self.action_requested.emit("new_polygon")
+            if combo.itemData(i) == -1 else None
+        ))
+        self._layout.addWidget(combo)
         sep = QLabel("|"); sep.setStyleSheet("color: #888;")
         self._layout.addWidget(sep)
         self._layout.addWidget(self._flat_btn(
-            "Close", "Close polygon", "close_polygon", self.action_requested))
+            "Close", "Close polygon  (Right-click)", "close_polygon", self.action_requested))
         self._layout.addWidget(self._flat_btn(
-            "Cancel", "Cancel polygon", "cancel_polygon",
+            "Cancel", "Cancel polygon  (Escape)", "cancel_polygon",
             self.action_requested, danger=True))
 
     def _build_ref_line(self) -> None:
         tool = self._state.active_tool
         labels = {"h_ref": "Horizontal Ref (H)", "v_ref": "Vertical Ref (V)",
                   "a_ref": "Angled Ref (A)"}
-        self._layout.addWidget(QLabel(labels.get(tool, "Reference Line") + "  |"))
-        self._layout.addWidget(QLabel("Click on section to place guide."))
+        self._layout.addWidget(_qlbl(labels.get(tool, "Reference Line") + "  |"))
+        self._layout.addWidget(_qlbl("Click on section to place guide."))
         if tool == "a_ref":
-            self._layout.addWidget(QLabel("  1st click: anchor  2nd click: direction"))
+            self._layout.addWidget(_qlbl("  1st click: anchor  2nd click: direction"))
 
     def _build_measure(self) -> None:
-        self._layout.addWidget(QLabel("Measure  |"))
-        self._dist_lbl  = QLabel("Distance: —")
-        self._depth_lbl = QLabel("Depth Δ: —")
-        self._angle_lbl = QLabel("Angle: —°")
+        self._layout.addWidget(_qlbl("Measure  |"))
+        self._dist_lbl  = _qlbl("Distance: —")
+        self._depth_lbl = _qlbl("Depth Δ: —")
+        self._angle_lbl = _qlbl("Angle: —°")
         for lbl in (self._dist_lbl, self._depth_lbl, self._angle_lbl):
             self._layout.addWidget(lbl)
         clr = QPushButton("Clear")

@@ -1185,6 +1185,66 @@ class MainWindow(QMainWindow):
         rl = ReferenceLine(kind=kind, value=value, name=name.strip())
         self._state.add_reference_line(rl)
 
+    def _add_new_polygon(self) -> None:
+        from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+                                       QLineEdit, QColorDialog, QDoubleSpinBox,
+                                       QComboBox)
+        from PySide6.QtGui import QColor
+        from cross_section_tool.core.polygons import SectionPolygon
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("New Polygon")
+        fl = QFormLayout(dlg)
+        n = len(self._state.project.polygons) + 1
+        name_edit = QLineEdit(f"Polygon {n}")
+        fl.addRow("Name:", name_edit)
+
+        # Formation dropdown
+        fm_combo = QComboBox()
+        fm_combo.addItem("(Unassigned)", "")
+        for fm in self._state.project.strat_column.formations:
+            fm_combo.addItem(fm.name, fm.name)
+        fl.addRow("Formation:", fm_combo)
+
+        # Color picker
+        _color = "#9467bd"
+        color_btn = QPushButton("   ")
+        color_btn.setStyleSheet(f"background: {_color};")
+
+        def _pick_color():
+            nonlocal _color
+            c = QColorDialog.getColor(QColor(_color), dlg)
+            if c.isValid():
+                _color = c.name()
+                color_btn.setStyleSheet(f"background: {_color};")
+        color_btn.clicked.connect(_pick_color)
+        fl.addRow("Color:", color_btn)
+
+        opacity_spin = QDoubleSpinBox()
+        opacity_spin.setRange(0.1, 1.0)
+        opacity_spin.setValue(0.6)
+        opacity_spin.setSingleStep(0.1)
+        fl.addRow("Opacity:", opacity_spin)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        fl.addRow(bb)
+
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+
+        self._section_view.set_polygon_preflight(
+            name=name_edit.text().strip() or f"Polygon {n}",
+            formation=fm_combo.currentData() or "",
+            color=_color,
+            opacity=opacity_spin.value(),
+        )
+        # Ensure polygon drawing mode is active
+        if self._state.active_tool != "polygon":
+            self._tool_palette.set_active_tool("polygon")
+
     def _add_new_fault(self) -> None:
         from cross_section_tool.views.fault_dialog import FaultDialog
         from cross_section_tool.core.surfaces import HorizonPick
@@ -1328,6 +1388,8 @@ class MainWindow(QMainWindow):
             self._add_new_horizon()
         elif action == "new_fault":
             self._add_new_fault()
+        elif action == "new_polygon":
+            self._add_new_polygon()
         elif action == "end_pick":
             self._tool_palette.set_active_tool("select")
 

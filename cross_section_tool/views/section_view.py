@@ -122,6 +122,12 @@ class SectionView(QWidget):
 
         # ---- polygon in-progress ----
         self._polygon_vertices: list[tuple[float, float]] = []
+        self._poly_preflight: dict = {}  # name/formation/color/opacity for next polygon
+
+        # ---- construct tool state machine ----
+        self._cst_state: str = "idle"   # "idle" | "source_selected"
+        self._cst_source: dict | None = None  # {'cat': ..., 'idx': ..., 'endpoint': ...}
+        self._cst_preview_line: tuple | None = None  # for parallel preview
 
         # ---- display mode ----
         self._display_mode: Literal["variable_density", "wiggle"] = "variable_density"
@@ -207,33 +213,42 @@ class SectionView(QWidget):
         # Header bar: [section name] [depth-units combo] [VE spinbox] [VE lock]
         self._header = QWidget()
         self._header.setFixedHeight(28)
-        self._header.setStyleSheet("background: #f5f5f5; border-bottom: 1px solid #ddd;")
+        self._header.setStyleSheet(
+            "background: #f5f5f5; border-bottom: 1px solid #ddd; color: #333333;")
         hl = QHBoxLayout(self._header)
         hl.setContentsMargins(8, 2, 8, 2)
         hl.setSpacing(6)
         self._section_name_label = QLabel("— no section —")
-        self._section_name_label.setStyleSheet("color: #444; font-size: 9px;")
+        self._section_name_label.setStyleSheet(
+            "font-size: 10pt; font-weight: bold; color: #333333;")
         hl.addWidget(self._section_name_label)
         hl.addStretch()
 
         # Depth units combo
-        hl.addWidget(QLabel("Units:"))
+        _units_lbl = QLabel("Units:")
+        _units_lbl.setStyleSheet("color: #333333; font-size: 8pt;")
+        hl.addWidget(_units_lbl)
         self._depth_units_combo = QComboBox()
         self._depth_units_combo.setFixedWidth(52)
         self._depth_units_combo.setToolTip("Depth / time axis units")
+        self._depth_units_combo.setStyleSheet("color: #333333; background: #ffffff;")
         for u in _DEPTH_UNITS:
             self._depth_units_combo.addItem(u)
         self._depth_units_combo.currentIndexChanged.connect(self._on_depth_units_changed)
         hl.addWidget(self._depth_units_combo)
 
         # VE spinbox
-        hl.addWidget(QLabel("VE:"))
+        _ve_lbl = QLabel("VE:")
+        _ve_lbl.setStyleSheet("color: #333333; font-size: 8pt;")
+        hl.addWidget(_ve_lbl)
         self._ve_spin = QDoubleSpinBox()
         self._ve_spin.setRange(0.5, 20.0)
         self._ve_spin.setSingleStep(0.5)
         self._ve_spin.setValue(1.0)
         self._ve_spin.setFixedWidth(60)
         self._ve_spin.setDecimals(1)
+        self._ve_spin.setStyleSheet(
+            "color: #333333; background: #ffffff; border: 1px solid #999999; min-width: 60px;")
         self._ve_spin.setToolTip(
             "Vertical exaggeration (1.0 = true scale)\n"
             "Higher values stretch depth axis, steepening apparent dips."
@@ -251,7 +266,8 @@ class SectionView(QWidget):
             "Scroll or click to unlock."
         )
         self._ve_lock_btn.setStyleSheet(
-            "QPushButton { border: 1px solid #bbb; border-radius: 3px; font-size: 11px; }"
+            "QPushButton { border: 1px solid #bbb; border-radius: 3px; font-size: 11px;"
+            " color: #333333; }"
             "QPushButton:checked { background: #d0e8ff; border-color: #5599cc; }"
         )
         self._ve_lock_btn.toggled.connect(
@@ -460,15 +476,32 @@ class SectionView(QWidget):
         """Close and commit the in-progress polygon."""
         if len(self._polygon_vertices) >= 3:
             from cross_section_tool.core.polygons import SectionPolygon
+            pf = self._poly_preflight
+            name = pf.get("name") or f"Polygon {len(self._state.project.polygons) + 1}"
+            color = pf.get("color", "#9467bd")
+            opacity = pf.get("opacity", 0.6)
+            formation = pf.get("formation", "")
             poly = SectionPolygon(
-                self._polygon_vertices,
-                name=f"Polygon {len(self._state.project.polygons) + 1}",
+                vertices=self._polygon_vertices,
+                name=name,
+                fill_color=color,
+                fill_alpha=opacity,
+                formation=formation,
             )
             self._polygon_vertices.clear()
+            self._poly_preflight = {}
             self.polygon_finished.emit(poly)
         else:
             self._polygon_vertices.clear()
+            self._poly_preflight = {}
         self.render()
+
+    def set_polygon_preflight(self, name: str, formation: str,
+                              color: str, opacity: float) -> None:
+        """Store polygon creation settings for use when drawing completes."""
+        self._poly_preflight = dict(
+            name=name, formation=formation, color=color, opacity=opacity
+        )
 
     def clear_seismic_cache(self) -> None:
         self._seismic_cache.clear()
@@ -563,6 +596,7 @@ class SectionView(QWidget):
         self._render_faults(section)          # zorder=7
         self._render_horizons(section)        # zorder=8
         self._render_wells(section)           # zorder=9
+        self._render_construct_preview()      # zorder=12 (before rubber band)
         self._render_rubber_band(section)     # zorder=12
         self._render_snap_indicator()         # zorder=13
         self._render_polygon_in_progress()    # zorder=14
@@ -1064,6 +1098,12 @@ class SectionView(QWidget):
         if len(xs) >= 2:
             self._ax.plot([xs[-1], xs[0]], [ys[-1], ys[0]],
                           "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10)
+        # rubber-band from last vertex to cursor
+        if self._cursor_data is not None and len(self._polygon_vertices) >= 1:
+            lx, ly = self._polygon_vertices[-1]
+            cx, cy = self._cursor_data
+            self._ax.plot([lx, cx], [ly, cy], "--", color="#9467bd",
+                          linewidth=1.0, alpha=0.7, zorder=14)
 
     def _render_rubber_band(self, section: Section) -> None:
         """V-shaped dashed ghost line; shows angle-snap guide when Shift held."""
@@ -1635,9 +1675,13 @@ class SectionView(QWidget):
             return
 
         if event.button == 1 and self._polygon_drawing:
+            is_dbl = getattr(event, "dblclick", False)
             self._polygon_vertices.append((x, y))
             self.polygon_vertex_added.emit(x, y)
-            self.render()
+            if is_dbl and len(self._polygon_vertices) >= 3:
+                self.finish_polygon()
+            else:
+                self.render()
             return
         if event.button == 3 and self._polygon_drawing:
             self.finish_polygon()
@@ -1648,10 +1692,9 @@ class SectionView(QWidget):
             self._place_reference_line(x, y)
             return
 
-        # ---- Phase 3: construct tool stubs ----
+        # ---- Phase 3: construct tools ----
         if event.button == 1 and self._construct_tool:
-            from cross_section_tool.app_state import AppState as _AS
-            self._state.set_active_tool("select")
+            self._handle_construct_click(x, y)
             return
 
         # ---- Phase 3 polish: node hit test has priority in ALL modes ----
@@ -1848,10 +1891,12 @@ class SectionView(QWidget):
                     self.render()
                     return
 
-        # ---- Rubber band / snap / ref-line preview ----
+        # ---- Rubber band / snap / ref-line / polygon / construct preview ----
         if (self._picking_active or self._fault_picking
                 or self._snap_point is not None
-                or self._ref_line_tool == "a_ref"):
+                or self._ref_line_tool == "a_ref"
+                or self._polygon_drawing
+                or self._cst_state != "idle"):
             self.render()
 
     def _on_sv_release(self, event) -> None:
@@ -1898,7 +1943,16 @@ class SectionView(QWidget):
 
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
-            if self._pick_drag:
+            if self._polygon_drawing:
+                self._polygon_vertices.clear()
+                self.set_polygon_drawing(False)
+                return
+            elif self._cst_state != "idle":
+                self._cst_state = "idle"
+                self._cst_source = None
+                self.render()
+                return
+            elif self._pick_drag:
                 self._pick_drag     = False
                 self._pick_copy     = None
                 self._pick_press_px = None
@@ -2115,6 +2169,319 @@ class SectionView(QWidget):
                 self._state.update_fault_pick(_oi, copy.deepcopy(_saved))
         self._state.record_command(f"Delete pick from {hp_before.name}", undo=_undo_del)
 
+    # ------------------------------------------------------------------
+    # Construct tools (extend / trim / parallel) — Phase 4
+    # ------------------------------------------------------------------
+
+    def _handle_construct_click(self, x: float, y: float) -> None:
+        """2-step state machine for extend/trim/parallel tools."""
+        tool = self._construct_tool
+        if tool is None:
+            return
+
+        if self._cst_state == "idle":
+            self._cst_first_click(tool, x, y)
+        elif self._cst_state == "source_selected":
+            self._cst_second_click(tool, x, y)
+            self._cst_state = "idle"
+            self._cst_source = None
+            self._state.set_active_tool("select")
+        self.render()
+
+    def _cst_first_click(self, tool: str, x: float, y: float) -> None:
+        """Select the source object for construct operation."""
+        section = self._state.active_section
+        if section is None:
+            return
+
+        if tool == "extend":
+            hit = self._find_nearest_endpoint_px(x, y)
+            if hit is None:
+                self._flash_hint("Click near the endpoint of a line to extend")
+                return
+            cat, oi, endpoint = hit
+            self._cst_source = {"cat": cat, "idx": oi, "endpoint": endpoint}
+            self._cst_state = "source_selected"
+            self._flash_hint("Now click the target line to extend to")
+
+        elif tool == "trim":
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is None:
+                self._flash_hint("Click on a line to trim")
+                return
+            cat, oi = hit_line
+            self._cst_source = {"cat": cat, "idx": oi, "click_x": x, "click_y": y}
+            self._cst_state = "source_selected"
+            self._flash_hint("Now click the cutting line")
+
+        elif tool == "parallel":
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is None:
+                self._flash_hint("Click on a line to draw parallel to")
+                return
+            cat, oi = hit_line
+            self._cst_source = {"cat": cat, "idx": oi}
+            self._cst_state = "source_selected"
+            self._flash_hint("Click to place the parallel line")
+
+    def _cst_second_click(self, tool: str, x: float, y: float) -> None:
+        """Apply the construct operation."""
+        import copy as _cp
+        section = self._state.active_section
+        if section is None or self._cst_source is None:
+            return
+        sec_name = section.name
+
+        if tool == "extend":
+            src = self._cst_source
+            cat, oi = src["cat"], src["idx"]
+            endpoint = src["endpoint"]
+            picks = (self._state.project.horizon_picks if cat == "Horizons"
+                     else self._state.project.fault_picks)
+            if oi >= len(picks):
+                return
+            hp = picks[oi]
+            sec_idxs = hp.section_indices(sec_name)
+            if len(sec_idxs) < 2:
+                return
+            d_sec = hp._distances[sec_idxs]
+            z_sec = hp._depths[sec_idxs]
+
+            if endpoint == "start":
+                slope = (z_sec[1] - z_sec[0]) / max(d_sec[1] - d_sec[0], 1e-9)
+                origin_d, origin_z = float(d_sec[0]), float(z_sec[0])
+            else:
+                slope = (z_sec[-1] - z_sec[-2]) / max(d_sec[-1] - d_sec[-2], 1e-9)
+                origin_d, origin_z = float(d_sec[-1]), float(z_sec[-1])
+
+            intersect = self._ray_line_intersection(
+                origin_d, origin_z, slope, x, y, sec_name)
+            if intersect is None:
+                self._flash_hint("Lines do not intersect — extension cancelled")
+                return
+            ix, iy = intersect
+            hp2 = _cp.deepcopy(hp)
+            hp2.insert_pick(ix, iy, sec_name)
+            if cat == "Horizons":
+                self._state.update_horizon_pick(oi, hp2)
+            else:
+                self._state.update_fault_pick(oi, hp2)
+
+        elif tool == "trim":
+            src = self._cst_source
+            cat, oi = src["cat"], src["idx"]
+            click_x = src["click_x"]
+            picks = (self._state.project.horizon_picks if cat == "Horizons"
+                     else self._state.project.fault_picks)
+            if oi >= len(picks):
+                return
+            hp = picks[oi]
+            sec_idxs = hp.section_indices(sec_name)
+            d_sec = hp._distances[sec_idxs]
+            z_sec = hp._depths[sec_idxs]
+
+            cut_intersect = self._find_line_intersect_at(x, y, d_sec, z_sec, sec_name)
+            if cut_intersect is None:
+                self._flash_hint("No intersection found — trim cancelled")
+                return
+            ix, _ = cut_intersect
+
+            keep_left = click_x <= ix
+            keep_mask = (d_sec <= ix) if keep_left else (d_sec >= ix)
+            d_keep = d_sec[keep_mask]
+            z_keep = z_sec[keep_mask]
+
+            hp3 = _cp.deepcopy(picks[oi])
+            idxs_to_remove = sorted(sec_idxs, reverse=True)
+            for idx_r in idxs_to_remove:
+                if hp3.n_picks > 1:
+                    for attr in ("_distances", "_depths", "_section_names",
+                                 "_confidence", "_quality", "_note"):
+                        arr = getattr(hp3, attr)
+                        setattr(hp3, attr, np.delete(arr, idx_r))
+            for d, z in zip(d_keep, z_keep):
+                hp3.insert_pick(float(d), float(z), sec_name)
+            z_intersect_approx = float(np.interp(ix, d_sec, z_sec))
+            hp3.insert_pick(ix, z_intersect_approx, sec_name)
+
+            if cat == "Horizons":
+                self._state.update_horizon_pick(oi, hp3)
+            else:
+                self._state.update_fault_pick(oi, hp3)
+
+        elif tool == "parallel":
+            src = self._cst_source
+            cat, oi = src["cat"], src["idx"]
+            picks = (self._state.project.horizon_picks if cat == "Horizons"
+                     else self._state.project.fault_picks)
+            if oi >= len(picks):
+                return
+            hp = picks[oi]
+            sec_idxs = hp.section_indices(sec_name)
+            if len(sec_idxs) < 2:
+                return
+            d_sec = hp._distances[sec_idxs]
+            z_sec = hp._depths[sec_idxs]
+
+            z_at_x = float(np.interp(x, d_sec, z_sec,
+                                     left=float(z_sec[0]), right=float(z_sec[-1])))
+            offset = y - z_at_x
+
+            new_z = z_sec + offset
+            hp_new = HorizonPick(
+                distances=d_sec.copy(),
+                depths=new_z.copy(),
+                name=f"{hp.name} (parallel)",
+                color=hp.color,
+                section_names=[sec_name] * len(d_sec),
+            )
+            self._state.add_horizon_pick(hp_new)
+
+    def _find_nearest_endpoint_px(self, x: float, y: float) -> tuple | None:
+        """Find the nearest START or END pick point within _PICK_HIT_PX * 1.5 pixels."""
+        section = self._state.active_section
+        if section is None:
+            return None
+        sec_name = section.name
+        threshold = _PICK_HIT_PX * 1.5
+        ex, ey = self._to_screen_px_sv(x, y)
+        best, best_dist = None, float("inf")
+
+        for cat, picks in [("Horizons", self._state.project.horizon_picks),
+                            ("Faults", self._state.project.fault_picks)]:
+            for oi, hp in enumerate(picks):
+                sec_idxs = hp.section_indices(sec_name)
+                if len(sec_idxs) < 1:
+                    continue
+                for endpoint, fi in [("start", sec_idxs[0]), ("end", sec_idxs[-1])]:
+                    d = float(hp._distances[fi])
+                    z = float(hp._depths[fi])
+                    nx, ny = self._to_screen_px_sv(d, z)
+                    dist = math.hypot(ex - nx, ey - ny)
+                    if dist <= threshold and dist < best_dist:
+                        best_dist = dist
+                        best = (cat, oi, endpoint)
+        return best
+
+    def _ray_line_intersection(self, ox: float, oz: float, slope: float,
+                               target_x: float, target_y: float,
+                               sec_name: str) -> tuple | None:
+        """Find where the ray from (ox,oz) with slope intersects any pick line near target."""
+        section = self._state.active_section
+        if section is None:
+            return None
+        total = section.total_length()
+
+        hit_line = self._find_nearest_pick_line(target_x, target_y)
+        if hit_line is None:
+            return None
+
+        cat, oi = hit_line
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        hp = picks[oi]
+        sec_idxs = hp.section_indices(sec_name)
+        if len(sec_idxs) < 2:
+            return None
+        d_sec = hp._distances[sec_idxs]
+        z_sec = hp._depths[sec_idxs]
+
+        for i in range(len(d_sec) - 1):
+            d0, z0 = float(d_sec[i]), float(z_sec[i])
+            d1, z1 = float(d_sec[i+1]), float(z_sec[i+1])
+            dd = d1 - d0; dz = z1 - z0
+            denom = slope * dd - dz
+            if abs(denom) < 1e-9:
+                continue
+            s = (z0 - oz - slope * d0 + slope * ox) / denom
+            if not (0.0 <= s <= 1.0):
+                continue
+            t = d0 - ox + s * dd
+            ix = ox + t
+            iz = oz + slope * t
+            if 0 <= ix <= total:
+                return (ix, iz)
+        return None
+
+    def _find_line_intersect_at(self, x: float, y: float,
+                                d_sec: np.ndarray, z_sec: np.ndarray,
+                                sec_name: str) -> tuple | None:
+        """Find intersection of any pick line near (x,y) with the source line."""
+        hit = self._find_nearest_pick_line(x, y)
+        if hit is None:
+            return None
+        cat2, oi2 = hit
+        picks2 = (self._state.project.horizon_picks if cat2 == "Horizons"
+                  else self._state.project.fault_picks)
+        hp2 = picks2[oi2]
+        sec_idxs2 = hp2.section_indices(sec_name)
+        if len(sec_idxs2) < 2:
+            return None
+        d2 = hp2._distances[sec_idxs2]
+        z2 = hp2._depths[sec_idxs2]
+
+        for i in range(len(d_sec) - 1):
+            for j in range(len(d2) - 1):
+                p = _seg_intersect(
+                    d_sec[i], z_sec[i], d_sec[i+1], z_sec[i+1],
+                    d2[j], z2[j], d2[j+1], z2[j+1],
+                )
+                if p is not None:
+                    return p
+        return None
+
+    def _render_construct_preview(self) -> None:
+        if self._cst_state == "idle" or self._cst_source is None:
+            return
+        tool = self._construct_tool
+        section = self._state.active_section
+        if section is None or tool not in ("extend", "trim", "parallel"):
+            return
+        sec_name = section.name
+        src = self._cst_source
+        cat, oi = src.get("cat"), src.get("idx")
+        if cat is None or oi is None:
+            return
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if oi >= len(picks):
+            return
+        hp = picks[oi]
+        sec_idxs = hp.section_indices(sec_name)
+        if len(sec_idxs) < 2:
+            return
+        d_sec = hp._distances[sec_idxs]
+        z_sec = hp._depths[sec_idxs]
+
+        self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12)
+
+        if tool == "extend" and self._cursor_data is not None:
+            endpoint = src.get("endpoint", "end")
+            cx, cy = self._cursor_data
+            if endpoint == "start":
+                ox, oz = float(d_sec[0]), float(z_sec[0])
+            else:
+                ox, oz = float(d_sec[-1]), float(z_sec[-1])
+            self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
+                          lw=1.5, alpha=0.7, zorder=12)
+
+        elif tool == "parallel" and self._cursor_data is not None:
+            cx, cy = self._cursor_data
+            z_at_cx = float(np.interp(cx, d_sec, z_sec,
+                                      left=float(z_sec[0]), right=float(z_sec[-1])))
+            offset = cy - z_at_cx
+            self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
+                          lw=1.5, alpha=0.6, zorder=12)
+
+    def _flash_hint(self, msg: str) -> None:
+        """Show a brief status hint via the parent window's status bar."""
+        try:
+            w = self.window()
+            if hasattr(w, '_status_label'):
+                w._status_label.setText(msg)
+        except Exception:
+            pass
+
     def _undo_last_delete(self) -> None:
         """Phase 1: restore the last deleted pick point."""
         u = self._last_delete_for_undo
@@ -2137,6 +2504,20 @@ class SectionView(QWidget):
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+
+def _seg_intersect(ax, ay, bx, by, cx, cy, dx, dy):
+    """Return intersection point of segment AB and CD, or None."""
+    dab_x, dab_y = bx - ax, by - ay
+    dcd_x, dcd_y = dx - cx, dy - cy
+    denom = dab_x * dcd_y - dab_y * dcd_x
+    if abs(denom) < 1e-9:
+        return None
+    t = ((cx - ax) * dcd_y - (cy - ay) * dcd_x) / denom
+    u = ((cx - ax) * dab_y - (cy - ay) * dab_x) / denom
+    if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+        return (ax + t * dab_x, ay + t * dab_y)
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Lithology pattern → matplotlib hatch mapping (Phase D)

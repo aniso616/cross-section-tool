@@ -27,7 +27,7 @@ def _sep_label(text: str) -> QLabel:
     font.setPointSize(10)
     lbl.setFont(font)
     lbl.setStyleSheet(
-        "margin-top: 12px; margin-bottom: 2px; "
+        "color: #222222; margin-top: 12px; margin-bottom: 2px; "
         "border-bottom: 1px solid #555; padding-bottom: 3px;"
     )
     return lbl
@@ -36,9 +36,10 @@ def _sep_label(text: str) -> QLabel:
 def _val_label(text: str) -> QLabel:
     if not text or not str(text).strip():
         lbl = QLabel("—")
-        lbl.setStyleSheet("color: #999; font-style: italic;")
+        lbl.setStyleSheet("color: #666666; font-style: italic;")
     else:
         lbl = QLabel(str(text))
+        lbl.setStyleSheet("color: #222222;")
     return lbl
 
 

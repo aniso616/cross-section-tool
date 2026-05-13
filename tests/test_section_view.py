@@ -439,3 +439,70 @@ class TestWiggleRendering:
         view._render_wiggle(distances, data, samples)
         # Should have added lines
         assert len(view.axes.lines) > 0
+
+
+# ---------------------------------------------------------------------------
+# Polygon preflight
+# ---------------------------------------------------------------------------
+
+class TestPolygonPreflight:
+    def test_polygon_finish_preflight(self, view, state):
+        """Polygon creation uses preflight settings."""
+        view.set_polygon_preflight(
+            name="TestPoly", formation="Sand",
+            color="#ff0000", opacity=0.5
+        )
+        # Simulate adding vertices then finishing
+        view._polygon_drawing = True
+        view._polygon_vertices = [(100, 200), (500, 200), (300, 400)]
+        # polygon_finished signal emits to state.add_polygon
+        state.polygon_added.connect(lambda p: None)  # ensure signal exists
+        received = []
+        view.polygon_finished.connect(lambda p: received.append(p))
+        view.finish_polygon()
+        assert len(received) == 1
+        p = received[0]
+        assert p.name == "TestPoly"
+        assert p.fill_color == "#ff0000"
+        assert p.fill_alpha == 0.5
+        assert p.formation == "Sand"
+
+    def test_preflight_cleared_after_finish(self, view):
+        """Preflight dict is cleared after polygon finishes."""
+        view.set_polygon_preflight(name="X", formation="", color="#aabbcc", opacity=0.7)
+        view._polygon_drawing = True
+        view._polygon_vertices = [(0, 0), (100, 0), (50, 100)]
+        view.finish_polygon()
+        assert view._poly_preflight == {}
+
+    def test_finish_too_few_vertices(self, view):
+        """finish_polygon with < 3 vertices clears without emitting."""
+        view.set_polygon_preflight(name="Short", formation="", color="#000000", opacity=1.0)
+        view._polygon_drawing = True
+        view._polygon_vertices = [(0, 0), (100, 0)]
+        received = []
+        view.polygon_finished.connect(lambda p: received.append(p))
+        view.finish_polygon()
+        assert len(received) == 0
+        assert view._poly_preflight == {}
+
+
+# ---------------------------------------------------------------------------
+# Segment intersection helper
+# ---------------------------------------------------------------------------
+
+class TestSegIntersect:
+    def test_crossing_segments(self):
+        from cross_section_tool.views.section_view import _seg_intersect
+        p = _seg_intersect(0, 0, 10, 0, 5, -5, 5, 5)  # horizontal meets vertical
+        assert p is not None
+        assert abs(p[0] - 5.0) < 0.01
+        assert abs(p[1] - 0.0) < 0.01
+
+    def test_non_intersecting(self):
+        from cross_section_tool.views.section_view import _seg_intersect
+        assert _seg_intersect(0, 0, 5, 0, 6, -5, 6, 5) is None  # no overlap
+
+    def test_parallel_segments(self):
+        from cross_section_tool.views.section_view import _seg_intersect
+        assert _seg_intersect(0, 0, 10, 0, 0, 5, 10, 5) is None  # parallel horizontal
