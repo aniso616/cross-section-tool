@@ -788,37 +788,44 @@ class SectionView(QWidget):
                           color="#555", zorder=9)
 
     def _render_intersections(self, section) -> None:
-        """Render intersection diamonds from the live topology graph."""
+        """Render topology intersection markers as display-only overlays.
+
+        These are purely visual — they are NEVER pick nodes and cannot
+        be selected or moved.  They render as small cyan crosshairs that
+        are visually distinct from all pick-node shapes.
+        """
         topo = self._state.topology
         if topo is None or topo.section_name != section.name:
             return
-        pts = topo.get_snap_targets()
-        if not pts:
+        # Only show non-boundary intersections (horizon×fault, etc.)
+        ipts = [p for p in topo.intersections
+                if "boundary" not in p.type]
+        if not ipts:
             return
         xl, xr = self._ax.get_xlim()
         yl = self._ax.get_ylim()
         y_lo, y_hi = min(yl), max(yl)
-        # Convert 5px to data units for diamond half-size
+        # 7px crosshair in data units
         try:
             inv = self._ax.transData.inverted()
             p0 = inv.transform([0, 0])
-            p1 = inv.transform([5, 5])
+            p1 = inv.transform([7, 7])
             hw = abs(float(p1[0]) - float(p0[0]))
             hh = abs(float(p1[1]) - float(p0[1]))
         except Exception:
-            hw = hh = (xr - xl) * 0.005
-        for sx, sy in pts:
+            hw = hh = (xr - xl) * 0.007
+        for pt in ipts:
+            sx, sy = pt.x, pt.y
             if not (xl <= sx <= xr and y_lo <= sy <= y_hi):
                 continue
-            self._ax.plot(
-                [sx, sx + hw, sx, sx - hw, sx],
-                [sy - hh, sy, sy + hh, sy, sy - hh],
-                color="#555555", linewidth=0.8, zorder=10,
-            )
-            self._ax.plot(sx, sy, "D",
-                          markersize=6, markerfacecolor="#dddddd",
-                          markeredgecolor="#444444", markeredgewidth=0.8,
-                          zorder=10)
+            # Horizontal bar of crosshair
+            self._ax.plot([sx - hw, sx + hw], [sy, sy],
+                          color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round")
+            # Vertical bar of crosshair
+            self._ax.plot([sx, sx], [sy - hh, sy + hh],
+                          color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round")
+            # Tooltip-style annotation (only when very few intersections)
+            # (left out to avoid clutter)
 
     def _render_snap_indicator(self) -> None:
         """Magenta diamond at snapped cursor position."""

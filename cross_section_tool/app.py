@@ -1277,6 +1277,7 @@ class MainWindow(QMainWindow):
 
     def _on_generate_polygons(self) -> None:
         """Detect closed regions via live topology and import as polygons."""
+        import traceback as _tb
         section = self._state.active_section
         if section is None:
             QMessageBox.information(self, "No Section",
@@ -1285,15 +1286,34 @@ class MainWindow(QMainWindow):
         from cross_section_tool.core.polygons import SectionPolygon
         import numpy as np
 
-        # Prefer topology graph if available; fall back to polygon_detection module
+        # Diagnostics (printed to terminal for debugging)
         topo = self._state.topology
+        print(f"[Generate Polygons] section={section.name!r}  "
+              f"topology={'OK' if topo else 'None'}")
+        if topo:
+            user_lines = [k for k in topo._lines if not k.startswith("__")]
+            print(f"  topology lines={user_lines}")
+            print(f"  intersections={len(topo.intersections)}")
+
+        polys = []
+        topo_error = None
+
+        # Try topology-based generation first
         if topo is not None and topo.section_name == section.name:
             try:
                 polys = topo.get_all_faces()
+                print(f"  topology faces={len(polys)}")
+                for i, p in enumerate(polys):
+                    print(f"    face {i}: area={p.area:.0f}  bounds={p.bounds}")
             except Exception as exc:
-                QMessageBox.critical(self, "Detection Error", str(exc))
-                return
-        else:
+                topo_error = exc
+                print(f"  topology.get_all_faces() FAILED: {exc}")
+                _tb.print_exc()
+
+        # Fallback to standalone polygon_detection if topology produced nothing
+        if not polys:
+            if topo_error is not None:
+                print("  Falling back to polygon_detection module")
             from cross_section_tool.core.polygon_detection import detect_polygons
             try:
                 polys = detect_polygons(
@@ -1303,15 +1323,23 @@ class MainWindow(QMainWindow):
                     section,
                     section_name=section.name,
                 )
+                print(f"  fallback found {len(polys)} polygons")
             except Exception as exc:
-                QMessageBox.critical(self, "Detection Error", str(exc))
+                print(f"  fallback FAILED: {exc}")
+                _tb.print_exc()
+                QMessageBox.critical(self, "Detection Error",
+                                     f"Polygon detection failed:\n{exc}")
                 return
 
         if not polys:
+            detail = ""
+            if topo is not None:
+                user_lines = [k for k in topo._lines if not k.startswith("__")]
+                detail = (f"\n\nTopology has {len(user_lines)} line(s). "
+                          "Ensure each horizon has at least 2 picks on this section "
+                          "and extends across the full width.")
             QMessageBox.information(self, "No Polygons Found",
-                                    "No closed regions were detected.\n\n"
-                                    "Make sure horizons or faults cross each other "
-                                    "or reach the section edges.")
+                                    "No closed regions were detected." + detail)
             return
 
         reply = QMessageBox.question(

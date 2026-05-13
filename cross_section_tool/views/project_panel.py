@@ -286,6 +286,8 @@ class ProjectPanel(QDockWidget):
         s.reference_line_added.connect(lambda _: self._rebuild())
         s.reference_line_removed.connect(lambda _: self._rebuild())
         s.reference_line_modified.connect(lambda *_: self._rebuild())
+        # Update Add button label when active tool changes
+        s.tool_changed.connect(self._update_add_btn_label)
         # Emit pick-target when user clicks a tree item
         self._tree.itemClicked.connect(self._on_item_clicked)
 
@@ -485,9 +487,37 @@ class ProjectPanel(QDockWidget):
             row.set_name(new_name.strip())
             self.object_renamed.emit(cat, idx, new_name.strip())
 
+    def _update_add_btn_label(self, tool: str) -> None:
+        """Update the + Add button label to reflect what it will create."""
+        labels = {
+            "horizon_pick": "+ Horizon",
+            "fault_pick":   "+ Fault",
+            "polygon":      "+ Polygon",
+        }
+        self._add_btn.setText(labels.get(tool, "+ Add"))
+
     def _on_add_clicked(self) -> None:
-        cat = self._selected_category() or "Sections"
-        self.add_requested.emit(cat)
+        """Context-sensitive add: active pick tool > tree selection > fallback."""
+        # Priority 1: active pick tool determines what to add
+        tool = self._state.active_tool
+        if tool == "horizon_pick":
+            self.add_requested.emit("Horizons")
+            return
+        if tool == "fault_pick":
+            self.add_requested.emit("Faults")
+            return
+        if tool == "polygon":
+            self.add_requested.emit("Polygons")
+            return
+
+        # Priority 2: selected category in the tree
+        cat = self._selected_category()
+        if cat:
+            self.add_requested.emit(cat)
+            return
+
+        # Fallback: add a section (the most neutral default)
+        self.add_requested.emit("Sections")
 
     # ------------------------------------------------------------------
     # Public helpers

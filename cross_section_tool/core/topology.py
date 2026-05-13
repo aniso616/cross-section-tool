@@ -110,8 +110,9 @@ class SectionTopology:
                 if p.line_a == name or p.line_b == name]
 
     def get_snap_targets(self) -> List[tuple[float, float]]:
-        """All intersection coordinates — used as snap targets during editing."""
-        return [(p.x, p.y) for p in self.intersections]
+        """Interior (non-boundary) intersection coordinates — snap targets during editing."""
+        return [(p.x, p.y) for p in self.intersections
+                if "boundary" not in p.type]
 
     # ------------------------------------------------------------------
     # Face detection
