@@ -4,7 +4,7 @@ import sys
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QSplitter, QTabWidget
+from PySide6.QtWidgets import QApplication, QDockWidget, QSplitter, QTabWidget
 
 from cross_section_tool.app import MainWindow
 from cross_section_tool.app_state import AppState
@@ -62,21 +62,20 @@ class TestConstruction:
     def test_has_viewer_3d(self, win):
         assert isinstance(win._viewer_3d, Viewer3D)
 
-    def test_has_splitter(self, win):
-        assert isinstance(win._splitter, QSplitter)
+    def test_has_map_dock(self, win):
+        assert isinstance(win._map_dock, QDockWidget)
+        assert win._map_dock.objectName() == "MapDock"
+
+    def test_has_section_dock(self, win):
+        assert isinstance(win._section_dock, QDockWidget)
+        assert win._section_dock.objectName() == "SectionDock"
+
+    def test_has_view3d_dock(self, win):
+        assert isinstance(win._view3d_dock, QDockWidget)
+        assert win._view3d_dock.objectName() == "View3DDock"
 
     def test_has_tool_palette(self, win):
         assert isinstance(win._tool_palette, ToolPalette)
-
-    def test_has_tab_widget(self, win):
-        assert isinstance(win._tabs, QTabWidget)
-
-    def test_tabs_have_two_entries(self, win):
-        assert win._tabs.count() == 2
-
-    def test_tab_labels(self, win):
-        assert win._tabs.tabText(0) == "Section"
-        assert win._tabs.tabText(1) == "3D View"
 
     def test_state_shared(self, win, state):
         assert win._state is state

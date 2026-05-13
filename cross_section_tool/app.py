@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QSettings
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -21,6 +22,18 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# ---------------------------------------------------------------------------
+# Geological colour palettes — auto-assigned on new horizon/fault (Phase 3)
+# ---------------------------------------------------------------------------
+_HORIZON_COLORS = [
+    "#4169E1", "#228B22", "#FF8C00", "#B22222", "#9467BD",
+    "#17BEBB", "#FFD700", "#2CA02C", "#1F77B4", "#FF7F0E",
+    "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF", "#D62728",
+]
+_FAULT_COLORS = [
+    "#DC1414", "#B22222", "#FF4500", "#8B0000", "#CD5C5C", "#E9967A",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +110,14 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._update_status()
         self.resize(1280, 800)
+        # Restore saved layout if available
+        _s = QSettings("Geoscience", "CrossSectionTool")
+        _geom = _s.value("window/geometry")
+        _state = _s.value("window/state")
+        if _geom is not None:
+            self.restoreGeometry(_geom)
+        if _state is not None:
+            self.restoreState(_state)
 
     # ------------------------------------------------------------------
     # Setup
@@ -105,43 +126,24 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         self.setWindowTitle(self.APP_NAME)
 
+        # Allow panels to be tiled, tabbed, and floated freely
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+        )
+
         # ── Views ─────────────────────────────────────────────────────────────
         self._map_view     = MapView(self._state, self)
         self._section_view = SectionView(self._state, self)
         self._viewer_3d    = Viewer3D(self._state, self)
 
-        # ── Section / 3D tab panel ────────────────────────────────────────────
-        self._tabs = QTabWidget()
-        self._tabs.addTab(self._section_view, "Section")
-        self._tabs.addTab(self._viewer_3d,    "3D View")
+        # ── Minimal central widget — dock widgets fill all usable space ────────
+        _central = QWidget()
+        _central.setMaximumSize(0, 0)
+        self.setCentralWidget(_central)
 
-        # ── Map panel with collapse strip ─────────────────────────────────────
-        self._map_view.setMinimumWidth(0)
-        self._map_view.setMinimumHeight(300)
-        self._map_collapse_strip = _CollapseStrip(self)
-        self._map_collapse_strip.clicked.connect(self._toggle_map_panel)
-        self._map_collapse_strip.setToolTip("Collapse / expand map  (Ctrl+2)")
-        self._map_panel_collapsed = False
-        self._map_panel_width     = 360
-
-        map_container = QWidget()
-        _mh = QHBoxLayout(map_container)
-        _mh.setContentsMargins(0, 0, 0, 0)
-        _mh.setSpacing(0)
-        _mh.addWidget(self._map_view, stretch=1)
-        _mh.addWidget(self._map_collapse_strip)
-
-        # ── Central widget: horizontal splitter (map | section/3D) ───────────
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(map_container)
-        self._splitter.addWidget(self._tabs)
-        self._splitter.setSizes([360, 960])
-        self._splitter.setStretchFactor(0, 0)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setHandleWidth(5)
-        self.setCentralWidget(self._splitter)
-
-        # ── Tool palette — QToolBar docked LEFT, not movable ─────────────────
+        # ── Tool palette — fixed QToolBar on left edge, never floats ──────────
         self._tool_palette = ToolPalette()
         self._tool_tb = QToolBar("Tools")
         self._tool_tb.setObjectName("ToolPaletteTB")
@@ -158,28 +160,53 @@ class MainWindow(QMainWindow):
         # ── Options bar — full-width QToolBar below main toolbar ──────────────
         self._build_options_bar()
 
-        # ── Project panel (RIGHT dock, top half) ──────────────────────────────
-        self._project_panel = ProjectPanel(self._state, self)
-        self._project_panel.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-            | Qt.DockWidgetArea.RightDockWidgetArea
+        # ── Map dock ──────────────────────────────────────────────────────────
+        self._map_dock = QDockWidget("Map", self)
+        self._map_dock.setObjectName("MapDock")
+        self._map_dock.setWidget(self._map_view)
+        self._map_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._map_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
-                           self._project_panel)
+
+        # ── Section dock ──────────────────────────────────────────────────────
+        self._section_dock = QDockWidget("Section", self)
+        self._section_dock.setObjectName("SectionDock")
+        self._section_dock.setWidget(self._section_view)
+        self._section_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._section_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+
+        # ── 3D View dock ──────────────────────────────────────────────────────
+        self._view3d_dock = QDockWidget("3D View", self)
+        self._view3d_dock.setObjectName("View3DDock")
+        self._view3d_dock.setWidget(self._viewer_3d)
+        self._view3d_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._view3d_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+
+        # ── Project panel ─────────────────────────────────────────────────────
+        self._project_panel = ProjectPanel(self._state, self)
+        self._project_panel.setObjectName("ProjectDock")
+        self._project_panel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self._setup_project_panel_title_bar()
 
-        # ── Properties panel (RIGHT dock, bottom half) ────────────────────────
+        # ── Properties panel ──────────────────────────────────────────────────
         from cross_section_tool.views.properties_panel import PropertiesPanel
         self._properties_panel = PropertiesPanel(self._state, self)
-        self._properties_panel.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-            | Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
-                           self._properties_panel)
-        # Stack them vertically in the right dock area
-        self.splitDockWidget(self._project_panel, self._properties_panel,
-                             Qt.Orientation.Vertical)
+        self._properties_panel.setObjectName("PropertiesDock")
+        self._properties_panel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+
+        # ── Apply default dock layout ─────────────────────────────────────────
+        self._apply_default_dock_layout()
 
         # ── Status bar ────────────────────────────────────────────────────────
         self.statusBar().setStyleSheet(
@@ -191,6 +218,33 @@ class MainWindow(QMainWindow):
         self._hint_label = QLabel("")
         self._hint_label.setStyleSheet("color: #888; font-style: italic;")
         self.statusBar().addPermanentWidget(self._hint_label)
+
+    def _apply_default_dock_layout(self) -> None:
+        """Establish the default dock arrangement (Map/Project/Props left, Section right)."""
+        # Left column: Map on top, Project in middle, Properties at bottom
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._map_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._project_panel)
+        self.splitDockWidget(self._map_dock, self._project_panel,
+                             Qt.Orientation.Vertical)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._properties_panel)
+        self.splitDockWidget(self._project_panel, self._properties_panel,
+                             Qt.Orientation.Vertical)
+        # Right area: Section primary, 3D View tabbed behind it
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._section_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._view3d_dock)
+        self.tabifyDockWidget(self._section_dock, self._view3d_dock)
+        self._section_dock.raise_()
+        # Default left-column width
+        self.resizeDocks([self._map_dock], [400], Qt.Orientation.Horizontal)
+
+    def _reset_layout(self) -> None:
+        """Restore the default dock arrangement and clear saved state."""
+        settings = QSettings("Geoscience", "CrossSectionTool")
+        settings.remove("window/state")
+        for dock in (self._map_dock, self._section_dock, self._view3d_dock,
+                     self._project_panel, self._properties_panel):
+            dock.setFloating(False)
+        self._apply_default_dock_layout()
 
     def _build_options_bar(self) -> None:
         """Phase 3 — full-width context-sensitive options bar (top QToolBar)."""
@@ -336,21 +390,23 @@ class MainWindow(QMainWindow):
         # View
         # ================================================================
         view_menu = mb.addMenu("&View")
-        # Panel toggles
-        self._view_project_action = QAction("Project Panel", self)
-        self._view_project_action.setCheckable(True)
-        self._view_project_action.setChecked(True)
-        self._view_project_action.setShortcut(QKeySequence("Ctrl+4"))
-        self._view_project_action.toggled.connect(
-            lambda v: self._project_panel.setVisible(v))
-        view_menu.addAction(self._view_project_action)
-        self._view_props_action = QAction("Properties Panel", self)
-        self._view_props_action.setCheckable(True)
-        self._view_props_action.setChecked(True)
-        self._view_props_action.setShortcut(QKeySequence("Ctrl+5"))
-        self._view_props_action.toggled.connect(
-            lambda v: self._properties_panel.setVisible(v))
-        view_menu.addAction(self._view_props_action)
+        # Dock panel toggles — each QDockWidget provides a ready-made checkable action
+        _map_ta = self._map_dock.toggleViewAction()
+        _map_ta.setShortcut(QKeySequence("Ctrl+2"))
+        view_menu.addAction(_map_ta)
+        _sec_ta = self._section_dock.toggleViewAction()
+        _sec_ta.setShortcut(QKeySequence("Ctrl+3"))
+        view_menu.addAction(_sec_ta)
+        view_menu.addAction(self._view3d_dock.toggleViewAction())
+        view_menu.addSeparator()
+        _proj_ta = self._project_panel.toggleViewAction()
+        _proj_ta.setShortcut(QKeySequence("Ctrl+1"))
+        view_menu.addAction(_proj_ta)
+        view_menu.addAction(self._properties_panel.toggleViewAction())
+        view_menu.addSeparator()
+        reset_layout_a = QAction("&Reset Layout", self)
+        reset_layout_a.triggered.connect(self._reset_layout)
+        view_menu.addAction(reset_layout_a)
         view_menu.addSeparator()
         zfit_a = QAction("Zoom to &Fit", self)
         zfit_a.setShortcut(QKeySequence("Ctrl+0"))
@@ -391,6 +447,12 @@ class MainWindow(QMainWindow):
         ew_action = QAction("New Section (east–west default)", self)
         ew_action.triggered.connect(self._on_new_section)
         section_menu.addAction(ew_action)
+        ns_action = QAction("New Section (north–south)…", self)
+        ns_action.triggered.connect(self._on_new_section_ns)
+        section_menu.addAction(ns_action)
+        ud_action = QAction("New Section (user defined)…", self)
+        ud_action.triggered.connect(self._on_new_section_user_defined)
+        section_menu.addAction(ud_action)
         section_menu.addSeparator()
         self._gen_polygons_action = QAction("Generate Polygons From Boundaries…", self)
         self._gen_polygons_action.triggered.connect(self._on_generate_polygons)
@@ -602,13 +664,17 @@ class MainWindow(QMainWindow):
         sc_redo.setContext(Qt.ShortcutContext.ApplicationShortcut)
         sc_redo.activated.connect(self._state.redo)
 
-        # Panel toggle shortcuts
+        # Panel toggle shortcuts — dock widgets already have shortcuts via View menu,
+        # these QShortcuts provide application-wide coverage (catches focus anywhere)
         sc1 = QShortcut(QKeySequence("Ctrl+1"), self)
+        sc1.setContext(Qt.ShortcutContext.ApplicationShortcut)
         sc1.activated.connect(self._project_panel.toggleViewAction().trigger)
         sc2 = QShortcut(QKeySequence("Ctrl+2"), self)
-        sc2.activated.connect(self._toggle_map_panel)
+        sc2.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc2.activated.connect(self._map_dock.toggleViewAction().trigger)
         sc3 = QShortcut(QKeySequence("Ctrl+3"), self)
-        sc3.activated.connect(self._toggle_section_panel)
+        sc3.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc3.activated.connect(self._section_dock.toggleViewAction().trigger)
         # Initial tool availability pass
         self._update_tool_availability()
 
@@ -908,6 +974,102 @@ class MainWindow(QMainWindow):
             f"Imported {added} new well(s), tops merged into existing wells."
         )
 
+    def _on_new_section_ns(self) -> None:
+        """New north–south section via dialog."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QDoubleSpinBox
+        dlg = QDialog(self); dlg.setWindowTitle("New North-South Section")
+        fl = QFormLayout(dlg)
+        existing = self._state.project.sections
+        x0_default = float(existing[-1].nodes[0, 0]) if existing else 0.0
+        y0_default = float(existing[-1].nodes[0, 1]) if existing else 0.0
+        easting_spin = QDoubleSpinBox(); easting_spin.setRange(-1e8, 1e8)
+        easting_spin.setValue(x0_default); easting_spin.setDecimals(1)
+        length_spin = QDoubleSpinBox(); length_spin.setRange(100, 1e7)
+        length_spin.setValue(10_000.0); length_spin.setDecimals(0)
+        center_n_spin = QDoubleSpinBox(); center_n_spin.setRange(-1e8, 1e8)
+        center_n_spin.setValue(y0_default); center_n_spin.setDecimals(1)
+        fl.addRow("Easting (X):", easting_spin)
+        fl.addRow("Center Northing (Y):", center_n_spin)
+        fl.addRow("Length (m):", length_spin)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        fl.addRow(bb)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        x = easting_spin.value(); L = length_spin.value(); cy = center_n_spin.value()
+        sec = Section(
+            [(x, cy - L / 2), (x, cy + L / 2)],
+            name=f"Section {len(existing) + 1}",
+            crs_epsg=self._state.project.crs_epsg,
+        )
+        self._state.add_section(sec)
+        self._state.set_active_section(sec)
+
+    def _on_new_section_user_defined(self) -> None:
+        """New section with user-specified azimuth, length, and origin."""
+        import math
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QFormLayout, QDoubleSpinBox,
+            QGroupBox, QRadioButton, QVBoxLayout,
+        )
+        dlg = QDialog(self); dlg.setWindowTitle("New User-Defined Section")
+        main_vb = QVBoxLayout(dlg)
+
+        # Parameters
+        param_grp = QGroupBox("Section geometry")
+        pfl = QFormLayout(param_grp)
+        az_spin = QDoubleSpinBox(); az_spin.setRange(0, 360); az_spin.setValue(90)
+        az_spin.setDecimals(1); az_spin.setSuffix("°")
+        len_spin = QDoubleSpinBox(); len_spin.setRange(100, 1e7)
+        len_spin.setValue(10_000.0); len_spin.setDecimals(0); len_spin.setSuffix(" m")
+        pfl.addRow("Azimuth (from N):", az_spin)
+        pfl.addRow("Length:", len_spin)
+        main_vb.addWidget(param_grp)
+
+        # Origin mode
+        orig_grp = QGroupBox("Origin")
+        ovb = QVBoxLayout(orig_grp)
+        rb_center = QRadioButton("Center point (section extends half-length each way)")
+        rb_start  = QRadioButton("Start point (section extends full length along azimuth)")
+        rb_center.setChecked(True)
+        ovb.addWidget(rb_center); ovb.addWidget(rb_start)
+        ofl = QFormLayout()
+        x_spin = QDoubleSpinBox(); x_spin.setRange(-1e8, 1e8); x_spin.setDecimals(1)
+        y_spin = QDoubleSpinBox(); y_spin.setRange(-1e8, 1e8); y_spin.setDecimals(1)
+        existing = self._state.project.sections
+        if existing:
+            x_spin.setValue(float(existing[-1].nodes[0, 0]))
+            y_spin.setValue(float(existing[-1].nodes[0, 1]))
+        ofl.addRow("X (Easting):", x_spin)
+        ofl.addRow("Y (Northing):", y_spin)
+        ovb.addLayout(ofl)
+        main_vb.addWidget(orig_grp)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject)
+        main_vb.addWidget(bb)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+
+        az_rad = math.radians(az_spin.value())
+        dx = math.sin(az_rad) * len_spin.value()
+        dy = math.cos(az_rad) * len_spin.value()
+        ox, oy = x_spin.value(), y_spin.value()
+        if rb_center.isChecked():
+            x0, y0 = ox - dx / 2, oy - dy / 2
+            x1, y1 = ox + dx / 2, oy + dy / 2
+        else:
+            x0, y0, x1, y1 = ox, oy, ox + dx, oy + dy
+        sec = Section(
+            [(x0, y0), (x1, y1)],
+            name=f"Section {len(existing) + 1}",
+            crs_epsg=self._state.project.crs_epsg,
+        )
+        self._state.add_section(sec)
+        self._state.set_active_section(sec)
+
     def _on_new_section(self) -> None:
         """Add a simple 10-km east–west section centred on existing data."""
         existing = self._state.project.sections
@@ -1094,8 +1256,9 @@ class MainWindow(QMainWindow):
     def _add_new_horizon(self) -> None:
         from cross_section_tool.views.horizon_dialog import HorizonDialog
         from cross_section_tool.core.surfaces import HorizonPick
-        default_name = f"Horizon {len(self._state.project.horizon_picks) + 1}"
-        dlg = HorizonDialog(self, name=default_name)
+        n = len(self._state.project.horizon_picks) + 1
+        default_name = f"Horizon {n}"
+        dlg = HorizonDialog(self, name=default_name, color=self._next_horizon_color())
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
             return
         hp = HorizonPick.empty(name=dlg.name, color=dlg.color)
@@ -1248,8 +1411,9 @@ class MainWindow(QMainWindow):
     def _add_new_fault(self) -> None:
         from cross_section_tool.views.fault_dialog import FaultDialog
         from cross_section_tool.core.surfaces import HorizonPick
-        default_name = f"Fault {len(self._state.project.fault_picks) + 1}"
-        dlg = FaultDialog(self, name=default_name)
+        n = len(self._state.project.fault_picks) + 1
+        default_name = f"Fault {n}"
+        dlg = FaultDialog(self, name=default_name, color=self._next_fault_color())
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
             return
         fp = HorizonPick.empty(name=dlg.name, color=dlg.color)
@@ -1301,30 +1465,12 @@ class MainWindow(QMainWindow):
         self._state.update_fault_pick(index, fp2)
 
     def _toggle_map_panel(self) -> None:
-        """Collapse / expand the map panel."""
-        sizes = self._splitter.sizes()
-        if self._map_panel_collapsed:
-            # Restore: show map view again
-            self._map_view.show()
-            self._splitter.setSizes([self._map_panel_width, sizes[1]])
-            self._map_collapse_strip.set_collapsed(False)
-            self._map_panel_collapsed = False
-        else:
-            # Collapse: hide map view, container shrinks to strip width (16px)
-            self._map_panel_width = sizes[0] or 320
-            self._map_view.hide()
-            total = sizes[0] + sizes[1]
-            self._splitter.setSizes([16, total - 16])
-            self._map_collapse_strip.set_collapsed(True)
-            self._map_panel_collapsed = True
+        """Toggle map dock visibility (legacy; now delegates to dock action)."""
+        self._map_dock.toggleViewAction().trigger()
 
     def _toggle_section_panel(self) -> None:
-        """Collapse / expand the section/3D tabs panel."""
-        sizes = self._splitter.sizes()
-        if sizes[1] == 0:
-            self._splitter.setSizes([sizes[0], 960])
-        else:
-            self._splitter.setSizes([sizes[0] + sizes[1], 0])
+        """Toggle section dock visibility (legacy; now delegates to dock action)."""
+        self._section_dock.toggleViewAction().trigger()
 
     # ------------------------------------------------------------------
     # Phase 6 helpers
@@ -1335,6 +1481,26 @@ class MainWindow(QMainWindow):
         self._map_view.render()
         self._section_view._ax_limits_set = False
         self._section_view.render()
+
+    # ------------------------------------------------------------------
+    # Auto-colour helpers (Phase 3)
+    # ------------------------------------------------------------------
+
+    def _next_horizon_color(self) -> str:
+        used = {hp.color for hp in self._state.project.horizon_picks}
+        for c in _HORIZON_COLORS:
+            if c not in used:
+                return c
+        n = len(self._state.project.horizon_picks)
+        return _HORIZON_COLORS[n % len(_HORIZON_COLORS)]
+
+    def _next_fault_color(self) -> str:
+        used = {fp.color for fp in self._state.project.fault_picks}
+        for c in _FAULT_COLORS:
+            if c not in used:
+                return c
+        n = len(self._state.project.fault_picks)
+        return _FAULT_COLORS[n % len(_FAULT_COLORS)]
 
     def _cycle_ref_line_tool(self) -> None:
         """R key: cycle H-Ref → V-Ref → A-Ref."""
@@ -1483,6 +1649,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._check_unsaved_changes():
+            settings = QSettings("Geoscience", "CrossSectionTool")
+            settings.setValue("window/geometry", self.saveGeometry())
+            settings.setValue("window/state", self.saveState())
             event.accept()
         else:
             event.ignore()

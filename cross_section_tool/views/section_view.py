@@ -42,7 +42,7 @@ _OBJ_DRAG_PX      = 3     # minimum movement before object-move activates
 _SNAP_THRESHOLD   = 15    # snap radius in screen pixels
 _DEFAULT_DEPTH    = 5000.0
 
-_DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s"]
+_DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s", "m+ft"]
 
 # Seismic colormap name mapping: SeismicDisplaySettings.colormap → matplotlib
 _SEGY_CMAP = {
@@ -229,7 +229,7 @@ class SectionView(QWidget):
         _units_lbl.setStyleSheet("color: #333333; font-size: 8pt;")
         hl.addWidget(_units_lbl)
         self._depth_units_combo = QComboBox()
-        self._depth_units_combo.setFixedWidth(52)
+        self._depth_units_combo.setFixedWidth(64)
         self._depth_units_combo.setToolTip("Depth / time axis units")
         self._depth_units_combo.setStyleSheet("color: #333333; background: #ffffff;")
         for u in _DEPTH_UNITS:
@@ -407,7 +407,7 @@ class SectionView(QWidget):
         from PySide6.QtCore import Qt as _Qt
         _map = {
             "select":       _Qt.CursorShape.ArrowCursor,
-            "node_edit":    _Qt.CursorShape.CrossCursor,
+            "node_edit":    _Qt.CursorShape.PointingHandCursor,
             "pan":          _Qt.CursorShape.OpenHandCursor,
             "zoom":         _Qt.CursorShape.SizeAllCursor,
             "new_section":  _Qt.CursorShape.CrossCursor,
@@ -629,16 +629,39 @@ class SectionView(QWidget):
         self._ax.set_ylim(y_range, 0.0)   # inverted: 0 at top
 
         # Labels
+        units = section.depth_units
         if section.depth_domain == "twt":
             ylabel = "TWT (ms)"
             xlabel = "Distance (m)"
+        elif units == "m+ft":
+            ylabel = "Depth (m)"
+            xlabel = "Distance (m)"
         else:
-            ylabel = f"Depth ({section.depth_units})"
-            xlabel = f"Distance ({section.depth_units})"
+            ylabel = f"Depth ({units})"
+            xlabel = f"Distance ({units})"
 
         self._ax.set_xlabel(xlabel, fontsize=8)
         self._ax.set_ylabel(ylabel, fontsize=8)
         self._ax.tick_params(labelsize=7)
+
+        # Dual-unit secondary axes (m + ft)
+        if units == "m+ft":
+            _m2ft = 3.28084
+            try:
+                sec_y = self._ax.secondary_yaxis(
+                    "right",
+                    functions=(lambda m: m * _m2ft, lambda ft: ft / _m2ft),
+                )
+                sec_y.set_ylabel("Depth (ft)", fontsize=6, color="#888888")
+                sec_y.tick_params(labelsize=6, colors="#888888")
+                sec_x = self._ax.secondary_xaxis(
+                    "top",
+                    functions=(lambda m: m * _m2ft, lambda ft: ft / _m2ft),
+                )
+                sec_x.set_xlabel("Distance (ft)", fontsize=6, color="#888888")
+                sec_x.tick_params(labelsize=6, colors="#888888")
+            except Exception:
+                pass
 
     def _compute_max_depth(self, section: Section) -> float:
         """Best estimate of maximum depth from loaded data."""
@@ -762,23 +785,24 @@ class SectionView(QWidget):
                           color="#555", zorder=9)
 
     def _render_snap_indicator(self) -> None:
-        """Phase 5: small crosshair at the snapped cursor position."""
+        """Magenta diamond at snapped cursor position."""
         if self._snap_point is None:
             return
         sx, sy = self._snap_point
-        s = 6   # half-size in screen pixels
+        s = 8  # half-size in screen pixels
         try:
             inv = self._ax.transData.inverted()
-            p0  = inv.transform([0, 0])
-            p1  = inv.transform([s, s])
-            dx  = abs(float(p1[0]) - float(p0[0]))
-            dy  = abs(float(p1[1]) - float(p0[1]))
+            p0 = inv.transform([0, 0])
+            p1 = inv.transform([s, s])
+            dx = abs(float(p1[0]) - float(p0[0]))
+            dy = abs(float(p1[1]) - float(p0[1]))
         except Exception:
             return
-        self._ax.plot([sx - dx, sx + dx], [sy, sy],
-                      color="#ff8800", lw=1.2, zorder=12)
-        self._ax.plot([sx, sx], [sy - dy, sy + dy],
-                      color="#ff8800", lw=1.2, zorder=12)
+        # Rotated square (diamond) in magenta
+        self._ax.plot([sx, sx + dx], [sy, sy + dy], color="magenta", lw=1.5, zorder=13)
+        self._ax.plot([sx + dx, sx], [sy + dy, sy + 2*dy], color="magenta", lw=1.5, zorder=13)
+        self._ax.plot([sx, sx - dx], [sy + 2*dy, sy + dy], color="magenta", lw=1.5, zorder=13)
+        self._ax.plot([sx - dx, sx], [sy + dy, sy], color="magenta", lw=1.5, zorder=13)
 
     # ------------------------------------------------------------------
     # Object renderers
@@ -1792,6 +1816,10 @@ class SectionView(QWidget):
             cx, cy = float(event.xdata), float(event.ydata)
             self._cursor_data = (cx, cy)
             self._snap_point  = self._compute_snap(cx, cy)
+            # Show snap hint in status bar when picking
+            if self._snap_point is not None and (self._picking_active or self._fault_picking):
+                sx, sz = self._snap_point
+                self._flash_hint(f"Snap: ({sx:.0f} m,  {sz:.0f} m depth)")
         else:
             self._cursor_data = None
             self._snap_point  = None

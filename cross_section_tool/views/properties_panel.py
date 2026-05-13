@@ -36,21 +36,23 @@ def _sep_label(text: str) -> QLabel:
 def _val_label(text: str) -> QLabel:
     if not text or not str(text).strip():
         lbl = QLabel("—")
-        lbl.setStyleSheet("color: #666666; font-style: italic;")
+        lbl.setStyleSheet("color: #999; font-style: italic; font-size: 9pt;")
     else:
         lbl = QLabel(str(text))
-        lbl.setStyleSheet("color: #222222;")
+        lbl.setStyleSheet("color: #222222; font-size: 9pt;")
+        lbl.setWordWrap(True)
+        lbl.setMaximumWidth(200)
     return lbl
 
 
 def _form() -> QFormLayout:
     """Standard QFormLayout with consistent spacing."""
     f = QFormLayout()
-    f.setVerticalSpacing(8)
-    f.setHorizontalSpacing(10)
+    f.setVerticalSpacing(6)
+    f.setHorizontalSpacing(8)
     f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-    f.setContentsMargins(0, 4, 0, 4)
+    f.setContentsMargins(4, 4, 4, 4)
     return f
 
 
