@@ -315,7 +315,7 @@ class SectionView(QWidget):
             "select":       _Qt.CursorShape.ArrowCursor,
             "node_edit":    _Qt.CursorShape.CrossCursor,
             "pan":          _Qt.CursorShape.OpenHandCursor,
-            "zoom":         _Qt.CursorShape.SizeFCursor,
+            "zoom":         _Qt.CursorShape.SizeAllCursor,
             "new_section":  _Qt.CursorShape.CrossCursor,
             "horizon_pick": _Qt.CursorShape.CrossCursor,
             "fault_pick":   _Qt.CursorShape.CrossCursor,

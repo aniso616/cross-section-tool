@@ -316,8 +316,9 @@ class TestPickingWorkflow:
         assert pytest.approx(pick.distances[0]) == 250.0
         assert pytest.approx(pick.depths[0]) == 800.0
 
-    def test_pick_action_toggles_picking_in_section_view(self, win):
-        # Picking is now driven by the tool palette; the menu pick_action syncs to it
+    def test_pick_action_toggles_picking_in_section_view(self, win, state):
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
         win._tool_palette.set_active_tool("horizon_pick")
         assert win._section_view._picking_active
         win._tool_palette.set_active_tool("select")
@@ -326,20 +327,32 @@ class TestPickingWorkflow:
     def test_tool_palette_default_tool_is_select(self, win):
         assert win._tool_palette.active_tool == "select"
 
-    def test_tool_palette_horizon_enables_picking(self, win):
+    def test_tool_palette_horizon_enables_picking(self, win, state):
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
         win._tool_palette.set_active_tool("horizon_pick")
         assert win._section_view._picking_active
 
-    def test_tool_palette_select_disables_picking(self, win):
+    def test_tool_palette_select_disables_picking(self, win, state):
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
         win._tool_palette.set_active_tool("horizon_pick")
         win._tool_palette.set_active_tool("select")
         assert not win._section_view._picking_active
 
-    def test_pick_menu_action_syncs_palette(self, win):
+    def test_pick_menu_action_syncs_palette(self, win, state):
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
         win._pick_action.setChecked(True)
         assert win._tool_palette.active_tool == "horizon_pick"
         win._pick_action.setChecked(False)
         assert win._tool_palette.active_tool == "select"
+
+    def test_pick_without_horizon_reverts_to_select(self, win):
+        # No horizon: activating pick tool should revert to select
+        win._tool_palette.set_active_tool("horizon_pick")
+        assert win._tool_palette.active_tool == "select"
+        assert not win._section_view._picking_active
 
 
 # ---------------------------------------------------------------------------

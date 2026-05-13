@@ -206,9 +206,11 @@ class MainWindow(QMainWindow):
         self._options_bar_tb.setFixedHeight(32)
         self._ctx = ContextToolbar(self._state)
         self._ctx.action_requested.connect(self._on_context_toolbar_action)
+        # Route picking actions to section_view; skip creation actions handled by app
         self._ctx.action_requested.connect(
             lambda a: self._section_view._on_context_action(a)
-            if hasattr(self._section_view, "_on_context_action") else None
+            if a not in ("new_horizon", "new_fault")
+            and hasattr(self._section_view, "_on_context_action") else None
         )
         self._options_bar_tb.addWidget(self._ctx)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._options_bar_tb)
@@ -399,10 +401,8 @@ class MainWindow(QMainWindow):
         ref_sub.addAction(self._add_vline_action)
         interp_menu.addMenu(ref_sub)
 
-        # Kept for sync with pick_action toggle in tests
         self._pick_action = QAction("&Horizon Pick Mode", self)
         self._pick_action.setCheckable(True)
-        self._pick_action.toggled.connect(self._section_view.set_picking_active)
         interp_menu.addSeparator()
         interp_menu.addAction(self._pick_action)
 
@@ -502,6 +502,8 @@ class MainWindow(QMainWindow):
         )
         # Options bar context toolbar already connected in _build_options_bar
         self._tool_palette.tool_changed.connect(self._on_tool_changed)
+        # Sync palette when tool changes via state (e.g. after section draw)
+        s.tool_changed.connect(self._on_state_tool_changed)
         # Keep menu pick-action in sync with palette
         self._pick_action.toggled.connect(self._on_pick_action_toggled)
         # Project panel pick-target selection → auto-switch tool
@@ -1234,6 +1236,11 @@ class MainWindow(QMainWindow):
             self._tool_palette.set_active_tool("horizon_pick")
         elif cat == "Faults":
             self._tool_palette.set_active_tool("fault_pick")
+
+    def _on_state_tool_changed(self, tool_id: str) -> None:
+        """Sync palette when tool changes via state (e.g. from map view draw finish)."""
+        if self._tool_palette.active_tool != tool_id:
+            self._tool_palette.set_active_tool(tool_id)
 
     def _on_tool_changed(self, tool_id: str) -> None:
         """Route palette tool activation to views and AppState."""
