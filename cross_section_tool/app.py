@@ -974,10 +974,10 @@ class MainWindow(QMainWindow):
         dlg = HorizonDialog(self, name=default_name)
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
             return
-        hp = HorizonPick.empty(name=dlg.name, color=dlg.color,
-                               contact_type=dlg.contact_type,
-                               formation_above=dlg.formation_above,
-                               formation_below=dlg.formation_below)
+        hp = HorizonPick.empty(name=dlg.name, color=dlg.color)
+        hp.contact_type    = dlg.contact_type
+        hp.formation_above = dlg.formation_above
+        hp.formation_below = dlg.formation_below
         self._state.add_horizon_pick(hp)
         idx = len(self._state.project.horizon_picks) - 1
         self._state.set_active_pick_target("Horizons", idx)
@@ -1068,9 +1068,9 @@ class MainWindow(QMainWindow):
         dlg = FaultDialog(self, name=default_name)
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
             return
-        fp = HorizonPick.empty(name=dlg.name, color=dlg.color,
-                               fault_type=dlg.fault_type,
-                               dip_direction=dlg.dip_direction)
+        fp = HorizonPick.empty(name=dlg.name, color=dlg.color)
+        fp.fault_type    = dlg.fault_type
+        fp.dip_direction = dlg.dip_direction
         self._state.add_fault_pick(fp)
         idx = len(self._state.project.fault_picks) - 1
         self._state.set_active_pick_target("Faults", idx)
