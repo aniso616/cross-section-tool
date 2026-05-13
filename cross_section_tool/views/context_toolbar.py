@@ -94,9 +94,15 @@ class ContextToolbar(QWidget):
     # ------------------------------------------------------------------
 
     def _build_default(self) -> None:
-        self._layout.addWidget(QLabel(
-            self._state.active_tool.replace("_", " ").title()
-            + "  |  Space to pan temporarily"))
+        proj = self._state.project
+        sec  = self._state.active_section
+        parts = [f"Project: {proj.name or 'Untitled'}",
+                 f"CRS: EPSG:{proj.crs_epsg}"]
+        if sec is not None:
+            parts.append(f"Section: {sec.name or 'Unnamed'}")
+        lbl = QLabel("  |  ".join(parts))
+        lbl.setStyleSheet("font-size: 8pt; color: #888;")
+        self._layout.addWidget(lbl)
 
     def _build_select(self) -> None:
         lbl = QLabel("Select Object (V)")

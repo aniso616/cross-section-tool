@@ -91,29 +91,34 @@ QPushButton {{
     background: transparent;
     border: none;
     border-radius: 4px;
-    color: {fg};
+    color: #CCCCCC;
     font-size: 15px;
     padding: 0px;
     margin: 0px;
 }}
 QPushButton:hover {{
-    background: rgba(59, 130, 246, 0.15);
+    background: #444444;
+    color: white;
 }}
 QPushButton:checked {{
-    background: #3B82F6;
+    background: #2563EB;
     color: white;
     border-radius: 4px;
-    border: 1px solid #2563EB;
+    border: 1px solid #1D4ED8;
+}}
+QPushButton:disabled {{
+    color: #555555;
+    background: transparent;
 }}
 """
 
 _CATEGORY_STYLE = (
-    "QLabel { color: #AAAAAA; font-size: 8pt; font-weight: bold; "
-    "padding: 8px 0 2px 4px; }"
+    "QLabel { color: #777777; font-size: 7pt; font-weight: bold; "
+    "letter-spacing: 1px; padding: 12px 0 4px 4px; }"
 )
 
 _LABEL_STYLE = (
-    "QLabel { color: #999999; font-size: 7pt; padding: 0; margin: 0; }"
+    "QLabel { color: #888888; font-size: 7pt; padding: 0; margin: 0; }"
 )
 
 
@@ -130,6 +135,8 @@ class _ToolButton(QWidget):
                  tooltip: str, parent=None) -> None:
         super().__init__(parent)
         self.tool_id = tool_id
+        self._base_tooltip = tooltip
+        self._label_text   = label
         self.setFixedWidth(52)
 
         vbox = QVBoxLayout(self)
@@ -141,20 +148,33 @@ class _ToolButton(QWidget):
         self._btn.setCheckable(True)
         self._btn.setFlat(True)
         self._btn.setToolTip(tooltip)
-        self._btn.setStyleSheet(_BTN_STYLE.format(fg="#DDDDDD"))
+        self._btn.setStyleSheet(_BTN_STYLE)
         self._btn.clicked.connect(self.clicked)
         vbox.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        lbl = QLabel(label)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        lbl.setStyleSheet(_LABEL_STYLE)
-        vbox.addWidget(lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._lbl = QLabel(label)
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._lbl.setStyleSheet(_LABEL_STYLE)
+        vbox.addWidget(self._lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
 
     def isChecked(self) -> bool:
         return self._btn.isChecked()
 
     def set_checked(self, val: bool) -> None:
         self._btn.setChecked(val)
+
+    def set_available(self, available: bool, reason: str = "") -> None:
+        """Grey out (disabled) or restore the button."""
+        self._btn.setEnabled(available)
+        if available:
+            self._btn.setToolTip(self._base_tooltip)
+            self._lbl.setStyleSheet(_LABEL_STYLE)
+        else:
+            tip = reason or "Not available"
+            self._btn.setToolTip(tip)
+            self._lbl.setStyleSheet(
+                "QLabel { color: #505050; font-size: 7pt; padding: 0; margin: 0; }"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +205,8 @@ class ToolPalette(QWidget):
         self.setFixedWidth(56)
         self.setObjectName("ToolPalette")
         self.setStyleSheet(
-            "QWidget#ToolPalette { background: #2D2D2D; "
-            "border-right: 1px solid #444; }"
+            "QWidget#ToolPalette { background: #363636; "
+            "border-right: 2px solid #4A4A4A; }"
         )
 
         layout = QVBoxLayout(self)
@@ -251,3 +271,31 @@ class ToolPalette(QWidget):
 
     def _on_button_clicked(self, tool_id: str) -> None:
         self._activate(tool_id, emit=True)
+
+    # ------------------------------------------------------------------
+    # Context-sensitive availability
+    # ------------------------------------------------------------------
+
+    # Tools that need an active section to be useful
+    _NEEDS_SECTION: frozenset[str] = frozenset({
+        "horizon_pick", "fault_pick", "polygon",
+        "h_ref", "v_ref", "a_ref",
+    })
+    # Tools that additionally need at least one pick object
+    _NEEDS_PICKS: frozenset[str] = frozenset({
+        "extend", "trim", "parallel",
+    })
+
+    def update_tool_availability(self, has_section: bool,
+                                  has_picks: bool) -> None:
+        """Enable / disable tool buttons based on current project state."""
+        for tool_id, tbtn in self._buttons.items():
+            if tool_id in self._NEEDS_PICKS:
+                if not has_picks:
+                    tbtn.set_available(False, "Create a horizon or fault first")
+                    continue
+            if tool_id in self._NEEDS_SECTION:
+                if not has_section:
+                    tbtn.set_available(False, "Load a section first")
+                    continue
+            tbtn.set_available(True)

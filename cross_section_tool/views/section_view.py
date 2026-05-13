@@ -208,10 +208,35 @@ class SectionView(QWidget):
         )
         hl.addWidget(self._ve_lock_btn)
 
+        # Pick mode banner — hidden until picking is active
+        self._pick_banner = QWidget()
+        self._pick_banner.setFixedHeight(26)
+        self._pick_banner.setObjectName("PickBanner")
+        self._pick_banner.setStyleSheet(
+            "QWidget#PickBanner { background: #1D4ED8; }"
+            "QLabel { color: white; font-size: 8pt; font-weight: bold; background: transparent; }"
+            "QPushButton { color: white; background: rgba(255,255,255,0.15); "
+            "  border: 1px solid rgba(255,255,255,0.35); border-radius: 3px; "
+            "  font-size: 8pt; padding: 1px 8px; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.3); }"
+        )
+        _bl = QHBoxLayout(self._pick_banner)
+        _bl.setContentsMargins(10, 2, 10, 2)
+        _bl.setSpacing(8)
+        self._pick_banner_label = QLabel("Picking: —")
+        _bl.addWidget(self._pick_banner_label)
+        _bl.addStretch()
+        _end_btn = QPushButton("⏹ End Picking")
+        _end_btn.setToolTip("Finish this pick session  (Right-click or Escape)")
+        _end_btn.clicked.connect(self._end_pick_sequence)
+        _bl.addWidget(_end_btn)
+        self._pick_banner.hide()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._header)
+        layout.addWidget(self._pick_banner)
         layout.addWidget(self._canvas, stretch=1)
 
         # Matplotlib events
@@ -227,6 +252,7 @@ class SectionView(QWidget):
         s = self._state
         s.active_section_changed.connect(self._on_active_section_changed)
         s.active_pick_target_changed.connect(self._on_data_changed)
+        s.active_pick_target_changed.connect(lambda *_: self._update_pick_banner())
         s.project_changed.connect(self.render)
         s.horizon_pick_added.connect(self._on_data_changed)
         s.horizon_pick_removed.connect(self._on_data_changed)
@@ -343,12 +369,32 @@ class SectionView(QWidget):
         self._polygon_drawing  = False if active else self._polygon_drawing
         if active:
             self._polygon_vertices.clear()
+        self._update_pick_banner()
 
     def set_fault_picking(self, active: bool) -> None:
         """Enable/disable fault pick mode."""
         self._fault_picking    = active
         self._picking_active   = False if active else self._picking_active
         self._polygon_drawing  = False if active else self._polygon_drawing
+        self._update_pick_banner()
+
+    def _update_pick_banner(self) -> None:
+        """Show / hide the pick-mode banner and update its label."""
+        if self._picking_active or self._fault_picking:
+            cat = self._state.active_pick_category
+            idx = self._state.active_pick_index
+            if cat is not None and idx is not None:
+                picks = (self._state.project.horizon_picks if cat == "Horizons"
+                         else self._state.project.fault_picks)
+                if idx < len(picks):
+                    kind = "Horizon" if cat == "Horizons" else "Fault"
+                    name = picks[idx].name or f"{kind} {idx + 1}"
+                    self._pick_banner_label.setText(
+                        f"━  Picking: {name}  ({kind})  ━"
+                    )
+            self._pick_banner.show()
+        else:
+            self._pick_banner.hide()
 
     def set_polygon_drawing(self, active: bool) -> None:
         """Enable/disable polygon drawing mode."""

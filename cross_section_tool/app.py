@@ -522,6 +522,13 @@ class MainWindow(QMainWindow):
         # Status bar updates when tool or active pick target changes
         s.tool_changed.connect(lambda _: self._update_status())
         s.active_pick_target_changed.connect(lambda *_: self._update_status())
+        # Tool availability — update when section or picks change
+        s.active_section_changed.connect(lambda _: self._update_tool_availability())
+        s.horizon_pick_added.connect(lambda _: self._update_tool_availability())
+        s.horizon_pick_removed.connect(lambda _: self._update_tool_availability())
+        s.fault_pick_added.connect(lambda _: self._update_tool_availability())
+        s.fault_pick_removed.connect(lambda _: self._update_tool_availability())
+        s.project_changed.connect(self._update_tool_availability)
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
@@ -579,6 +586,19 @@ class MainWindow(QMainWindow):
         sc2.activated.connect(self._toggle_map_panel)
         sc3 = QShortcut(QKeySequence("Ctrl+3"), self)
         sc3.activated.connect(self._toggle_section_panel)
+        # Initial tool availability pass
+        self._update_tool_availability()
+
+    # ------------------------------------------------------------------
+    # Tool availability
+    # ------------------------------------------------------------------
+
+    def _update_tool_availability(self, *_args) -> None:
+        """Recompute which palette tools are enabled based on current state."""
+        has_section = self._state.active_section is not None
+        proj = self._state.project
+        has_picks = bool(proj.horizon_picks or proj.fault_picks)
+        self._tool_palette.update_tool_availability(has_section, has_picks)
 
     # ------------------------------------------------------------------
     # Title / status helpers
