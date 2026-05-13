@@ -341,6 +341,8 @@ class SectionView(QWidget):
         s.reference_line_added.connect(self._on_data_changed)
         s.reference_line_removed.connect(self._on_data_changed)
         s.reference_line_modified.connect(self._on_data_changed)
+        # Topology: redraw intersection markers when graph updates
+        s.topology_changed.connect(self._on_data_changed)
 
     # ------------------------------------------------------------------
     # Public API
@@ -596,6 +598,7 @@ class SectionView(QWidget):
         self._render_faults(section)          # zorder=7
         self._render_horizons(section)        # zorder=8
         self._render_wells(section)           # zorder=9
+        self._render_intersections(section)   # zorder=10 — topology diamonds
         self._render_construct_preview()      # zorder=12 (before rubber band)
         self._render_rubber_band(section)     # zorder=12
         self._render_snap_indicator()         # zorder=13
@@ -783,6 +786,39 @@ class SectionView(QWidget):
                           color="#888", lw=1.0, linestyle="--", zorder=9)
             self._ax.text(cx, cy, f"  {ang_d:.0f}°", fontsize=7,
                           color="#555", zorder=9)
+
+    def _render_intersections(self, section) -> None:
+        """Render intersection diamonds from the live topology graph."""
+        topo = self._state.topology
+        if topo is None or topo.section_name != section.name:
+            return
+        pts = topo.get_snap_targets()
+        if not pts:
+            return
+        xl, xr = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        y_lo, y_hi = min(yl), max(yl)
+        # Convert 5px to data units for diamond half-size
+        try:
+            inv = self._ax.transData.inverted()
+            p0 = inv.transform([0, 0])
+            p1 = inv.transform([5, 5])
+            hw = abs(float(p1[0]) - float(p0[0]))
+            hh = abs(float(p1[1]) - float(p0[1]))
+        except Exception:
+            hw = hh = (xr - xl) * 0.005
+        for sx, sy in pts:
+            if not (xl <= sx <= xr and y_lo <= sy <= y_hi):
+                continue
+            self._ax.plot(
+                [sx, sx + hw, sx, sx - hw, sx],
+                [sy - hh, sy, sy + hh, sy, sy - hh],
+                color="#555555", linewidth=0.8, zorder=10,
+            )
+            self._ax.plot(sx, sy, "D",
+                          markersize=6, markerfacecolor="#dddddd",
+                          markeredgecolor="#444444", markeredgewidth=0.8,
+                          zorder=10)
 
     def _render_snap_indicator(self) -> None:
         """Magenta diamond at snapped cursor position."""
@@ -1434,7 +1470,7 @@ class SectionView(QWidget):
         return (best_cat, best_idx) if best_cat is not None else None
 
     def _compute_snap(self, x: float, y: float) -> tuple[float, float] | None:
-        """Phase 5: Return nearest pick point within snap threshold, or None."""
+        """Return nearest snap target (pick point or topology intersection) within threshold."""
         if not self._snap_active:
             return None
         section = self._state.active_section
@@ -1445,6 +1481,7 @@ class SectionView(QWidget):
         best_dist = float(_SNAP_THRESHOLD)
         best_pt: tuple[float, float] | None = None
 
+        # Pick points
         for picks_list in [self._state.project.horizon_picks,
                             self._state.project.fault_picks]:
             for hp in picks_list:
@@ -1456,6 +1493,27 @@ class SectionView(QWidget):
                     if dist < best_dist:
                         best_dist = dist
                         best_pt = (d, z)
+
+        # Topology intersection points (higher priority if closer)
+        topo = self._state.topology
+        if topo is not None and topo.section_name == sec_name:
+            for d, z in topo.get_snap_targets():
+                nx, ny = self._to_screen_px_sv(d, z)
+                dist = math.hypot(ex - nx, ey - ny)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_pt = (d, z)
+
+        # Section endpoints always snap within 20px
+        total = section.total_length()
+        for edge_d in (0.0, total):
+            # Use the current data-space y as z for the edge snap
+            nx, ny = self._to_screen_px_sv(edge_d, y)
+            dist = math.hypot(ex - nx, ey - ny)
+            if dist < 20.0 and dist < best_dist:
+                best_dist = dist
+                best_pt = (edge_d, y)
+
         return best_pt
 
     def _get_active_pick_last_point(
@@ -1484,6 +1542,37 @@ class SectionView(QWidget):
             nearest = int(np.argmin(dist_to_cursor))
             return hp, float(hp.distances[nearest]), float(hp.depths[nearest])
         return hp, float(hp.distances[-1]), float(hp.depths[-1])
+
+    def _undo_last_pick(self) -> None:
+        """Middle-click during picking: remove the last placed pick on this section."""
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        if cat is None or idx is None:
+            return
+        section = self._state.active_section
+        sec_name = section.name if section else ""
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if idx >= len(picks):
+            return
+        hp = picks[idx]
+        sec_idxs = hp.section_indices(sec_name)
+        if len(sec_idxs) == 0:
+            return
+        # Remove the last pick on this section
+        last_idx = int(sec_idxs[-1])
+        hp2 = copy.deepcopy(hp)
+        if hp2.n_picks > 1:
+            for attr in ("_distances", "_depths", "_section_names",
+                         "_confidence", "_quality", "_note"):
+                arr = getattr(hp2, attr)
+                setattr(hp2, attr, np.delete(arr, last_idx))
+        if cat == "Horizons":
+            self._state.update_horizon_pick(idx, hp2)
+        else:
+            self._state.update_fault_pick(idx, hp2)
+        remaining = len(hp2.section_indices(sec_name))
+        self._flash_hint(f"Removed last pick  ({remaining} remaining)")
 
     def _add_pick_to_active_target(self, x: float, y: float) -> None:
         """Insert a pick point tagged with current section name."""
@@ -1685,6 +1774,11 @@ class SectionView(QWidget):
             self._end_pick_sequence()
             return
 
+        # ---- Middle-click undoes last placed pick (Phase 4) ----
+        if event.button == 2 and (self._picking_active or self._fault_picking):
+            self._undo_last_pick()
+            return
+
         # ---- Picking / polygon (tool-active modes) ----
         if event.button == 1 and (self._picking_active or self._fault_picking):
             is_dbl = getattr(event, "dblclick", False)
@@ -1816,6 +1910,8 @@ class SectionView(QWidget):
             cx, cy = float(event.xdata), float(event.ydata)
             self._cursor_data = (cx, cy)
             self._snap_point  = self._compute_snap(cx, cy)
+            # Coordinate readout in status bar
+            self._show_section_coords(cx, cy)
             # Show snap hint in status bar when picking
             if self._snap_point is not None and (self._picking_active or self._fault_picking):
                 sx, sz = self._snap_point
@@ -2507,6 +2603,30 @@ class SectionView(QWidget):
             w = self.window()
             if hasattr(w, '_status_label'):
                 w._status_label.setText(msg)
+        except Exception:
+            pass
+
+    def _show_section_coords(self, dist: float, depth: float) -> None:
+        """Show Dist/Depth + back-calculated geographic coords in the status bar."""
+        try:
+            w = self.window()
+            if not hasattr(w, '_hint_label'):
+                return
+            section = self._state.active_section
+            if section is None:
+                return
+            # Back-calculate map X,Y from distance along section
+            x, y = section.section_to_map(dist)
+            units = getattr(section, "depth_units", "m")
+            if units == "m+ft":
+                depth_str = f"{depth:.0f} m  ({depth * 3.28084:.0f} ft)"
+                dist_str  = f"{dist:.0f} m  ({dist * 3.28084:.0f} ft)"
+            else:
+                depth_str = f"{depth:.0f} {units}"
+                dist_str  = f"{dist:.0f} m"
+            w._hint_label.setText(
+                f"Dist: {dist_str}   Depth: {depth_str}   |   E: {x:,.0f}  N: {y:,.0f}"
+            )
         except Exception:
             pass
 

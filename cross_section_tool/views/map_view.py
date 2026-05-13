@@ -496,6 +496,12 @@ class MapView(QWidget):
             self._expand_view_for_point(x, y)
             return
 
+        # ---- Coordinate readout on every motion ----
+        if event.xdata is not None and event.ydata is not None and not self._drag_active:
+            self.status_message.emit(
+                f"E: {event.xdata:,.0f}   N: {event.ydata:,.0f}"
+            )
+
         # ---- Hover (tool-dependent, no button held) ----
         tool = self._state.active_tool
         if tool in _EDIT_TOOLS and not self._mouse_pressed:

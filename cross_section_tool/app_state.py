@@ -11,6 +11,7 @@ from cross_section_tool.core.polygons import SectionPolygon
 from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
+from cross_section_tool.core.topology import SectionTopology
 from cross_section_tool.core.wells import Well
 from cross_section_tool.io.project import Project, SeismicRef
 
@@ -104,6 +105,9 @@ class AppState(QObject):
     undo_performed       = Signal(str)   # description
     redo_performed       = Signal(str)
 
+    # Live topology graph for the active section
+    topology_changed = Signal(str)   # section_name whose topology was rebuilt
+
     # Active pick target: which horizon/fault picks go into
     active_pick_target_changed = Signal(str, int)  # category_name, index
 
@@ -124,6 +128,8 @@ class AppState(QObject):
         self._cmd_stack: CommandStack = CommandStack()
         self._active_pick_category: str | None = None
         self._active_pick_index: int | None = None
+        # Live topology (one per active section)
+        self._topology: SectionTopology | None = None
 
     # ------------------------------------------------------------------
     # Read-only properties
@@ -192,6 +198,11 @@ class AppState(QObject):
     def active_well(self) -> Well | None:
         return self._active_well
 
+    @property
+    def topology(self) -> SectionTopology | None:
+        """Live topology graph for the currently active section (may be None)."""
+        return self._topology
+
     # ------------------------------------------------------------------
     # Project-level operations
     # ------------------------------------------------------------------
@@ -203,6 +214,7 @@ class AppState(QObject):
         self._active_section = None
         self._active_well = None
         self._is_modified = False
+        self._topology = None
         self._cmd_stack.clear()
         self.project_path_changed.emit("")
         self.project_changed.emit()
@@ -215,6 +227,7 @@ class AppState(QObject):
         self._active_section = None
         self._active_well = None
         self._is_modified = False
+        self._topology = None
         self.project_path_changed.emit(self._project_path)
         self.project_changed.emit()
         self.project_modified_changed.emit(False)
@@ -270,6 +283,66 @@ class AppState(QObject):
         if self._active_section is not section:
             self._active_section = section
             self.active_section_changed.emit(section)
+            self._rebuild_topology()
+
+    # ------------------------------------------------------------------
+    # Live topology management
+    # ------------------------------------------------------------------
+
+    def _rebuild_topology(self) -> None:
+        """Rebuild the topology graph for the active section from current picks."""
+        section = self._active_section
+        if section is None:
+            self._topology = None
+            return
+
+        proj = self._project
+        sec_name = section.name
+        total = section.total_length()
+
+        # Compute max depth from all picks
+        import numpy as np
+        candidates = [5000.0]
+        for hp in list(proj.horizon_picks) + list(proj.fault_picks):
+            v = hp.depths[~np.isnan(hp.depths)]
+            if len(v):
+                candidates.append(float(v.max()))
+        max_depth = max(candidates) * 1.25 + 500.0
+
+        if self._topology is None or self._topology.section_name != sec_name:
+            self._topology = SectionTopology(sec_name, total, max_depth)
+        else:
+            self._topology.update_bounds(total, max_depth)
+            self._topology.clear_user_lines()
+
+        # Add horizon lines
+        for i, hp in enumerate(proj.horizon_picks):
+            idxs = hp.section_indices(sec_name)
+            if len(idxs) >= 2:
+                coords = list(zip(hp._distances[idxs].tolist(),
+                                  hp._depths[idxs].tolist()))
+                self._topology.update_line(f"horizon_{i}", "horizon", coords)
+
+        # Add fault lines
+        for i, fp in enumerate(proj.fault_picks):
+            idxs = fp.section_indices(sec_name)
+            if len(idxs) >= 2:
+                coords = list(zip(fp._distances[idxs].tolist(),
+                                  fp._depths[idxs].tolist()))
+                self._topology.update_line(f"fault_{i}", "fault", coords)
+
+        # Add reference lines (horizontal, vertical)
+        for i, rl in enumerate(proj.reference_lines):
+            if not rl.visible:
+                continue
+            if rl.kind == "horizontal":
+                self._topology.update_line(f"ref_{i}", "reference",
+                                           [(0.0, rl.value), (total, rl.value)])
+            elif rl.kind == "vertical":
+                self._topology.update_line(f"ref_{i}", "reference",
+                                           [(rl.value, 0.0), (rl.value, max_depth)])
+
+        self.topology_changed.emit(sec_name)
 
     # ------------------------------------------------------------------
     # Surfaces
@@ -298,16 +371,19 @@ class AppState(QObject):
         self._project.horizon_picks.append(pick)
         self._set_modified()
         self.horizon_pick_added.emit(pick)
+        self._rebuild_topology()
 
     def remove_horizon_pick(self, pick: HorizonPick) -> None:
         self._project.horizon_picks.remove(pick)
         self._set_modified()
         self.horizon_pick_removed.emit(pick)
+        self._rebuild_topology()
 
     def update_horizon_pick(self, index: int, pick: HorizonPick) -> None:
         self._project.horizon_picks[index] = pick
         self._set_modified()
         self.horizon_pick_modified.emit(index, pick)
+        self._rebuild_topology()
 
     # ------------------------------------------------------------------
     # Wells
@@ -365,16 +441,19 @@ class AppState(QObject):
         self._project.fault_picks.append(pick)
         self._set_modified()
         self.fault_pick_added.emit(pick)
+        self._rebuild_topology()
 
     def remove_fault_pick(self, pick: HorizonPick) -> None:
         self._project.fault_picks.remove(pick)
         self._set_modified()
         self.fault_pick_removed.emit(pick)
+        self._rebuild_topology()
 
     def update_fault_pick(self, index: int, pick: HorizonPick) -> None:
         self._project.fault_picks[index] = pick
         self._set_modified()
         self.fault_pick_modified.emit(index, pick)
+        self._rebuild_topology()
 
     def add_polygon(self, polygon: SectionPolygon) -> None:
         self._project.polygons.append(polygon)
@@ -399,16 +478,19 @@ class AppState(QObject):
         self._project.reference_lines.append(rl)
         self._set_modified()
         self.reference_line_added.emit(rl)
+        self._rebuild_topology()
 
     def remove_reference_line(self, rl: ReferenceLine) -> None:
         self._project.reference_lines.remove(rl)
         self._set_modified()
         self.reference_line_removed.emit(rl)
+        self._rebuild_topology()
 
     def update_reference_line(self, index: int, rl: ReferenceLine) -> None:
         self._project.reference_lines[index] = rl
         self._set_modified()
         self.reference_line_modified.emit(index, rl)
+        self._rebuild_topology()
 
     # ------------------------------------------------------------------
     # Annotations (Phase 6)

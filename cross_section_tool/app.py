@@ -1258,8 +1258,12 @@ class MainWindow(QMainWindow):
         from cross_section_tool.core.surfaces import HorizonPick
         n = len(self._state.project.horizon_picks) + 1
         default_name = f"Horizon {n}"
+        # Remember current tool so we can restore / continue picking
+        _prev_tool = self._state.active_tool
         dlg = HorizonDialog(self, name=default_name, color=self._next_horizon_color())
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
+            # Restore tool even on cancel
+            self._tool_palette.set_active_tool(_prev_tool)
             return
         hp = HorizonPick.empty(name=dlg.name, color=dlg.color)
         hp.contact_type    = dlg.contact_type
@@ -1268,33 +1272,48 @@ class MainWindow(QMainWindow):
         self._state.add_horizon_pick(hp)
         idx = len(self._state.project.horizon_picks) - 1
         self._state.set_active_pick_target("Horizons", idx)
+        # Always switch to horizon_pick after adding (natural next step)
         self._tool_palette.set_active_tool("horizon_pick")
 
     def _on_generate_polygons(self) -> None:
-        """Phase 4: detect and import closed regions as polygons."""
+        """Detect closed regions via live topology and import as polygons."""
         section = self._state.active_section
         if section is None:
             QMessageBox.information(self, "No Section",
                                     "Activate a section first.")
             return
-        from cross_section_tool.core.polygon_detection import detect_polygons
         from cross_section_tool.core.polygons import SectionPolygon
-        try:
-            polys = detect_polygons(
-                self._state.project.horizon_picks,
-                self._state.project.fault_picks,
-                self._state.project.reference_lines,
-                section,
-                section_name=section.name,
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Detection Error", str(exc))
-            return
+        import numpy as np
+
+        # Prefer topology graph if available; fall back to polygon_detection module
+        topo = self._state.topology
+        if topo is not None and topo.section_name == section.name:
+            try:
+                polys = topo.get_all_faces()
+            except Exception as exc:
+                QMessageBox.critical(self, "Detection Error", str(exc))
+                return
+        else:
+            from cross_section_tool.core.polygon_detection import detect_polygons
+            try:
+                polys = detect_polygons(
+                    self._state.project.horizon_picks,
+                    self._state.project.fault_picks,
+                    self._state.project.reference_lines,
+                    section,
+                    section_name=section.name,
+                )
+            except Exception as exc:
+                QMessageBox.critical(self, "Detection Error", str(exc))
+                return
+
         if not polys:
             QMessageBox.information(self, "No Polygons Found",
-                                    "No closed regions were detected.")
+                                    "No closed regions were detected.\n\n"
+                                    "Make sure horizons or faults cross each other "
+                                    "or reach the section edges.")
             return
-        # Simple dialog: ask user to confirm import
+
         reply = QMessageBox.question(
             self, "Import Polygons",
             f"{len(polys)} closed region(s) detected.\nImport all as polygons?",
@@ -1303,11 +1322,13 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         existing = len(self._state.project.polygons)
-        import numpy as np
         for i, shp in enumerate(polys):
-            coords = list(shp.exterior.coords)
+            try:
+                coords = list(shp.exterior.coords)
+            except AttributeError:
+                continue
             if coords[0] == coords[-1]:
-                coords = coords[:-1]  # drop duplicate closing vertex
+                coords = coords[:-1]
             if len(coords) < 3:
                 continue
             poly = SectionPolygon(
@@ -1413,8 +1434,10 @@ class MainWindow(QMainWindow):
         from cross_section_tool.core.surfaces import HorizonPick
         n = len(self._state.project.fault_picks) + 1
         default_name = f"Fault {n}"
+        _prev_tool = self._state.active_tool
         dlg = FaultDialog(self, name=default_name, color=self._next_fault_color())
         if dlg.exec() != dlg.DialogCode.Accepted or not dlg.name:
+            self._tool_palette.set_active_tool(_prev_tool)
             return
         fp = HorizonPick.empty(name=dlg.name, color=dlg.color)
         fp.fault_type    = dlg.fault_type
