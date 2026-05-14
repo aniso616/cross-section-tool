@@ -3,6 +3,20 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+from contextlib import contextmanager
+
+
+@contextmanager
+def _wait_cursor():
+    """Show the system wait cursor while a slow operation runs."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    QApplication.processEvents()
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
 
 
 def _global_exception_handler(exc_type, exc_value, exc_tb):
@@ -738,7 +752,10 @@ class MainWindow(QMainWindow):
 
     def _update_title(self, *_args) -> None:
         path = self._state.project_path
-        name = os.path.basename(path) if path else "Untitled"
+        if path:
+            name = os.path.basename(path)
+        else:
+            name = self._state.project.name or "Untitled"
         prefix = "* " if self._state.is_modified else ""
         self.setWindowTitle(f"{prefix}{name} — {self.APP_NAME}")
 
@@ -920,8 +937,9 @@ class MainWindow(QMainWindow):
 
         for path in paths:
             try:
-                las = lasio.read(str(path))
-                header = extract_header_full(las)
+                with _wait_cursor():
+                    las = lasio.read(str(path))
+                    header = extract_header_full(las)
             except Exception as exc:
                 QMessageBox.warning(self, "Import Error",
                                     f"Cannot read LAS file:\n{path}\n\n{exc}")
@@ -1188,16 +1206,17 @@ class MainWindow(QMainWindow):
             import csv
             import numpy as np
             distances, elevations = [], []
-            with open(path, newline="", encoding="utf-8-sig") as fh:
-                reader = csv.reader(fh)
-                header = next(reader, None)
-                for row in reader:
-                    if len(row) >= 2:
-                        try:
-                            distances.append(float(row[0]))
-                            elevations.append(float(row[1]))
-                        except ValueError:
-                            continue
+            with _wait_cursor():
+                with open(path, newline="", encoding="utf-8-sig") as fh:
+                    reader = csv.reader(fh)
+                    header = next(reader, None)
+                    for row in reader:
+                        if len(row) >= 2:
+                            try:
+                                distances.append(float(row[0]))
+                                elevations.append(float(row[1]))
+                            except ValueError:
+                                continue
             if len(distances) < 2:
                 raise ValueError("Need at least 2 data rows.")
             self._section_view.set_topography(
@@ -1223,7 +1242,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() != dlg.DialogCode.Accepted:
             return
         try:
-            wells = dlg.load_wells()
+            with _wait_cursor():
+                wells = dlg.load_wells()
         except Exception as exc:
             QMessageBox.warning(self, "Import Error", str(exc))
             return

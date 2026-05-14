@@ -104,8 +104,16 @@ class SEGYHeaderDialog(QDialog):
 
     def _load(self, path: str) -> None:
         import segyio
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            f_ctx = segyio.open(path, ignore_geometry=True)
+        finally:
+            QApplication.restoreOverrideCursor()
 
-        with segyio.open(path, ignore_geometry=True) as f:
+        with f_ctx as f:
             text_hdr = f.text[0].decode("cp500", errors="replace")
             bin_hdr  = {k: f.bin[k] for k in f.bin.keys()}
             n_show   = min(10, f.tracecount)
