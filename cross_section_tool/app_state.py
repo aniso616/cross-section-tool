@@ -207,9 +207,24 @@ class AppState(QObject):
     # Project-level operations
     # ------------------------------------------------------------------
 
-    def new_project(self, name: str = "", crs_epsg: int = 32632) -> None:
+    def new_project(
+        self,
+        name: str = "",
+        crs_epsg: int = 32632,
+        depth_units: str = "m",
+        depth_domain: str = "md",
+        default_depth_min: float = 0.0,
+        default_depth_max: float = 5000.0,
+    ) -> None:
         """Replace the current project with a fresh empty one."""
-        self._project = Project(name=name, crs_epsg=crs_epsg)
+        self._project = Project(
+            name=name,
+            crs_epsg=crs_epsg,
+            depth_units=depth_units,
+            depth_domain=depth_domain,
+            default_depth_min=default_depth_min,
+            default_depth_max=default_depth_max,
+        )
         self._project_path = None
         self._active_section = None
         self._active_well = None

@@ -807,9 +807,24 @@ class MainWindow(QMainWindow):
     # File operations (testable, no dialogs)
     # ------------------------------------------------------------------
 
-    def _new_project(self, crs_epsg: int = 32632) -> None:
+    def _new_project(
+        self,
+        name: str = "",
+        crs_epsg: int = 32632,
+        depth_units: str = "m",
+        depth_domain: str = "md",
+        default_depth_min: float = 0.0,
+        default_depth_max: float = 5000.0,
+    ) -> None:
         """Create a fresh project (no dialog)."""
-        self._state.new_project(crs_epsg=crs_epsg)
+        self._state.new_project(
+            name=name,
+            crs_epsg=crs_epsg,
+            depth_units=depth_units,
+            depth_domain=depth_domain,
+            default_depth_min=default_depth_min,
+            default_depth_max=default_depth_max,
+        )
 
     def _open_project(self, path: str) -> bool:
         """Load a project from *path*. Returns True on success, False on error (no dialog)."""
@@ -858,20 +873,21 @@ class MainWindow(QMainWindow):
     def _on_new(self) -> None:
         if not self._check_unsaved_changes():
             return
-        from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(
-            self, "New Project", "Project name:", text="Untitled"
+        from cross_section_tool.views.new_project_dialog import NewProjectDialog
+        dlg = NewProjectDialog(
+            current_crs=self._state.project.crs_epsg,
+            parent=self,
         )
-        if not ok:
+        if dlg.exec() != NewProjectDialog.DialogCode.Accepted:
             return
-        crs, ok2 = QInputDialog.getInt(
-            self, "New Project",
-            "Coordinate Reference System (EPSG code):",
-            value=32632, min=1, max=999999,
+        self._new_project(
+            name=dlg.project_name(),
+            crs_epsg=dlg.crs_epsg(),
+            depth_units=dlg.depth_units(),
+            depth_domain=dlg.depth_domain(),
+            default_depth_min=dlg.default_depth_min(),
+            default_depth_max=dlg.default_depth_max(),
         )
-        if not ok2:
-            return
-        self._new_project(name=name.strip() or "Untitled", crs_epsg=crs)
 
     def _on_open(self) -> None:
         if not self._check_unsaved_changes():
@@ -1662,7 +1678,10 @@ class MainWindow(QMainWindow):
         value, ok2 = QInputDialog.getDouble(self, "Reference Line", label, 0.0)
         if not ok2:
             return
-        name, ok3 = QInputDialog.getText(self, "Reference Line", "Name (optional):", text="")
+        from PySide6.QtWidgets import QLineEdit
+        name, ok3 = QInputDialog.getText(
+            self, "Reference Line", "Name (optional):",
+            QLineEdit.EchoMode.Normal, "")
         rl = ReferenceLine(kind=kind, value=value, name=name.strip())
         self._state.add_reference_line(rl)
 

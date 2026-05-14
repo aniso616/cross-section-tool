@@ -77,9 +77,21 @@ class Project:
     seismic_refs:  Ordered list of :class:`SeismicRef` (paths to SEG-Y files).
     """
 
-    def __init__(self, name: str = "", crs_epsg: int = 32632) -> None:
+    def __init__(
+        self,
+        name: str = "",
+        crs_epsg: int = 32632,
+        depth_units: str = "m",
+        depth_domain: str = "md",
+        default_depth_min: float = 0.0,
+        default_depth_max: float = 5000.0,
+    ) -> None:
         self.name = name
         self.crs_epsg = int(crs_epsg)
+        self.depth_units = depth_units          # "m" or "ft"
+        self.depth_domain = depth_domain        # "md" or "twt"
+        self.default_depth_min = float(default_depth_min)
+        self.default_depth_max = float(default_depth_max)
         self.sections: list[Section] = []
         self.surfaces: list[Surface] = []
         self.horizon_picks: list[HorizonPick] = []
@@ -105,6 +117,10 @@ class Project:
             f.attrs["format_version"] = FORMAT_VERSION
             f.attrs["project_name"] = self.name
             f.attrs["crs_epsg"] = self.crs_epsg
+            f.attrs["depth_units"] = self.depth_units
+            f.attrs["depth_domain"] = self.depth_domain
+            f.attrs["default_depth_min"] = self.default_depth_min
+            f.attrs["default_depth_max"] = self.default_depth_max
             f.attrs["created_at"] = datetime.now().isoformat()
             _save_sections(f, self.sections)
             _save_surfaces(f, self.surfaces)
@@ -127,6 +143,10 @@ class Project:
             proj = cls(
                 name=_str(f.attrs.get("project_name", "")),
                 crs_epsg=int(f.attrs.get("crs_epsg", 32632)),
+                depth_units=_str(f.attrs.get("depth_units", "m")),
+                depth_domain=_str(f.attrs.get("depth_domain", "md")),
+                default_depth_min=float(f.attrs.get("default_depth_min", 0.0)),
+                default_depth_max=float(f.attrs.get("default_depth_max", 5000.0)),
             )
             proj.sections = _load_sections(f)
             proj.surfaces = _load_surfaces(f)

@@ -498,8 +498,10 @@ class ProjectPanel(QDockWidget):
         row = self._row_widgets.get((cat, idx))
         if row is None:
             return
+        from PySide6.QtWidgets import QLineEdit
         new_name, ok = QInputDialog.getText(
-            self, "Rename", f"New name for {row.name}:", text=row.name
+            self, "Rename", f"New name for {row.name}:",
+            QLineEdit.EchoMode.Normal, row.name,
         )
         if ok and new_name.strip():
             row.set_name(new_name.strip())
