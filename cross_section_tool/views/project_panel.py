@@ -26,12 +26,13 @@ from cross_section_tool.app_state import AppState
 # Category labels and per-object type colours
 # ---------------------------------------------------------------------------
 
-_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines", "Polygons"]
+_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines", "Polygons", "Wells"]
 _DEFAULT_COLORS = {
     "Sections":        "#1f77b4",
     "Horizons":        "#2ca02c",
     "Faults":          "#d62728",
     "Reference Lines": "#999999",
+    "Wells":           "#8B4513",
     "Polygons":        "#9467bd",
 }
 _ICONS = {
@@ -40,6 +41,7 @@ _ICONS = {
     "Faults":          "╲",
     "Reference Lines": "·",
     "Polygons":        "■",
+    "Wells":           "▼",
 }
 
 
@@ -201,17 +203,20 @@ class ProjectPanel(QDockWidget):
         Emitted when the + button is clicked.
     """
 
-    properties_requested     = Signal(str, int)   # Phase A/B/E
-    visibility_changed       = Signal(str, int, bool)
-    object_color_changed     = Signal(str, int, str)
+    properties_requested      = Signal(str, int)   # Phase A/B/E
+    visibility_changed        = Signal(str, int, bool)
+    object_color_changed      = Signal(str, int, str)
     object_line_width_changed = Signal(str, int, float)
     object_line_style_changed = Signal(str, int, str)
-    object_renamed           = Signal(str, int, str)
-    object_deleted           = Signal(str, int)
-    object_moved             = Signal(str, int, int)
-    add_requested            = Signal(str)
+    object_renamed            = Signal(str, int, str)
+    object_deleted            = Signal(str, int)
+    object_moved              = Signal(str, int, int)
+    add_requested             = Signal(str)
     # Emitted when a Horizon/Fault is clicked — signals the active pick target
-    pick_target_selected     = Signal(str, int)
+    pick_target_selected      = Signal(str, int)
+    # Well-specific actions
+    create_ew_section_through_well = Signal(int)   # well index
+    create_ns_section_through_well = Signal(int)   # well index
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__("Project", parent)
@@ -374,6 +379,9 @@ class ProjectPanel(QDockWidget):
         if category == "Polygons":
             return [(p.name or f"Polygon {i+1}", p.fill_color, 1.5, "solid")
                     for i, p in enumerate(proj.polygons)]
+        if category == "Wells":
+            return [(w.name or f"Well {i+1}", _DEFAULT_COLORS["Wells"], _dw, _ds)
+                    for i, w in enumerate(proj.wells)]
         return []
 
     # ------------------------------------------------------------------
@@ -444,8 +452,14 @@ class ProjectPanel(QDockWidget):
 
         menu = QMenu(self)
         props_act  = None
+        ew_sec_act = None
+        ns_sec_act = None
         if cat in ("Horizons", "Faults"):
             props_act = menu.addAction("Properties…")
+            menu.addSeparator()
+        if cat == "Wells":
+            ew_sec_act = menu.addAction("Create E–W Section Through Well")
+            ns_sec_act = menu.addAction("Create N–S Section Through Well")
             menu.addSeparator()
         rename_act = menu.addAction("Rename")
         menu.addSeparator()
@@ -457,6 +471,10 @@ class ProjectPanel(QDockWidget):
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
         if props_act and chosen is props_act:
             self.properties_requested.emit(cat, idx)
+        elif ew_sec_act and chosen is ew_sec_act:
+            self.create_ew_section_through_well.emit(idx)
+        elif ns_sec_act and chosen is ns_sec_act:
+            self.create_ns_section_through_well.emit(idx)
         elif chosen is rename_act:
             self._rename_item(cat, idx)
         elif chosen is del_act:

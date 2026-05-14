@@ -216,6 +216,10 @@ class Well:
         self.y = float(y)
         self.kb = float(kb)
         self.uwi = uwi
+        # Original (pre-transformation) coordinates — set by importer when CRS differs
+        self.original_x: float | None = None
+        self.original_y: float | None = None
+        self.original_crs_epsg: int | None = None
         self.deviation: DeviationSurvey = (
             deviation if deviation is not None else DeviationSurvey.vertical(x, y)
         )

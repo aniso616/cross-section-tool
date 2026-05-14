@@ -135,6 +135,76 @@ def _well_value(las: LASFile, *keys: str, default: Any = None) -> Any:
     return default
 
 
+def _well_value_with_source(
+    las: LASFile, *keys: str, default: Any = None
+) -> tuple[Any, str | None]:
+    """Return (value, source_key) for the first matching header field."""
+    for key in keys:
+        if key in las.well:
+            val = las.well[key].value
+            if val is None:
+                continue
+            if str(val).strip() in _EMPTY_STRINGS:
+                continue
+            return val, f"from {key}"
+    return default, None
+
+
+def extract_header_full(las: LASFile) -> dict[str, Any]:
+    """Like :func:`_extract_header` but also returns provenance strings.
+
+    Extra keys compared to the basic version:
+    ``x_source``, ``y_source``, ``kb_source``, ``gl``.
+    """
+    well_name = _well_value(las, "WELL", default=None)
+    uwi = _well_value(las, "UWI", "API", default=None)
+
+    x, x_src = _well_value_with_source(las, *_X_KEYS)
+    y, y_src = _well_value_with_source(las, *_Y_KEYS)
+    if x is None or y is None:
+        loc_x, loc_y = _parse_loc_xy(las)
+        if x is None and loc_x is not None:
+            x, x_src = loc_x, "parsed from LOC field"
+        if y is None and loc_y is not None:
+            y, y_src = loc_y, "parsed from LOC field"
+    if x_src is None:
+        x_src = "not found — enter manually"
+    if y_src is None:
+        y_src = "not found — enter manually"
+
+    kb, kb_src = _well_value_with_source(las, *_KB_KEYS)
+    gl, _      = _well_value_with_source(las, "EGL", "GL", "GLE", "GROUND")
+
+    def _opt_float(v: Any) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    strt = _well_value(las, "STRT", default=None)
+    stop = _well_value(las, "STOP", default=None)
+    step = _well_value(las, "STEP", default=None)
+    depth_unit = las.index_unit or None
+    curve_names = [c.mnemonic for c in las.curves[1:]]
+
+    return {
+        "well_name":   str(well_name).strip() if well_name is not None else None,
+        "uwi":         str(uwi).strip() if uwi is not None else None,
+        "x":           _opt_float(x),
+        "y":           _opt_float(y),
+        "x_source":    x_src,
+        "y_source":    y_src,
+        "kb":          _opt_float(kb),
+        "kb_source":   kb_src,
+        "gl":          _opt_float(gl),
+        "depth_start": _opt_float(strt),
+        "depth_stop":  _opt_float(stop),
+        "depth_step":  _opt_float(step),
+        "depth_unit":  str(depth_unit).strip() if depth_unit else None,
+        "curve_names": curve_names,
+    }
+
+
 def _extract_header(las: LASFile) -> dict[str, Any]:
     well_name = _well_value(las, "WELL", default=None)
     uwi = _well_value(las, "UWI", "API", default=None)

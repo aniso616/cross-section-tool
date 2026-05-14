@@ -78,6 +78,9 @@ class MapView(QWidget):
         self._new_sec_nodes: list[tuple[float, float]] = []
         self._new_sec_cursor: tuple[float, float] | None = None
 
+        # ---- place-well mode ----
+        self._placing_well_index: int | None = None
+
         # ---- pan state ----
         self._pan_anchor:  tuple[float, float] | None = None  # display px
         self._pan_xlim0:   tuple[float, float] | None = None
@@ -439,6 +442,12 @@ class MapView(QWidget):
         if event.inaxes is not self._ax:
             return
 
+        # Place-well mode takes priority over all other tools
+        if self._placing_well_index is not None and event.button == 1:
+            if event.xdata is not None and event.ydata is not None:
+                self._place_well_click(float(event.xdata), float(event.ydata))
+            return
+
         tool = self._state.active_tool
 
         # Middle button always pans
@@ -741,6 +750,35 @@ class MapView(QWidget):
 
     def _on_seismic_changed(self, *_args) -> None:
         self.request_render()
+
+    # ------------------------------------------------------------------
+    # Place-well mode
+    # ------------------------------------------------------------------
+
+    def start_place_well(self, well_index: int) -> None:
+        """Enter place-well mode: next left-click positions the well at that index."""
+        self._placing_well_index = well_index
+        self._canvas.setCursor(Qt.CursorShape.CrossCursor)
+        wells = self._state.project.wells
+        name = wells[well_index].name if well_index < len(wells) else "well"
+        self.status_message.emit(f"Click on the map to place well '{name}'")
+
+    def _place_well_click(self, x: float, y: float) -> None:
+        import copy
+        idx = self._placing_well_index
+        self._placing_well_index = None
+        wells = self._state.project.wells
+        if idx is None or idx >= len(wells):
+            self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
+            self.status_message.emit("")
+            return
+        wc = copy.copy(wells[idx])
+        wc.x = x
+        wc.y = y
+        wc.deviation = wc.deviation.__class__.vertical(x, y)
+        self._state.update_well(idx, wc)
+        self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
+        self.status_message.emit("")
 
     def _on_tool_changed(self, tool_id: str) -> None:
         # Cancel section drawing when switching away

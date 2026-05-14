@@ -545,6 +545,11 @@ class MainWindow(QMainWindow):
             if tid in ("zoom", "new_section", "polygon"):
                 tools_menu.addSeparator()
 
+        tools_menu.addSeparator()
+        self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
+        self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
+        tools_menu.addAction(self._view_segy_hdr_action)
+
         # ================================================================
         # Help
         # ================================================================
@@ -634,6 +639,10 @@ class MainWindow(QMainWindow):
         self._project_panel.object_line_width_changed.connect(self._on_panel_line_width)
         self._project_panel.object_line_style_changed.connect(self._on_panel_line_style)
         self._project_panel.add_requested.connect(self._on_panel_add)
+        self._project_panel.create_ew_section_through_well.connect(
+            self._on_create_ew_section_through_well)
+        self._project_panel.create_ns_section_through_well.connect(
+            self._on_create_ns_section_through_well)
         # Status bar from map view drag
         self._map_view.status_message.connect(self._on_map_status)
         # Status bar updates when tool or active pick target changes
@@ -886,63 +895,181 @@ class MainWindow(QMainWindow):
         )
         if not paths:
             return
-        from cross_section_tool.io.las import read_las
-        from cross_section_tool.core.wells import LogCurve
+        import lasio
+        from cross_section_tool.io.las import extract_header_full
+        from cross_section_tool.core.wells import LogCurve, Well
+        from cross_section_tool.views.las_import_dialog import LASImportDialog
         _MAX_LOG_SAMPLES = 10_000
-        added = []
-        errors = []
-        try:
-            self._state.blockSignals(True)
-            for path in paths:
-                try:
-                    well = read_las(path, crs_epsg=self._state.project.crs_epsg)
-                    # Downsample very large logs for display performance
-                    for log_name in well.log_names:
-                        log = well.get_log(log_name)
-                        if log.n_samples > _MAX_LOG_SAMPLES:
-                            step = log.n_samples // _MAX_LOG_SAMPLES
-                            well.add_log(LogCurve(
-                                log.name, log.units,
-                                log._depths[::step], log._values[::step],
-                            ))
-                    self._state.project.wells.append(well)
-                    added.append(well)
-                except Exception as exc:
-                    errors.append(f"{path}:\n{exc}")
-        finally:
-            self._state.blockSignals(False)
-            if added:
-                self._state.project_changed.emit()
-        for msg in errors:
-            QMessageBox.warning(self, "Import Warning", msg)
-        # Warn if well coords are far from existing sections
-        if added:
-            self._warn_if_well_far_from_sections(added)
+        place_manually_wells: list[int] = []  # indices of wells needing manual placement
+
+        for path in paths:
+            try:
+                las = lasio.read(str(path))
+                header = extract_header_full(las)
+            except Exception as exc:
+                QMessageBox.warning(self, "Import Error",
+                                    f"Cannot read LAS file:\n{path}\n\n{exc}")
+                continue
+
+            dlg = LASImportDialog(
+                las, path, header,
+                project_crs_epsg=self._state.project.crs_epsg,
+                parent=self,
+            )
+            if dlg.exec() != LASImportDialog.DialogCode.Accepted:
+                continue
+
+            try:
+                well = self._build_well_from_dialog(dlg, las, header, _MAX_LOG_SAMPLES)
+            except Exception as exc:
+                QMessageBox.warning(self, "Import Error",
+                                    f"Failed to import well:\n{path}\n\n{exc}")
+                continue
+
+            well_idx = len(self._state.project.wells)
+            self._state.add_well(well)
+
+            if dlg.place_manually():
+                place_manually_wells.append(well_idx)
+            else:
+                self._warn_if_well_far_from_sections([well])
+
+        # After all imports, enter place-well mode for the last "place manually" well
+        if place_manually_wells:
+            last_idx = place_manually_wells[-1]
+            wells = self._state.project.wells
+            if last_idx < len(wells):
+                self._map_view.start_place_well(last_idx)
+                self._statusbar.showMessage(
+                    f"Click on the map to place well '{wells[last_idx].name}'", 0
+                )
+
+    def _build_well_from_dialog(self, dlg, las, header, max_samples: int):
+        """Construct a Well from a completed LASImportDialog."""
+        import numpy as np
+        from cross_section_tool.core.wells import LogCurve, Well, DeviationSurvey
+
+        x, y, kb = dlg.x(), dlg.y(), dlg.kb()
+        well_crs = dlg.well_crs_epsg()
+        proj_crs = self._state.project.crs_epsg
+
+        # CRS transformation if needed
+        if well_crs is not None and well_crs != proj_crs and x != 0.0:
+            try:
+                from cross_section_tool.core.crs import transform_points
+                tx, ty = transform_points(
+                    np.array([x]), np.array([y]),
+                    from_epsg=well_crs, to_epsg=proj_crs,
+                )
+                orig_x, orig_y = x, y
+                x, y = float(tx[0]), float(ty[0])
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "CRS Transform Warning",
+                    f"Could not transform coordinates: {exc}\n"
+                    "Coordinates imported as-is."
+                )
+                orig_x, orig_y = None, None
+        else:
+            orig_x, orig_y = None, None
+
+        well = Well(name=dlg.well_name(), x=x, y=y, kb=kb, uwi=dlg.uwi())
+        if orig_x is not None:
+            well.original_x = orig_x
+            well.original_y = orig_y
+            well.original_crs_epsg = well_crs
+
+        # Depth index
+        if not las.curves:
+            return well
+        depth_mnemonic = las.curves[0].mnemonic
+        depths = np.asarray(las[depth_mnemonic], dtype=float)
+        if len(depths) == 0:
+            return well
+
+        # Selected log curves only
+        selected = set(dlg.selected_curves())
+        for curve in las.curves[1:]:
+            if curve.mnemonic not in selected:
+                continue
+            values = np.asarray(las[curve.mnemonic], dtype=float)
+            if len(values) != len(depths):
+                continue
+            lc = LogCurve(curve.mnemonic, curve.unit or "", depths, values)
+            if lc.n_samples > max_samples:
+                step = lc.n_samples // max_samples
+                lc = LogCurve(lc.name, lc.units,
+                              lc._depths[::step], lc._values[::step])
+            well.add_log(lc)
+
+        return well
 
     def _warn_if_well_far_from_sections(self, wells) -> None:
         """Warn the user if a loaded well is far from all existing section lines."""
+        import math
         sections = self._state.project.sections
         if not sections:
             return
-        import math
         for well in wells:
             if well.x == 0.0 and well.y == 0.0:
                 continue
-            # Find closest distance from well to any section node
             min_dist = float("inf")
             for sec in sections:
                 for node in sec.nodes:
                     d = math.hypot(well.x - node[0], well.y - node[1])
                     if d < min_dist:
                         min_dist = d
-            if min_dist > 50_000:  # >50 km — almost certainly a CRS mismatch
+            if min_dist > 50_000:
                 QMessageBox.information(
                     self, "Well Location",
-                    f"Well '{well.name}' was loaded at ({well.x:.0f}, {well.y:.0f}).\n"
-                    f"The nearest section node is {min_dist/1000:.1f} km away.\n\n"
+                    f"Well '{well.name}' is at ({well.x:.0f}, {well.y:.0f}).\n"
+                    f"The nearest section is {min_dist/1000:.1f} km away.\n\n"
                     "Your sections may be in a different coordinate system. "
-                    "Consider creating sections near the well location.",
+                    "Consider creating a section near the well location.",
                 )
+
+    def _on_view_segy_header(self) -> None:
+        """Tools → View SEG-Y Header: pick a file and show the header inspector."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "View SEG-Y Header",
+            "", "SEG-Y Files (*.segy *.sgy *.SGY);;All Files (*)",
+        )
+        if not path:
+            return
+        from cross_section_tool.views.segy_header_dialog import SEGYHeaderDialog
+        SEGYHeaderDialog(path, self).exec()
+
+    def _on_create_ew_section_through_well(self, well_idx: int) -> None:
+        """Project panel: Create E–W section through the selected well."""
+        self._create_section_through_well(well_idx, orientation="ew")
+
+    def _on_create_ns_section_through_well(self, well_idx: int) -> None:
+        """Project panel: Create N–S section through the selected well."""
+        self._create_section_through_well(well_idx, orientation="ns")
+
+    def _create_section_through_well(self, well_idx: int, orientation: str) -> None:
+        import numpy as np
+        from cross_section_tool.core.section import Section
+        wells = self._state.project.wells
+        if well_idx >= len(wells):
+            return
+        well = wells[well_idx]
+        half = 5_000.0  # 5 km each side
+        if orientation == "ew":
+            nodes = np.array([
+                [well.x - half, well.y],
+                [well.x + half, well.y],
+            ])
+            name = f"E-W through {well.name}"
+        else:
+            nodes = np.array([
+                [well.x, well.y - half],
+                [well.x, well.y + half],
+            ])
+            name = f"N-S through {well.name}"
+        section = Section(nodes, name=name)
+        self._state.add_section(section)
+        self._state.set_active_section(section)
 
     def _on_import_segy(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -954,12 +1081,18 @@ class MainWindow(QMainWindow):
         for path in paths:
             from cross_section_tool.io.project import SeismicRef
             from cross_section_tool.views.seismic_import_dialog import SeismicImportDialog
+            from cross_section_tool.views.segy_header_dialog import SEGYHeaderDialog
             fname = os.path.basename(path)
             dlg = SeismicImportDialog(
                 sections=self._state.project.sections,
                 filename=fname,
                 parent=self,
             )
+            # Offer header viewer button inside the import dialog
+            from PySide6.QtWidgets import QPushButton as _QPB
+            hdr_btn = _QPB("View SEG-Y Header…")
+            hdr_btn.clicked.connect(lambda _checked, p=path: SEGYHeaderDialog(p, dlg).exec())
+            dlg.layout().insertWidget(0, hdr_btn)
             if dlg.exec() != dlg.DialogCode.Accepted:
                 continue
             ref = SeismicRef(
@@ -1302,6 +1435,8 @@ class MainWindow(QMainWindow):
                 self._state.remove_fault_pick(proj.fault_picks[index])
             elif category == "Reference Lines" and index < len(proj.reference_lines):
                 self._state.remove_reference_line(proj.reference_lines[index])
+            elif category == "Wells" and index < len(proj.wells):
+                self._state.remove_well(proj.wells[index])
         except Exception:
             pass
 
