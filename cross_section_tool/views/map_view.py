@@ -193,14 +193,16 @@ class MapView(QWidget):
         self._render_sections()
         self._render_wells()
         self._render_new_section_preview()
-        self._render_graticule()
 
-        # Sensible default extent when nothing is loaded
+        # Set/correct limits BEFORE graticule so it computes sensible intervals.
         proj = self._state.project
         if not proj.sections and not proj.wells and not proj.surfaces:
             self._ax.set_xlim(-500, 10500)
             self._ax.set_ylim(-500, 10500)
+        else:
+            self._ensure_map_extent()
 
+        self._render_graticule()
         self._canvas.draw_idle()
 
     def _render_new_section_preview(self) -> None:
@@ -217,6 +219,20 @@ class MapView(QWidget):
             cx, cy = self._new_sec_cursor
             self._ax.plot([xs[-1], cx], [ys[-1], cy],
                           ":", color="#ff7f0e", lw=1.2, alpha=0.6, zorder=8)
+
+    def _ensure_map_extent(self) -> None:
+        """Guarantee a minimum view span so equal-aspect never degenerates to a line."""
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        x_span = xl[1] - xl[0]
+        y_span = yl[1] - yl[0]
+        min_span = max(x_span, y_span, 100.0)
+        if y_span < min_span * 0.05:
+            mid = (yl[0] + yl[1]) / 2
+            self._ax.set_ylim(mid - min_span / 2, mid + min_span / 2)
+        if x_span < min_span * 0.05:
+            mid = (xl[0] + xl[1]) / 2
+            self._ax.set_xlim(mid - min_span / 2, mid + min_span / 2)
 
     def _render_graticule(self) -> None:
         xmin, xmax = self._ax.get_xlim()
