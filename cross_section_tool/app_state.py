@@ -12,8 +12,9 @@ from cross_section_tool.core.reference_line import ReferenceLine
 from cross_section_tool.core.section import Section
 from cross_section_tool.core.surfaces import HorizonPick, Surface
 from cross_section_tool.core.topology import SectionTopology
-from cross_section_tool.core.wells import Well
+from cross_section_tool.core.wells import LogCurve, Well
 from cross_section_tool.io.project import Project, SeismicRef
+import numpy as np
 
 
 class AppState(QObject):
@@ -130,6 +131,25 @@ class AppState(QObject):
         self._active_pick_index: int | None = None
         # Live topology (one per active section)
         self._topology: SectionTopology | None = None
+        # SQLite project manager (None when working with legacy HDF5 projects)
+        from cross_section_tool.io.project_manager import ProjectManager
+        self._pm: ProjectManager = ProjectManager()
+
+    # ------------------------------------------------------------------
+    # DB write-through helper
+    # ------------------------------------------------------------------
+
+    @property
+    def project_manager(self):
+        return self._pm
+
+    def _db_write(self, fn) -> None:
+        """Call *fn* only when a ProjectManager database is open."""
+        if self._pm.is_open:
+            try:
+                fn()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Read-only properties
@@ -215,8 +235,10 @@ class AppState(QObject):
         depth_domain: str = "md",
         default_depth_min: float = 0.0,
         default_depth_max: float = 5000.0,
+        folder_path: str | None = None,
     ) -> None:
         """Replace the current project with a fresh empty one."""
+        self._pm.close()
         self._project = Project(
             name=name,
             crs_epsg=crs_epsg,
@@ -225,20 +247,40 @@ class AppState(QObject):
             default_depth_min=default_depth_min,
             default_depth_max=default_depth_max,
         )
-        self._project_path = None
+        self._project_path = folder_path
         self._active_section = None
         self._active_well = None
         self._is_modified = False
         self._topology = None
         self._cmd_stack.clear()
-        self.project_path_changed.emit("")
+        if folder_path:
+            self._pm.new_project(
+                folder_path, name, crs_epsg,
+                depth_units=depth_units,
+                depth_domain=depth_domain,
+                default_depth_min=default_depth_min,
+                default_depth_max=default_depth_max,
+            )
+        self.project_path_changed.emit(folder_path or "")
         self.project_changed.emit()
         self.project_modified_changed.emit(False)
 
     def open_project(self, path: str | os.PathLike) -> None:
-        """Load a project from *path* and replace the current state."""
-        self._project = Project.load(path)
-        self._project_path = str(path)
+        """Load a project from *path*.
+
+        Accepts either a project folder (SQLite) or a legacy .h5 file.
+        """
+        path = str(path)
+        self._pm.close()
+        if os.path.isdir(path):
+            # SQLite folder-based project
+            self._pm.open_project(path)
+            self._project = self._load_from_sqlite(path)
+            self._project_path = path
+        else:
+            # Legacy HDF5 file
+            self._project = Project.load(path)
+            self._project_path = path
         self._active_section = None
         self._active_well = None
         self._is_modified = False
@@ -247,23 +289,185 @@ class AppState(QObject):
         self.project_changed.emit()
         self.project_modified_changed.emit(False)
 
-    def save_project(self) -> None:
-        """Save to the current :attr:`project_path`.
+    def _load_from_sqlite(self, folder_path: str) -> "Project":
+        """Reconstruct in-memory Project from an open SQLite database."""
+        import json as _json
+        db = self._pm.db
+        data = db.load_all()
+        meta = data["meta"]
 
-        Raises
-        ------
-        ValueError
-            If no path has been set yet; call :meth:`save_project_as` first.
-        """
+        proj = Project(
+            name=meta.get("name", ""),
+            crs_epsg=int(meta.get("crs_epsg", 32632)),
+            depth_units=meta.get("depth_units", "m"),
+            depth_domain=meta.get("depth_domain", "md"),
+            default_depth_min=float(meta.get("default_depth_min", 0.0)),
+            default_depth_max=float(meta.get("default_depth_max", 5000.0)),
+        )
+
+        # Sections
+        for row in data["sections"]:
+            nodes = np.array(_json.loads(row["nodes_json"]))
+            sec = Section(
+                nodes,
+                name=row["name"],
+                depth_domain=row.get("depth_domain", "md"),
+                depth_units=row.get("depth_units", "m"),
+                vertical_exaggeration=float(row.get("vertical_exaggeration", 1.0)),
+                crs_epsg=int(row.get("crs_epsg", 32632)),
+            )
+            proj.sections.append(sec)
+
+        # Horizons + picks
+        for hrow in data["horizons"]:
+            picks = hrow.get("picks", [])
+            if picks:
+                dists   = np.array([p["distance_along"] for p in picks], dtype=float)
+                depths  = np.array([p["depth"]          for p in picks], dtype=float)
+                snames  = np.array([p["section_name"]   for p in picks], dtype=object)
+            else:
+                dists = depths = np.array([], dtype=float)
+                snames = np.array([], dtype=object)
+            hp = HorizonPick(
+                dists, depths,
+                name=hrow["name"],
+                color=hrow.get("color", "#2ca02c"),
+                line_width=float(hrow.get("line_width", 1.5)),
+                line_style=hrow.get("line_style", "solid"),
+                section_names=snames,
+                contact_type=hrow.get("contact_type", "conformable"),
+                formation_above=hrow.get("formation_above", ""),
+                formation_below=hrow.get("formation_below", ""),
+            )
+            proj.horizon_picks.append(hp)
+
+        # Faults + picks
+        for frow in data["faults"]:
+            picks = frow.get("picks", [])
+            if picks:
+                dists  = np.array([p["distance_along"] for p in picks], dtype=float)
+                depths = np.array([p["depth"]          for p in picks], dtype=float)
+                snames = np.array([p["section_name"]   for p in picks], dtype=object)
+            else:
+                dists = depths = np.array([], dtype=float)
+                snames = np.array([], dtype=object)
+            fp = HorizonPick(
+                dists, depths,
+                name=frow["name"],
+                color=frow.get("color", "#d62728"),
+                line_width=float(frow.get("line_width", 1.5)),
+                line_style=frow.get("line_style", "solid"),
+                section_names=snames,
+            )
+            proj.fault_picks.append(fp)
+
+        # Wells
+        for wrow in data["wells"]:
+            well = Well(
+                name=wrow["name"],
+                x=float(wrow["x"]),
+                y=float(wrow["y"]),
+                kb=float(wrow.get("kb_elevation", 0.0)),
+                uwi=wrow.get("uwi", ""),
+            )
+            well.original_x = wrow.get("original_x")
+            well.original_y = wrow.get("original_y")
+            well.original_crs_epsg = wrow.get("original_crs_epsg")
+            for top in wrow.get("tops", []):
+                well.add_formation_top(top["formation_name"], float(top["md"]))
+            # Restore log curves from stored data
+            for lg in wrow.get("logs", []):
+                try:
+                    raw = _json.loads(lg["data_json"])
+                    depths_list = _json.loads(raw["depths"])
+                    values_list = _json.loads(raw["values"])
+                    lc = LogCurve(
+                        lg["mnemonic"], lg.get("unit", ""),
+                        np.array(depths_list), np.array(values_list)
+                    )
+                    well.add_log(lc)
+                except Exception:
+                    pass
+            proj.wells.append(well)
+
+        # Seismic refs
+        for srow in data["seismic"]:
+            from cross_section_tool.io.project import SeismicRef
+            ref = SeismicRef(
+                path=self._pm.resolve_file_path(srow["file_path"]),
+                name=srow["name"],
+                x_field=int(srow.get("x_field", 181)),
+                y_field=int(srow.get("y_field", 185)),
+                scalar_field=int(srow.get("scalar_field", 71)),
+                apply_scalar=bool(srow.get("apply_scalar", 1)),
+                domain=srow.get("domain", "twt"),
+                depth_units=srow.get("depth_units", "ms"),
+                crs_epsg=int(srow.get("crs_epsg", 32632)),
+                extent_x_min=float(srow.get("extent_xmin", 0.0)),
+                extent_x_max=float(srow.get("extent_xmax", 0.0)),
+                extent_y_min=float(srow.get("extent_ymin", 0.0)),
+                extent_y_max=float(srow.get("extent_ymax", 0.0)),
+                n_traces_total=int(srow.get("n_traces", 0)),
+            )
+            proj.seismic_refs.append(ref)
+
+        # Polygons
+        for prow in data["polygons"]:
+            verts = np.array(_json.loads(prow["vertices_json"]))
+            poly = SectionPolygon(
+                vertices=verts,
+                name=prow["name"],
+                fill_color=prow.get("fill_color", "#9467bd"),
+                fill_alpha=float(prow.get("fill_opacity", 0.6)),
+                formation=prow.get("formation_name", ""),
+            )
+            proj.polygons.append(poly)
+
+        # Reference lines
+        for rrow in data["reference_lines"]:
+            rl = ReferenceLine(
+                kind=rrow.get("line_type", "horizontal"),
+                value=float(rrow.get("value", 0.0)),
+                name=rrow.get("name", ""),
+                color=rrow.get("color", "#999999"),
+                visible=bool(rrow.get("visible", 1)),
+            )
+            proj.reference_lines.append(rl)
+
+        # Annotations
+        for arow in data["annotations"]:
+            ann = Annotation(
+                text=arow.get("text", ""),
+                position=(float(arow.get("distance", 0.0)),
+                          float(arow.get("depth", 0.0))),
+                section_name=arow.get("section_name", ""),
+                font_size=int(arow.get("font_size", 10)),
+                rotation=float(arow.get("rotation", 0.0)),
+                color=arow.get("color", "#000000"),
+            )
+            proj.annotations.append(ann)
+
+        return proj
+
+    def save_project(self) -> None:
+        """Commit database changes or save HDF5 depending on project type."""
         if self._project_path is None:
             raise ValueError("No project path set; use save_project_as() first")
-        self._project.save(self._project_path)
+        if self._pm.is_open:
+            self._pm.save()
+        else:
+            self._project.save(self._project_path)
         self._set_modified(False)
 
-    def save_project_as(self, path: str | os.PathLike) -> None:
-        """Save to *path* and update :attr:`project_path`."""
-        self._project_path = str(path)
-        self._project.save(self._project_path)
+    def save_project_as(self, new_path: str | os.PathLike) -> None:
+        """Copy project to *new_path* (folder for SQLite, file for HDF5)."""
+        new_path = str(new_path)
+        if self._pm.is_open:
+            self._pm.save_as(new_path)
+            self._project_path = new_path
+        else:
+            self._project_path = new_path
+            self._project.save(self._project_path)
         self.project_path_changed.emit(self._project_path)
         self._set_modified(False)
 
@@ -274,11 +478,13 @@ class AppState(QObject):
     def add_section(self, section: Section) -> None:
         self._project.sections.append(section)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_section(section))
         self.section_added.emit(section)
 
     def remove_section(self, section: Section) -> None:
         self._project.sections.remove(section)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.delete_section(section.name))
         self.section_removed.emit(section)
         if self._active_section is section:
             fallback = self._project.sections[0] if self._project.sections else None
@@ -289,6 +495,7 @@ class AppState(QObject):
         old = self._project.sections[index]
         self._project.sections[index] = section
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_section(section))
         self.section_modified.emit(index, section)
         if self._active_section is old:
             self.set_active_section(section)
@@ -385,18 +592,21 @@ class AppState(QObject):
     def add_horizon_pick(self, pick: HorizonPick) -> None:
         self._project.horizon_picks.append(pick)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_horizon(pick))
         self.horizon_pick_added.emit(pick)
         self._rebuild_topology()
 
     def remove_horizon_pick(self, pick: HorizonPick) -> None:
         self._project.horizon_picks.remove(pick)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.delete_horizon(pick.name))
         self.horizon_pick_removed.emit(pick)
         self._rebuild_topology()
 
     def update_horizon_pick(self, index: int, pick: HorizonPick) -> None:
         self._project.horizon_picks[index] = pick
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_horizon(pick))
         self.horizon_pick_modified.emit(index, pick)
         self._rebuild_topology()
 
@@ -407,11 +617,13 @@ class AppState(QObject):
     def add_well(self, well: Well) -> None:
         self._project.wells.append(well)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_well(well))
         self.well_added.emit(well)
 
     def remove_well(self, well: Well) -> None:
         self._project.wells.remove(well)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.delete_well(well.name))
         self.well_removed.emit(well)
         if self._active_well is well:
             self.set_active_well(None)
@@ -420,6 +632,7 @@ class AppState(QObject):
         old = self._project.wells[index]
         self._project.wells[index] = well
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_well(well))
         self.well_modified.emit(index, well)
         if self._active_well is old:
             self.set_active_well(well)
@@ -437,11 +650,13 @@ class AppState(QObject):
     def add_seismic_ref(self, ref: SeismicRef) -> None:
         self._project.seismic_refs.append(ref)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_seismic(ref))
         self.seismic_ref_added.emit(ref)
 
     def remove_seismic_ref(self, ref: SeismicRef) -> None:
         self._project.seismic_refs.remove(ref)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.delete_seismic(ref.name))
         self.seismic_ref_removed.emit(ref)
 
     # ------------------------------------------------------------------
@@ -455,34 +670,40 @@ class AppState(QObject):
     def add_fault_pick(self, pick: HorizonPick) -> None:
         self._project.fault_picks.append(pick)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_fault(pick))
         self.fault_pick_added.emit(pick)
         self._rebuild_topology()
 
     def remove_fault_pick(self, pick: HorizonPick) -> None:
         self._project.fault_picks.remove(pick)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.delete_fault(pick.name))
         self.fault_pick_removed.emit(pick)
         self._rebuild_topology()
 
     def update_fault_pick(self, index: int, pick: HorizonPick) -> None:
         self._project.fault_picks[index] = pick
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_fault(pick))
         self.fault_pick_modified.emit(index, pick)
         self._rebuild_topology()
 
     def add_polygon(self, polygon: SectionPolygon) -> None:
         self._project.polygons.append(polygon)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_polygons(self._project.polygons))
         self.polygon_added.emit(polygon)
 
     def remove_polygon(self, polygon: SectionPolygon) -> None:
         self._project.polygons.remove(polygon)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_polygons(self._project.polygons))
         self.polygon_removed.emit(polygon)
 
     def update_polygon(self, index: int, polygon: SectionPolygon) -> None:
         self._project.polygons[index] = polygon
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_polygons(self._project.polygons))
         self.polygon_modified.emit(index, polygon)
 
     # ------------------------------------------------------------------
@@ -492,18 +713,24 @@ class AppState(QObject):
     def add_reference_line(self, rl: ReferenceLine) -> None:
         self._project.reference_lines.append(rl)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_reference_lines(
+            self._project.reference_lines))
         self.reference_line_added.emit(rl)
         self._rebuild_topology()
 
     def remove_reference_line(self, rl: ReferenceLine) -> None:
         self._project.reference_lines.remove(rl)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_reference_lines(
+            self._project.reference_lines))
         self.reference_line_removed.emit(rl)
         self._rebuild_topology()
 
     def update_reference_line(self, index: int, rl: ReferenceLine) -> None:
         self._project.reference_lines[index] = rl
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_reference_lines(
+            self._project.reference_lines))
         self.reference_line_modified.emit(index, rl)
         self._rebuild_topology()
 
@@ -514,16 +741,22 @@ class AppState(QObject):
     def add_annotation(self, ann: Annotation) -> None:
         self._project.annotations.append(ann)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_annotations(
+            self._project.annotations))
         self.annotation_added.emit(ann)
 
     def remove_annotation(self, ann: Annotation) -> None:
         self._project.annotations.remove(ann)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_annotations(
+            self._project.annotations))
         self.annotation_removed.emit(ann)
 
     def update_annotation(self, index: int, ann: Annotation) -> None:
         self._project.annotations[index] = ann
         self._set_modified()
+        self._db_write(lambda: self._pm.db.replace_all_annotations(
+            self._project.annotations))
         self.annotation_modified.emit(index, ann)
 
     # ------------------------------------------------------------------

@@ -108,8 +108,11 @@ class SectionView(QWidget):
         super().__init__(parent)
         self._state = state
 
-        # ---- seismic cache ----
+        # ---- seismic cache (loaded datasets) ----
         self._seismic_cache: dict[str, SeismicDataset] = {}
+        # ---- seismic projection cache (expensive per-section computation) ----
+        # key: (section_name, ref_path) → (distances, data, perps)
+        self._seismic_proj_cache: dict[tuple, tuple] = {}
         # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
@@ -335,7 +338,9 @@ class SectionView(QWidget):
 
     def _connect_signals(self) -> None:
         s = self._state
+        s.active_section_changed.connect(self._on_active_section_changed_seismic_invalidate)
         s.active_section_changed.connect(self._on_active_section_changed)
+        s.section_modified.connect(lambda *_: self._seismic_proj_cache.clear())
         s.active_pick_target_changed.connect(self._on_data_changed)
         s.active_pick_target_changed.connect(lambda *_: self._update_pick_banner())
         s.project_changed.connect(self.request_render)
@@ -1146,7 +1151,13 @@ class SectionView(QWidget):
             ds = self._get_or_load_seismic(ref)
             if ds is None or ds.n_traces == 0:
                 continue
-            distances, data, perps = ds.traces_sorted_by_section(section)
+            # Use projection cache — traces_sorted_by_section is O(n_traces) per call
+            proj_key = (section.name, ref.path)
+            if proj_key in self._seismic_proj_cache:
+                distances, data, perps = self._seismic_proj_cache[proj_key]
+            else:
+                distances, data, perps = ds.traces_sorted_by_section(section)
+                self._seismic_proj_cache[proj_key] = (distances, data, perps)
             # Filter by perpendicular distance (±500 m by default)
             mask = np.abs(perps) <= 500.0
             if mask.sum() >= 2:
@@ -2284,7 +2295,12 @@ class SectionView(QWidget):
 
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
+        self._seismic_proj_cache.clear()
         self.request_render()
+
+    def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
+        """Clear projection cache when section geometry changes."""
+        self._seismic_proj_cache.clear()
 
     # ------------------------------------------------------------------
     # Context menu

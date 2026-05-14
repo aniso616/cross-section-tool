@@ -832,6 +832,7 @@ class MainWindow(QMainWindow):
         depth_domain: str = "md",
         default_depth_min: float = 0.0,
         default_depth_max: float = 5000.0,
+        folder_path: str | None = None,
     ) -> None:
         """Create a fresh project (no dialog)."""
         self._state.new_project(
@@ -841,6 +842,7 @@ class MainWindow(QMainWindow):
             depth_domain=depth_domain,
             default_depth_min=default_depth_min,
             default_depth_max=default_depth_max,
+            folder_path=folder_path,
         )
 
     def _open_project(self, path: str) -> bool:
@@ -872,15 +874,28 @@ class MainWindow(QMainWindow):
             return False
 
     def _save_project_as_dialog(self) -> bool:
-        """Open a Save As dialog and save."""
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "", "HDF5 Project (*.h5);;All Files (*)"
-        )
-        if not path:
-            return False
-        ok = self._save_project_as(path)
+        """Open a Save As dialog — folder chooser for SQLite, file for HDF5."""
+        pm = self._state.project_manager
+        if pm.is_open:
+            # SQLite project: choose a folder
+            new_folder = QFileDialog.getExistingDirectory(
+                self, "Save Project As", os.path.dirname(pm.project_path or "")
+            )
+            if not new_folder:
+                return False
+            project_name = self._state.project.name or "Untitled"
+            dest = os.path.join(new_folder, project_name)
+            ok = self._save_project_as(dest)
+        else:
+            # Legacy HDF5
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Project As", "", "HDF5 Project (*.h5);;All Files (*)"
+            )
+            if not path:
+                return False
+            ok = self._save_project_as(path)
         if not ok:
-            QMessageBox.critical(self, "Save Error", f"Could not save:\n{path}")
+            QMessageBox.critical(self, "Save Error", "Could not save project.")
         return ok
 
     # ------------------------------------------------------------------
@@ -904,13 +919,24 @@ class MainWindow(QMainWindow):
             depth_domain=dlg.depth_domain(),
             default_depth_min=dlg.default_depth_min(),
             default_depth_max=dlg.default_depth_max(),
+            folder_path=dlg.folder_path() or None,
         )
 
     def _on_open(self) -> None:
         if not self._check_unsaved_changes():
             return
+        # Try folder picker first (SQLite projects), fall back to file picker (HDF5)
+        folder = QFileDialog.getExistingDirectory(
+            self, "Open Project Folder", os.path.expanduser("~")
+        )
+        if folder:
+            if not self._open_project(folder):
+                QMessageBox.critical(self, "Open Error", f"Could not open:\n{folder}")
+            return
+        # User cancelled folder dialog — offer legacy HDF5 open
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "HDF5 Project (*.h5);;All Files (*)"
+            self, "Open Legacy Project (HDF5)", "",
+            "HDF5 Project (*.h5);;All Files (*)"
         )
         if path:
             if not self._open_project(path):
@@ -1944,12 +1970,16 @@ class MainWindow(QMainWindow):
         self._hint_label.setText(f"{ms:.0f} ms  |  {fps:.0f} fps")
 
     def _on_autosave(self) -> None:
-        """Auto-save to a .autosave.h5 sidecar every 5 minutes if modified."""
+        """Auto-save every 5 minutes if modified."""
         if not self._state.is_modified or not self._state.project_path:
             return
-        autosave_path = self._state.project_path + ".autosave.h5"
+        pm = self._state.project_manager
         try:
-            self._state.project.save(autosave_path)
+            if pm.is_open:
+                pm.autosave()
+            else:
+                autosave_path = self._state.project_path + ".autosave.h5"
+                self._state.project.save(autosave_path)
             self._flash_status("Auto-saved")
         except Exception:
             pass
@@ -1959,6 +1989,17 @@ class MainWindow(QMainWindow):
         path = self._state.project_path
         if not path:
             return
+        pm = self._state.project_manager
+        if pm.is_open:
+            if not pm.autosave_is_newer():
+                return
+        else:
+            autosave_path = path + ".autosave.h5"
+            if not os.path.exists(autosave_path):
+                return
+            import os.path as _osp
+            if _osp.getmtime(autosave_path) <= _osp.getmtime(path):
+                return
         autosave_path = path + ".autosave.h5"
         if not os.path.exists(autosave_path):
             return

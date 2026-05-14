@@ -1,10 +1,12 @@
 """New Project dialog — name, CRS, units, depth range."""
 from __future__ import annotations
 
+import os
+
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QRadioButton, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
 
 
@@ -74,7 +76,23 @@ class NewProjectDialog(QDialog):
         self._name_edit = QLineEdit("Untitled")
         self._name_edit.selectAll()
         id_fl.addRow("Project name:", self._name_edit)
+
+        # Location row
+        loc_row = QWidget()
+        lr = QHBoxLayout(loc_row)
+        lr.setContentsMargins(0, 0, 0, 0)
+        default_loc = os.path.join(os.path.expanduser("~"), "Projects", "Untitled")
+        self._location_edit = QLineEdit(default_loc)
+        lr.addWidget(self._location_edit, 1)
+        browse_btn = QPushButton("Browse…")
+        browse_btn.clicked.connect(self._browse_location)
+        lr.addWidget(browse_btn)
+        id_fl.addRow("Project folder:", loc_row)
+
         root.addWidget(id_grp)
+
+        # Auto-update location when name changes
+        self._name_edit.textChanged.connect(self._sync_location)
 
         # ── CRS ────────────────────────────────────────────────────────
         crs_grp = QGroupBox("Coordinate Reference System")
@@ -210,10 +228,28 @@ class NewProjectDialog(QDialog):
                 self._preset_combo.setCurrentIndex(i)
                 return
 
+    def _browse_location(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose Project Location",
+            os.path.dirname(self._location_edit.text()),
+        )
+        if folder:
+            name = self._name_edit.text().strip() or "Untitled"
+            self._location_edit.setText(os.path.join(folder, name))
+
+    def _sync_location(self, name: str) -> None:
+        """Keep the folder name in sync with the project name."""
+        cur = self._location_edit.text()
+        parent = os.path.dirname(cur)
+        self._location_edit.setText(os.path.join(parent, name or "Untitled"))
+
     def _on_create(self) -> None:
         if not self._name_edit.text().strip():
             self._name_edit.setPlaceholderText("Name required")
             self._name_edit.setStyleSheet("border: 1px solid red;")
+            return
+        if not self._location_edit.text().strip():
+            self._location_edit.setStyleSheet("border: 1px solid red;")
             return
         try:
             int(self._epsg_edit.text().strip())
@@ -246,3 +282,6 @@ class NewProjectDialog(QDialog):
 
     def default_depth_max(self) -> float:
         return self._depth_max_spin.value()
+
+    def folder_path(self) -> str:
+        return self._location_edit.text().strip()
