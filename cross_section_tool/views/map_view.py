@@ -187,9 +187,6 @@ class MapView(QWidget):
         """Internal render body — called only from render() with re-entry guard held."""
 
         self._ax.clear()
-        # 'box' adjusts axes dimensions, not data limits — avoids the
-        # "Ignoring fixed y limits" warning that leads to MemoryError.
-        self._ax.set_aspect("equal", adjustable="box")
 
         self._render_seismic_coverage()
         self._render_surfaces()
@@ -197,29 +194,9 @@ class MapView(QWidget):
         self._render_wells()
         self._render_new_section_preview()
 
-        # Set/correct limits BEFORE graticule so it computes sensible intervals.
-        proj = self._state.project
-        if not proj.sections and not proj.wells and not proj.surfaces:
-            self._ax.set_xlim(-500, 10500)
-            self._ax.set_ylim(-500, 10500)
-        elif not proj.sections and not proj.surfaces and proj.wells:
-            # Only wells loaded — center on well cluster with at least 10km half-range
-            valid = [(w.x, w.y) for w in proj.wells if w.x != 0.0 or w.y != 0.0]
-            if valid:
-                xs_w = [p[0] for p in valid]
-                ys_w = [p[1] for p in valid]
-                cx = (min(xs_w) + max(xs_w)) / 2
-                cy = (min(ys_w) + max(ys_w)) / 2
-                half = max(10_000.0,
-                           (max(xs_w) - min(xs_w)) / 2 + 5_000,
-                           (max(ys_w) - min(ys_w)) / 2 + 5_000)
-                self._ax.set_xlim(cx - half, cx + half)
-                self._ax.set_ylim(cy - half, cy + half)
-            else:
-                self._ax.set_xlim(-500, 10500)
-                self._ax.set_ylim(-500, 10500)
-        else:
-            self._ensure_map_extent()
+        # Set limits from data bounding box with 15% padding per axis independently.
+        # No equal-aspect forced — the map fills its panel naturally.
+        self._apply_map_limits()
 
         self._render_graticule()
         self._canvas.draw_idle()
@@ -239,19 +216,43 @@ class MapView(QWidget):
             self._ax.plot([xs[-1], cx], [ys[-1], cy],
                           ":", color="#ff7f0e", lw=1.2, alpha=0.6, zorder=8)
 
-    def _ensure_map_extent(self) -> None:
-        """Guarantee a minimum view span so equal-aspect never degenerates to a line."""
-        xl = self._ax.get_xlim()
-        yl = self._ax.get_ylim()
-        x_span = xl[1] - xl[0]
-        y_span = yl[1] - yl[0]
-        min_span = max(x_span, y_span, 100.0)
-        if y_span < min_span * 0.05:
-            mid = (yl[0] + yl[1]) / 2
-            self._ax.set_ylim(mid - min_span / 2, mid + min_span / 2)
-        if x_span < min_span * 0.05:
-            mid = (xl[0] + xl[1]) / 2
-            self._ax.set_xlim(mid - min_span / 2, mid + min_span / 2)
+    def _apply_map_limits(self) -> None:
+        """Set xlim/ylim from data bounding box with 15% padding per axis."""
+        proj = self._state.project
+        all_x: list[float] = []
+        all_y: list[float] = []
+
+        for sec in proj.sections:
+            all_x.extend(sec.nodes[:, 0].tolist())
+            all_y.extend(sec.nodes[:, 1].tolist())
+        for well in proj.wells:
+            if well.x != 0.0 or well.y != 0.0:
+                all_x.append(well.x)
+                all_y.append(well.y)
+        for surf in proj.surfaces:
+            try:
+                xmn, xmx, ymn, ymx = surf.extent()
+                if xmx > xmn and ymx > ymn:
+                    all_x.extend([xmn, xmx])
+                    all_y.extend([ymn, ymx])
+            except Exception:
+                pass
+        for ref in proj.seismic_refs:
+            if ref.extent_x_max != ref.extent_x_min:
+                all_x.extend([ref.extent_x_min, ref.extent_x_max])
+                all_y.extend([ref.extent_y_min, ref.extent_y_max])
+
+        if not all_x:
+            self._ax.set_xlim(-500, 10500)
+            self._ax.set_ylim(-500, 10500)
+            return
+
+        xmn, xmx = min(all_x), max(all_x)
+        ymn, ymx = min(all_y), max(all_y)
+        xpad = max((xmx - xmn) * 0.15, 500.0)
+        ypad = max((ymx - ymn) * 0.15, 500.0)
+        self._ax.set_xlim(xmn - xpad, xmx + xpad)
+        self._ax.set_ylim(ymn - ypad, ymx + ypad)
 
     def _render_graticule(self) -> None:
         xmin, xmax = self._ax.get_xlim()

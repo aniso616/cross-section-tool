@@ -734,6 +734,14 @@ class SectionView(QWidget):
                 candidates.append(float(v.max()))
         for well in self._state.project.wells:
             candidates.append(well.deviation.max_tvd)
+            # Include actual log depth range (LAS-imported wells may have
+            # shallower deviation surveys than the actual log extent)
+            for log_name in well.log_names:
+                try:
+                    _, hi = well.get_log(log_name).depth_range()
+                    candidates.append(hi)
+                except Exception:
+                    pass
         for ref in self._state.project.seismic_refs:
             ds = self._seismic_cache.get(ref.path)
             if ds is not None:
@@ -1338,20 +1346,27 @@ class SectionView(QWidget):
 
         for well in self._state.project.wells:
             collar_dist, perp = well.project_to_section(section)
-            print(f"[WELL] {well.name!r}: pos=({well.x:.0f},{well.y:.0f})  "
-                  f"collar_dist={collar_dist:.1f}  perp={perp:.1f}  "
-                  f"threshold={_WELL_MAX_PERP}")
             if abs(perp) > _WELL_MAX_PERP:
-                print(f"  -> SKIPPED (|{perp:.1f}| > {_WELL_MAX_PERP})")
                 continue
 
             distances, tvds = well.section_track(section)
-            print(f"  -> RENDERING: {len(distances)} pts  "
-                  f"dist=[{distances.min():.0f},{distances.max():.0f}]  "
-                  f"tvd=[{tvds.min():.0f},{tvds.max():.0f}]")
 
-            # Well stick
-            self._ax.plot(distances, tvds, color="#4A3728", linewidth=1.5,
+            # Ensure the Y axis reaches the full well depth (logs may extend
+            # deeper than the default axis computed before rendering)
+            if len(tvds) > 0:
+                well_max = float(tvds.max())
+                for log_name in well.log_names:
+                    try:
+                        _, hi = well.get_log(log_name).depth_range()
+                        well_max = max(well_max, hi)
+                    except Exception:
+                        pass
+                bot, top = self._ax.get_ylim()  # inverted: bot > top
+                if well_max > bot:
+                    self._ax.set_ylim(well_max * 1.05, top)
+
+            # Well stick — 2px solid black
+            self._ax.plot(distances, tvds, color="black", linewidth=2.0,
                           solid_capstyle="round", zorder=9)
 
             # Name + perpendicular offset annotation
