@@ -915,6 +915,34 @@ class MainWindow(QMainWindow):
                 self._state.project_changed.emit()
         for msg in errors:
             QMessageBox.warning(self, "Import Warning", msg)
+        # Warn if well coords are far from existing sections
+        if added:
+            self._warn_if_well_far_from_sections(added)
+
+    def _warn_if_well_far_from_sections(self, wells) -> None:
+        """Warn the user if a loaded well is far from all existing section lines."""
+        sections = self._state.project.sections
+        if not sections:
+            return
+        import math
+        for well in wells:
+            if well.x == 0.0 and well.y == 0.0:
+                continue
+            # Find closest distance from well to any section node
+            min_dist = float("inf")
+            for sec in sections:
+                for node in sec.nodes:
+                    d = math.hypot(well.x - node[0], well.y - node[1])
+                    if d < min_dist:
+                        min_dist = d
+            if min_dist > 50_000:  # >50 km — almost certainly a CRS mismatch
+                QMessageBox.information(
+                    self, "Well Location",
+                    f"Well '{well.name}' was loaded at ({well.x:.0f}, {well.y:.0f}).\n"
+                    f"The nearest section node is {min_dist/1000:.1f} km away.\n\n"
+                    "Your sections may be in a different coordinate system. "
+                    "Consider creating sections near the well location.",
+                )
 
     def _on_import_segy(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(

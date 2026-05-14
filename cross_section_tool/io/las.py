@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +14,34 @@ from cross_section_tool.core.wells import LogCurve, Well
 
 
 # Mnemonics to try (in order) when resolving optional header fields
-_X_KEYS = ("XCOORD", "X", "XWELL", "EASTING", "EAST")
-_Y_KEYS = ("YCOORD", "Y", "YWELL", "NORTHING", "NORTH")
-_KB_KEYS = ("KB", "KELLY", "DF", "ELEV")
+_X_KEYS = ("XCOORD", "X", "XWELL", "LONG", "LON", "EASTING", "SURF_X", "EAST")
+_Y_KEYS = ("YCOORD", "Y", "YWELL", "LAT", "NORTHING", "SURF_Y", "NORTH")
+_KB_KEYS = ("KB", "EKBR", "EKB", "KELLY", "DF", "ELEV")
 
 # Sentinel string values that indicate a header field is effectively absent
 _EMPTY_STRINGS = frozenset(("", "unknown", "Unknown", "UNKNOWN", "--", "none", "None", "NONE"))
+
+# Patterns to extract X/Y from a free-text LOC field like "X = 606554.0 Y = 6080126.0"
+_LOC_X_RE = re.compile(r'(?:^|[\s,;])[Xx]\s*[=:]\s*([-+]?\d+(?:\.\d+)?)', re.IGNORECASE)
+_LOC_Y_RE = re.compile(r'(?:^|[\s,;])[Yy]\s*[=:]\s*([-+]?\d+(?:\.\d+)?)', re.IGNORECASE)
+
+
+def _parse_loc_xy(las: LASFile) -> tuple[float | None, float | None]:
+    """Try to extract X/Y from the LOC (well location) free-text header field."""
+    loc_val = None
+    for key in ("LOC", "LOCA", "LOCATION"):
+        if key in las.well:
+            v = las.well[key].value
+            if v and str(v).strip() not in _EMPTY_STRINGS:
+                loc_val = str(v)
+                break
+    if not loc_val:
+        return None, None
+    mx = _LOC_X_RE.search(loc_val)
+    my = _LOC_Y_RE.search(loc_val)
+    x = float(mx.group(1)) if mx else None
+    y = float(my.group(1)) if my else None
+    return x, y
 
 
 def read_las(
@@ -117,6 +140,12 @@ def _extract_header(las: LASFile) -> dict[str, Any]:
     uwi = _well_value(las, "UWI", "API", default=None)
     x = _well_value(las, *_X_KEYS, default=None)
     y = _well_value(las, *_Y_KEYS, default=None)
+    if x is None or y is None:
+        loc_x, loc_y = _parse_loc_xy(las)
+        if x is None:
+            x = loc_x
+        if y is None:
+            y = loc_y
     kb = _well_value(las, *_KB_KEYS, default=None)
     strt = _well_value(las, "STRT", default=None)
     stop = _well_value(las, "STOP", default=None)
@@ -171,15 +200,16 @@ def _las_to_well(
     uwi = str(uwi).strip() if uwi else ""
 
     # --- location ---
-    if x is None:
-        x = float(_well_value(las, *_X_KEYS, default=0.0))
-    else:
-        x = float(x)
-
-    if y is None:
-        y = float(_well_value(las, *_Y_KEYS, default=0.0))
-    else:
-        y = float(y)
+    _x_raw = x if x is not None else _well_value(las, *_X_KEYS, default=None)
+    _y_raw = y if y is not None else _well_value(las, *_Y_KEYS, default=None)
+    if _x_raw is None or _y_raw is None:
+        loc_x, loc_y = _parse_loc_xy(las)
+        if _x_raw is None:
+            _x_raw = loc_x
+        if _y_raw is None:
+            _y_raw = loc_y
+    x = float(_x_raw) if _x_raw is not None else 0.0
+    y = float(_y_raw) if _y_raw is not None else 0.0
 
     if kb is None:
         kb = float(_well_value(las, *_KB_KEYS, default=0.0))
