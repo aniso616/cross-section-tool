@@ -28,7 +28,9 @@
       "PowerShell(Out-File *)",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; git diff main..worktree-agent-a520075bfcb30c095 -- cross_section_tool/views/section_view.py 2>&1 | Select-String \"^[-+]\\(?![-+][-+]\\)\" | Select-Object -First 100 | ForEach-Object { $_.Line })",
       "PowerShell(Tee-Object *)",
-      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short; echo \"EXIT:$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short; echo \"EXIT:$LASTEXITCODE\")",
+      "PowerShell(taskkill *)",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_topology.py tests/test_app.py tests/test_section_view.py tests/test_section.py tests/test_surfaces.py -q --tb=short 2>&1; echo \"EXIT_$LASTEXITCODE\")"
     ]
   }
 }

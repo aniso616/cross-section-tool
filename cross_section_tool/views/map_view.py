@@ -157,8 +157,14 @@ class MapView(QWidget):
 
     def render(self, *_args) -> None:
         """Full redraw of the map view."""
+        # Guard against degenerate canvas size (causes AGG MemoryError)
+        if self._canvas.width() < 4 or self._canvas.height() < 4:
+            return
+
         self._ax.clear()
-        self._ax.set_aspect("equal", adjustable="datalim")
+        # 'box' adjusts axes dimensions, not data limits — avoids the
+        # "Ignoring fixed y limits" warning that leads to MemoryError.
+        self._ax.set_aspect("equal", adjustable="box")
 
         self._render_seismic_coverage()
         self._render_surfaces()

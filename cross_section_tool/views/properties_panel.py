@@ -213,8 +213,13 @@ class PropertiesPanel(QDockWidget):
         name_ed.editingFinished.connect(lambda: self._commit_section_name(name_ed.text()))
         form.addRow("Name:", name_ed)
 
-        idx = self._state.project.sections.index(sec)
-        form.addRow("Index:",    _val_label(str(idx)))
+        # Active section may still be the old object while section_modified fires;
+        # tolerate not finding it in the list during an in-progress update.
+        try:
+            idx = self._state.project.sections.index(sec)
+            form.addRow("Index:", _val_label(str(idx)))
+        except ValueError:
+            pass
         form.addRow("Nodes:",    _val_label(str(sec.n_nodes)))
         form.addRow("Length:",   _val_label(f"{sec.total_length():.1f} {sec.depth_units}"))
 

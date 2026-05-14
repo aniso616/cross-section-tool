@@ -559,6 +559,10 @@ class SectionView(QWidget):
 
     def render(self, *_args) -> None:
         """Full redraw of the active section."""
+        # Guard against degenerate canvas size (avoids AGG MemoryError cascade)
+        if self._canvas.width() < 4 or self._canvas.height() < 4:
+            return
+
         _t0 = time.perf_counter()
 
         # FIX 2: save user's zoom/pan limits before the clear wipes them
