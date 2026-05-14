@@ -850,6 +850,9 @@ class MainWindow(QMainWindow):
         try:
             self._state.open_project(path)
             self._check_autosave_recovery()
+            # Auto-zoom to show all loaded data
+            from PySide6.QtCore import QTimer as _QT
+            _QT.singleShot(100, self._map_view.zoom_to_all_data)
             return True
         except Exception:
             return False
@@ -993,6 +996,9 @@ class MainWindow(QMainWindow):
                 place_manually_wells.append(well_idx)
             else:
                 self._warn_if_well_far_from_sections([well])
+
+        # Auto-zoom to show the newly added well(s)
+        self._map_view.zoom_to_all_data()
 
         # After all imports, enter place-well mode for the last "place manually" well
         if place_manually_wells:
@@ -1214,6 +1220,8 @@ class MainWindow(QMainWindow):
                                     f"Could not preload {fname}:\n{exc}")
             finally:
                 progress.close()
+            # Auto-zoom to show seismic extent
+            self._map_view.zoom_to_all_data()
 
     def _on_import_section_image(self) -> None:
         """Import a raster image (scanned section) as a section background."""
@@ -1349,8 +1357,7 @@ class MainWindow(QMainWindow):
         dlg = QDialog(self); dlg.setWindowTitle("New North-South Section")
         fl = QFormLayout(dlg)
         existing = self._state.project.sections
-        x0_default = float(existing[-1].nodes[0, 0]) if existing else 0.0
-        y0_default = float(existing[-1].nodes[0, 1]) if existing else 0.0
+        x0_default, y0_default = self._get_smart_center()
         easting_spin = QDoubleSpinBox(); easting_spin.setRange(-1e8, 1e8)
         easting_spin.setValue(x0_default); easting_spin.setDecimals(1)
         length_spin = QDoubleSpinBox(); length_spin.setRange(100, 1e7)
@@ -1407,9 +1414,9 @@ class MainWindow(QMainWindow):
         x_spin = QDoubleSpinBox(); x_spin.setRange(-1e8, 1e8); x_spin.setDecimals(1)
         y_spin = QDoubleSpinBox(); y_spin.setRange(-1e8, 1e8); y_spin.setDecimals(1)
         existing = self._state.project.sections
-        if existing:
-            x_spin.setValue(float(existing[-1].nodes[0, 0]))
-            y_spin.setValue(float(existing[-1].nodes[0, 1]))
+        cx_def, cy_def = self._get_smart_center()
+        x_spin.setValue(cx_def)
+        y_spin.setValue(cy_def)
         ofl.addRow("X (Easting):", x_spin)
         ofl.addRow("Y (Northing):", y_spin)
         ovb.addLayout(ofl)
@@ -1439,17 +1446,29 @@ class MainWindow(QMainWindow):
         self._state.add_section(sec)
         self._state.set_active_section(sec)
 
+    def _get_smart_center(self) -> tuple[float, float]:
+        """Best center point for new objects: map view center → wells → seismic → origin."""
+        cx, cy = self._map_view.map_center
+        # If view is at default/near-origin area, look for real data
+        if abs(cx) < 1000 and abs(cy) < 1000:
+            wells = [w for w in self._state.project.wells if w.x != 0 or w.y != 0]
+            if wells:
+                return (float(np.mean([w.x for w in wells])),
+                        float(np.mean([w.y for w in wells])))
+            refs = self._state.project.seismic_refs
+            if refs:
+                ref = refs[0]
+                if ref.extent_x_max != ref.extent_x_min:
+                    return ((ref.extent_x_min + ref.extent_x_max) / 2,
+                            (ref.extent_y_min + ref.extent_y_max) / 2)
+        return cx, cy
+
     def _on_new_section(self) -> None:
-        """Add a simple 10-km east–west section centred on existing data."""
+        """Add a simple 10-km east–west section centred on current map view."""
+        cx, cy = self._get_smart_center()
         existing = self._state.project.sections
-        if existing:
-            # Offset 1 km north of the last section's first node
-            x0 = float(existing[-1].nodes[0, 0])
-            y0 = float(existing[-1].nodes[0, 1]) + 1000.0
-        else:
-            x0, y0 = 0.0, 0.0
         sec = Section(
-            [(x0, y0), (x0 + 10_000.0, y0)],
+            [(cx - 5_000.0, cy), (cx + 5_000.0, cy)],
             name=f"Section {len(existing) + 1}",
             crs_epsg=self._state.project.crs_epsg,
         )
@@ -1910,7 +1929,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _zoom_to_fit(self) -> None:
-        """Shift+Z: reset both views to full data extent."""
+        """Ctrl+0 / Shift+Z: zoom map to all data, reset section view."""
+        self._map_view.zoom_to_all_data()
         self._map_view.render()
         self._section_view._ax_limits_set = False
         self._section_view.render()

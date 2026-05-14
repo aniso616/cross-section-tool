@@ -23,10 +23,10 @@ _LINE_HIT_PX  = 8     # section-line selection tolerance in screen pixels
 _DRAG_MIN_PX  = 3     # pixels of movement before drag activates
 
 # Section line style
-_ACTIVE_COLOR   = "#1f77b4"
-_INACTIVE_COLOR = "#999999"
+_ACTIVE_COLOR   = "#2563EB"
+_INACTIVE_COLOR = "#94A3B8"
 _ACTIVE_LW      = 2.0
-_INACTIVE_LW    = 1.0
+_INACTIVE_LW    = 1.2
 
 # Node visual states: (radius_pt, face, edge, edge_width)
 _NODE_NORMAL   = (6,  "white",  "#444444", 1.0)
@@ -86,6 +86,9 @@ class MapView(QWidget):
         self._pan_xlim0:   tuple[float, float] | None = None
         self._pan_ylim0:   tuple[float, float] | None = None
         self._pan_inv      = None   # inverse transform captured at press
+
+        # ---- last right-click map position ----
+        self._rclick_xy: tuple[float, float] | None = None
 
         # ---- render throttle and re-entry guard ----
         self._is_rendering = False
@@ -160,6 +163,26 @@ class MapView(QWidget):
     @property
     def axes(self):
         return self._ax
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Public API for MainWindow
+    # ------------------------------------------------------------------
+
+    @property
+    def map_center(self) -> tuple[float, float]:
+        """Current view center in map coordinates."""
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        return (xl[0] + xl[1]) / 2, (yl[0] + yl[1]) / 2
+
+    def zoom_to_all_data(self) -> None:
+        """Zoom map to fit all loaded data with 15% padding."""
+        self._apply_map_limits()
+        self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -278,10 +301,45 @@ class MapView(QWidget):
 
         self._ax.set_xlabel("Easting (m)")
         self._ax.set_ylabel("Northing (m)")
-        from matplotlib.ticker import MultipleLocator
+        from matplotlib.ticker import MultipleLocator, FuncFormatter
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
-        self._ax.ticklabel_format(style="plain", axis="both")
+        self._ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        self._ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        self._render_scale_bar(xmin, xmax, ymin, ymax)
+
+    def _render_scale_bar(self, xmin, xmax, ymin, ymax) -> None:
+        """Draw a scale bar in the bottom-right corner."""
+        span = xmax - xmin
+        # Pick a round bar length: roughly 15% of view width
+        raw = span * 0.15
+        exp = math.floor(math.log10(max(raw, 1)))
+        base = 10 ** exp
+        for step in (1, 2, 5, 10):
+            bar_len = step * base
+            if bar_len >= raw:
+                break
+
+        # Position: 5% from right, 7% from bottom
+        bx1 = xmax - span * 0.07 - bar_len
+        bx2 = bx1 + bar_len
+        by  = ymin + (ymax - ymin) * 0.05
+
+        self._ax.plot([bx1, bx2], [by, by], color="black", linewidth=2.5, zorder=12,
+                      solid_capstyle="butt")
+        # End ticks
+        tick_h = (ymax - ymin) * 0.01
+        for bx in (bx1, bx2):
+            self._ax.plot([bx, bx], [by - tick_h, by + tick_h],
+                          color="black", linewidth=2.0, zorder=12)
+        # Label
+        if bar_len >= 1000:
+            label = f"{bar_len / 1000:.0f} km"
+        else:
+            label = f"{bar_len:.0f} m"
+        self._ax.text((bx1 + bx2) / 2, by + tick_h * 2.5, label,
+                      ha="center", va="bottom", fontsize=7, zorder=12,
+                      bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
 
     def _render_sections(self) -> None:
         active = self._state.active_section
@@ -486,6 +544,33 @@ class MapView(QWidget):
                 self._place_well_click(float(event.xdata), float(event.ydata))
             return
 
+        # Right-click: context menu
+        if event.button == 3:
+            if event.xdata is not None and event.ydata is not None:
+                self._rclick_xy = (float(event.xdata), float(event.ydata))
+            self._show_map_context_menu()
+            return
+
+        # Double-click: zoom 2× centered on cursor (Shift = zoom out)
+        if getattr(event, "dblclick", False) and event.button == 1:
+            if event.xdata is not None and event.ydata is not None:
+                from PySide6.QtWidgets import QApplication as _QApp
+                from PySide6.QtCore import Qt as _Qt
+                shift_held = bool(
+                    _QApp.keyboardModifiers() & _Qt.KeyboardModifier.ShiftModifier
+                )
+                factor = 2.0 if shift_held else 0.5
+                cx, cy = float(event.xdata), float(event.ydata)
+                xl, yl = self._ax.get_xlim(), self._ax.get_ylim()
+                relx = (cx - xl[0]) / max(xl[1] - xl[0], 1e-9)
+                rely = (cy - yl[0]) / max(yl[1] - yl[0], 1e-9)
+                nw = (xl[1] - xl[0]) * factor
+                nh = (yl[1] - yl[0]) * factor
+                self._ax.set_xlim(cx - nw * relx, cx + nw * (1 - relx))
+                self._ax.set_ylim(cy - nh * rely, cy + nh * (1 - rely))
+                self._canvas.draw_idle()
+            return
+
         tool = self._state.active_tool
 
         # Middle button always pans
@@ -590,11 +675,17 @@ class MapView(QWidget):
             self._expand_view_for_point(x, y)
             return
 
-        # ---- Coordinate readout on every motion ----
+        # ---- Coordinate readout + nearest-well distance ----
         if event.xdata is not None and event.ydata is not None and not self._drag_active:
-            self.status_message.emit(
-                f"E: {event.xdata:,.0f}   N: {event.ydata:,.0f}"
-            )
+            mx, my = float(event.xdata), float(event.ydata)
+            msg = f"E: {mx:,.0f}   N: {my:,.0f}"
+            wells = self._state.project.wells
+            if wells:
+                nearest = min(wells, key=lambda w: math.hypot(w.x - mx, w.y - my))
+                d = math.hypot(nearest.x - mx, nearest.y - my)
+                if d < 50_000:
+                    msg += f"   ·   {d:,.0f} m from {nearest.name}"
+            self.status_message.emit(msg)
 
         # ---- Hover (tool-dependent, no button held) ----
         tool = self._state.active_tool
@@ -627,13 +718,19 @@ class MapView(QWidget):
     def _on_scroll(self, event) -> None:
         if event.inaxes is not self._ax:
             return
-        factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
+        # 1.3× per tick — zoom in on "up", out on "down", centered on cursor
+        zoom_in = getattr(event, "step", 0) > 0 or event.button == "up"
+        factor = 1.0 / 1.3 if zoom_in else 1.3
         cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
         cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
         xl = self._ax.get_xlim()
         yl = self._ax.get_ylim()
-        self._ax.set_xlim([cx + (x - cx) * factor for x in xl])
-        self._ax.set_ylim([cy + (y - cy) * factor for y in yl])
+        relx = (cx - xl[0]) / max(xl[1] - xl[0], 1e-9)
+        rely = (cy - yl[0]) / max(yl[1] - yl[0], 1e-9)
+        new_w = (xl[1] - xl[0]) * factor
+        new_h = (yl[1] - yl[0]) * factor
+        self._ax.set_xlim(cx - new_w * relx, cx + new_w * (1 - relx))
+        self._ax.set_ylim(cy - new_h * rely, cy + new_h * (1 - rely))
         self._canvas.draw_idle()
 
     def _on_key_press(self, event) -> None:
@@ -817,6 +914,58 @@ class MapView(QWidget):
         self._state.update_well(idx, wc)
         self._canvas.setCursor(Qt.CursorShape.ArrowCursor)
         self.status_message.emit("")
+
+    def _show_map_context_menu(self) -> None:
+        """Right-click context menu on the map canvas."""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+
+        zoom_all = menu.addAction("Zoom to All Data")
+        zoom_all.triggered.connect(self.zoom_to_all_data)
+
+        menu.addSeparator()
+
+        if self._rclick_xy is not None:
+            rx, ry = self._rclick_xy
+            sec_here = menu.addAction(f"Create E–W Section Here")
+            sec_here.triggered.connect(
+                lambda _, x=rx, y=ry: self._create_section_at(x, y, "ew"))
+            sec_here_ns = menu.addAction(f"Create N–S Section Here")
+            sec_here_ns.triggered.connect(
+                lambda _, x=rx, y=ry: self._create_section_at(x, y, "ns"))
+
+        # Create section through nearest well
+        wells = self._state.project.wells
+        if wells and self._rclick_xy is not None:
+            rx, ry = self._rclick_xy
+            nearest_well = min(
+                wells, key=lambda w: math.hypot(w.x - rx, w.y - ry)
+            )
+            thru_well = menu.addAction(
+                f"Create Section Through '{nearest_well.name}'"
+            )
+            thru_well.triggered.connect(
+                lambda _, w=nearest_well: self._create_section_at(w.x, w.y, "ew"))
+
+        menu.exec(QCursor.pos())
+
+    def _create_section_at(self, cx: float, cy: float, orientation: str) -> None:
+        """Create a 10km section centered at (cx, cy) in the given orientation."""
+        import numpy as np
+        from cross_section_tool.core.section import Section
+        half = 5_000.0
+        if orientation == "ew":
+            nodes = np.array([[cx - half, cy], [cx + half, cy]])
+            name = f"E-W Section"
+        else:
+            nodes = np.array([[cx, cy - half], [cx, cy + half]])
+            name = f"N-S Section"
+        n = len(self._state.project.sections)
+        sec = Section(nodes, name=f"{name} {n + 1}",
+                      crs_epsg=self._state.project.crs_epsg)
+        self._state.add_section(sec)
+        self._state.set_active_section(sec)
 
     def _on_tool_changed(self, tool_id: str) -> None:
         # Cancel section drawing when switching away
