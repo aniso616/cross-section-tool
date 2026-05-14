@@ -660,9 +660,9 @@ class MainWindow(QMainWindow):
             lambda *_: self._update_pick_status() if s.active_tool in (
                 "horizon_pick", "fault_pick") else None)
         # Phase 6: annotations
-        s.annotation_added.connect(lambda _: self._section_view.render())
-        s.annotation_removed.connect(lambda _: self._section_view.render())
-        s.annotation_modified.connect(lambda *_: self._section_view.render())
+        s.annotation_added.connect(lambda _: self._section_view.request_render())
+        s.annotation_removed.connect(lambda _: self._section_view.request_render())
+        s.annotation_modified.connect(lambda *_: self._section_view.request_render())
         # FPS display from section view
         self._section_view.frame_time_ms.connect(self._on_frame_time)
         # Keyboard shortcuts for tools (application-wide)
@@ -1448,6 +1448,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         existing = len(self._state.project.polygons)
+        added_polys = []
         for i, shp in enumerate(polys):
             try:
                 coords = list(shp.exterior.coords)
@@ -1457,11 +1458,18 @@ class MainWindow(QMainWindow):
                 coords = coords[:-1]
             if len(coords) < 3:
                 continue
-            poly = SectionPolygon(
+            added_polys.append(SectionPolygon(
                 vertices=np.array(coords),
                 name=f"Region {existing + i + 1}",
-            )
-            self._state.add_polygon(poly)
+            ))
+        self._state.blockSignals(True)
+        try:
+            for poly in added_polys:
+                self._state.add_polygon(poly)
+        finally:
+            self._state.blockSignals(False)
+            if added_polys:
+                self._state.project_changed.emit()
 
     def _on_edit_strat_column(self) -> None:
         """Phase 5: open stratigraphic column editor (stub)."""

@@ -532,8 +532,14 @@ class AppState(QObject):
             i for i in self._project.intersections
             if i.section_name != section.name
         ]
-        for isc in new_ints:
-            self.add_intersection(isc)
+        self.blockSignals(True)
+        try:
+            for isc in new_ints:
+                self.add_intersection(isc)
+        finally:
+            self.blockSignals(False)
+            if new_ints:
+                self._set_modified()
         return new_ints
 
     # ------------------------------------------------------------------

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from cross_section_tool.app_state import AppState
@@ -152,6 +152,10 @@ class Viewer3D(QWidget):
         super().__init__(parent)
         self._state = state
         self._plotter = None  # lazy — created only when user clicks Enable
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.setInterval(100)  # 10fps max for 3D (heavier than 2D)
+        self._redraw_timer.timeout.connect(self.render)
         self._setup_ui()
         self._connect_signals()
 
@@ -186,7 +190,7 @@ class Viewer3D(QWidget):
 
     def _connect_signals(self) -> None:
         s = self._state
-        s.project_changed.connect(self.render)
+        s.project_changed.connect(self.request_render)
         s.active_section_changed.connect(self._on_sections_changed)
         s.section_added.connect(self._on_sections_changed)
         s.section_removed.connect(self._on_sections_changed)
@@ -212,6 +216,11 @@ class Viewer3D(QWidget):
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
+
+    def request_render(self, *_args) -> None:
+        """Schedule a throttled render (100ms debounce)."""
+        if not self._redraw_timer.isActive():
+            self._redraw_timer.start()
 
     def render(self, *_args) -> None:
         """Full redraw: clear the scene and re-add all meshes."""
@@ -327,13 +336,13 @@ class Viewer3D(QWidget):
     # ------------------------------------------------------------------
 
     def _on_sections_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_surfaces_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_picks_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_wells_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()

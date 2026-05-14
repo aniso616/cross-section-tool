@@ -126,7 +126,7 @@ class MapView(QWidget):
 
     def _connect_signals(self) -> None:
         s = self._state
-        s.project_changed.connect(self.render)
+        s.project_changed.connect(self.request_render)
         s.section_added.connect(self._on_sections_changed)
         s.section_removed.connect(self._on_sections_changed)
         s.section_modified.connect(self._on_sections_changed)
@@ -228,20 +228,23 @@ class MapView(QWidget):
             self._ax.set_ylabel("Northing (m)")
             return
 
-        interval = _nice_interval(max(span_x, span_y) / 5)
-        xs = np.arange(math.floor(xmin / interval) * interval, xmax + interval, interval)
-        ys = np.arange(math.floor(ymin / interval) * interval, ymax + interval, interval)
+        x_interval = _nice_interval(span_x / 5)
+        y_interval = _nice_interval(span_y / 5)
+        xs = np.arange(math.floor(xmin / x_interval) * x_interval, xmax + x_interval, x_interval)
+        ys = np.arange(math.floor(ymin / y_interval) * y_interval, ymax + y_interval, y_interval)
         grid_kw = dict(color="#cccccc", linewidth=0.5, linestyle="--", zorder=0)
-        for x in xs:
-            self._ax.axvline(x, **grid_kw)
-        for y in ys:
-            self._ax.axhline(y, **grid_kw)
+        if len(xs) <= 500:
+            for x in xs:
+                self._ax.axvline(x, **grid_kw)
+        if len(ys) <= 500:
+            for y in ys:
+                self._ax.axhline(y, **grid_kw)
 
         self._ax.set_xlabel("Easting (m)")
         self._ax.set_ylabel("Northing (m)")
         from matplotlib.ticker import MultipleLocator
-        self._ax.xaxis.set_major_locator(MultipleLocator(interval))
-        self._ax.yaxis.set_major_locator(MultipleLocator(interval))
+        self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
+        self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.ticklabel_format(style="plain", axis="both")
 
     def _render_sections(self) -> None:
@@ -712,16 +715,16 @@ class MapView(QWidget):
         self._canvas.setCursor(_Qt.CursorShape(shape))
 
     def _on_sections_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_wells_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_surfaces_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_seismic_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_tool_changed(self, tool_id: str) -> None:
         # Cancel section drawing when switching away

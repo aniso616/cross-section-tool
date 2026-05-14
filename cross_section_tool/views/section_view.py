@@ -338,7 +338,7 @@ class SectionView(QWidget):
         s.active_section_changed.connect(self._on_active_section_changed)
         s.active_pick_target_changed.connect(self._on_data_changed)
         s.active_pick_target_changed.connect(lambda *_: self._update_pick_banner())
-        s.project_changed.connect(self.render)
+        s.project_changed.connect(self.request_render)
         s.horizon_pick_added.connect(self._on_data_changed)
         s.horizon_pick_removed.connect(self._on_data_changed)
         s.horizon_pick_modified.connect(self._on_data_changed)
@@ -781,17 +781,21 @@ class SectionView(QWidget):
     def _render_grid(self, section: Section) -> None:
         xl  = self._ax.get_xlim()
         yl  = self._ax.get_ylim()
-        span = max(abs(xl[1] - xl[0]), abs(yl[1] - yl[0]))
-        interval = _nice_interval(span / 5)
+        x_span = abs(xl[1] - xl[0])
+        y_span = abs(yl[1] - yl[0])
+        x_interval = _nice_interval(x_span / 5)
+        y_interval = _nice_interval(y_span / 5)
         grid_kw = dict(color="#e0e0e0", linewidth=0.5, linestyle="--", zorder=2)
-        xs = np.arange(math.floor(xl[0] / interval) * interval, xl[1] + interval, interval)
-        ys = np.arange(math.floor(min(yl) / interval) * interval, max(yl) + interval, interval)
-        for x in xs:
-            self._ax.axvline(x, **grid_kw)
-        for y in ys:
-            self._ax.axhline(y, **grid_kw)
-        self._ax.xaxis.set_major_locator(MultipleLocator(interval))
-        self._ax.yaxis.set_major_locator(MultipleLocator(interval))
+        xs = np.arange(math.floor(xl[0] / x_interval) * x_interval, xl[1] + x_interval, x_interval)
+        ys = np.arange(math.floor(min(yl) / y_interval) * y_interval, max(yl) + y_interval, y_interval)
+        if len(xs) <= 500:
+            for x in xs:
+                self._ax.axvline(x, **grid_kw)
+        if len(ys) <= 500:
+            for y in ys:
+                self._ax.axhline(y, **grid_kw)
+        self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
+        self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.ticklabel_format(style="plain", axis="both")
 
     def _render_annotations(self, section: Section) -> None:
@@ -2245,14 +2249,14 @@ class SectionView(QWidget):
                 sec_copy.vertical_exaggeration = locked_ve
                 self._state.update_section(idx, sec_copy)
                 return  # update_section triggers re-render
-        self.render()
+        self.request_render()
 
     def _on_data_changed(self, *_args) -> None:
-        self.render()
+        self.request_render()
 
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
-        self.render()
+        self.request_render()
 
     # ------------------------------------------------------------------
     # Context menu
