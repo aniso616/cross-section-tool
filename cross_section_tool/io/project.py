@@ -43,8 +43,14 @@ class SeismicRef:
     domain: str = "twt"
     depth_units: str = "ms"
     crs_epsg: int = 32632
+    # Spatial extent populated at import time (used for map display)
+    extent_x_min: float = 0.0
+    extent_x_max: float = 0.0
+    extent_y_min: float = 0.0
+    extent_y_max: float = 0.0
+    n_traces_total: int = 0
 
-    def load(self):
+    def load(self, progress_callback=None):
         """Load and return the referenced :class:`~cross_section_tool.io.segy.SeismicDataset`."""
         from cross_section_tool.io.segy import read_segy  # local to avoid circular at module level
         return read_segy(
@@ -56,6 +62,7 @@ class SeismicRef:
             domain=self.domain,
             depth_units=self.depth_units,
             crs_epsg=self.crs_epsg,
+            progress_callback=progress_callback,
         )
 
 
@@ -310,6 +317,11 @@ def _save_seismic_refs(f: h5py.File, refs: list[SeismicRef]) -> None:
         sg.attrs["domain"] = ref.domain
         sg.attrs["depth_units"] = ref.depth_units
         sg.attrs["crs_epsg"] = ref.crs_epsg
+        sg.attrs["extent_x_min"] = ref.extent_x_min
+        sg.attrs["extent_x_max"] = ref.extent_x_max
+        sg.attrs["extent_y_min"] = ref.extent_y_min
+        sg.attrs["extent_y_max"] = ref.extent_y_max
+        sg.attrs["n_traces_total"] = ref.n_traces_total
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +496,11 @@ def _load_seismic_refs(f: h5py.File) -> list[SeismicRef]:
             domain=_str(grp[k].attrs.get("domain", "twt")),
             depth_units=_str(grp[k].attrs.get("depth_units", "ms")),
             crs_epsg=int(grp[k].attrs.get("crs_epsg", 32632)),
+            extent_x_min=float(grp[k].attrs.get("extent_x_min", 0.0)),
+            extent_x_max=float(grp[k].attrs.get("extent_x_max", 0.0)),
+            extent_y_min=float(grp[k].attrs.get("extent_y_min", 0.0)),
+            extent_y_max=float(grp[k].attrs.get("extent_y_max", 0.0)),
+            n_traces_total=int(grp[k].attrs.get("n_traces_total", 0)),
         )
         for k in _sorted_keys(grp)
     ]

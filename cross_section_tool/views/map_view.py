@@ -202,6 +202,22 @@ class MapView(QWidget):
         if not proj.sections and not proj.wells and not proj.surfaces:
             self._ax.set_xlim(-500, 10500)
             self._ax.set_ylim(-500, 10500)
+        elif not proj.sections and not proj.surfaces and proj.wells:
+            # Only wells loaded — center on well cluster with at least 10km half-range
+            valid = [(w.x, w.y) for w in proj.wells if w.x != 0.0 or w.y != 0.0]
+            if valid:
+                xs_w = [p[0] for p in valid]
+                ys_w = [p[1] for p in valid]
+                cx = (min(xs_w) + max(xs_w)) / 2
+                cy = (min(ys_w) + max(ys_w)) / 2
+                half = max(10_000.0,
+                           (max(xs_w) - min(xs_w)) / 2 + 5_000,
+                           (max(ys_w) - min(ys_w)) / 2 + 5_000)
+                self._ax.set_xlim(cx - half, cx + half)
+                self._ax.set_ylim(cy - half, cy + half)
+            else:
+                self._ax.set_xlim(-500, 10500)
+                self._ax.set_ylim(-500, 10500)
         else:
             self._ensure_map_extent()
 
@@ -348,7 +364,28 @@ class MapView(QWidget):
                           fontsize=6, color=_SURFACE_COLOR, va="bottom", zorder=5)
 
     def _render_seismic_coverage(self) -> None:
-        pass  # placeholder for future integration
+        """Draw each SEG-Y survey's spatial extent as a semi-transparent box."""
+        for ref in self._state.project.seismic_refs:
+            xmn, xmx = ref.extent_x_min, ref.extent_x_max
+            ymn, ymx = ref.extent_y_min, ref.extent_y_max
+            if xmn == xmx == ymn == ymx == 0.0:
+                continue
+            xs = [xmn, xmx, xmx, xmn, xmn]
+            ys = [ymn, ymn, ymx, ymx, ymn]
+            self._ax.fill(xs, ys, alpha=0.15, color="orange", zorder=1)
+            self._ax.plot(xs, ys, color="orange", linewidth=1.5,
+                          linestyle="--", zorder=2)
+            cx = (xmn + xmx) / 2
+            cy = (ymn + ymx) / 2
+            w_km = (xmx - xmn) / 1000
+            h_km = (ymx - ymn) / 1000
+            label = ref.name
+            if w_km > 0 and h_km > 0:
+                label += f"\n{w_km:.0f}×{h_km:.0f} km"
+            self._ax.text(cx, cy, label, fontsize=6, color="darkorange",
+                          ha="center", va="center", zorder=3,
+                          bbox=dict(boxstyle="round,pad=0.2", fc="white",
+                                    ec="none", alpha=0.6))
 
     # ------------------------------------------------------------------
     # Coordinate helpers

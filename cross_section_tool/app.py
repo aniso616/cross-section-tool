@@ -1129,6 +1129,21 @@ class MainWindow(QMainWindow):
             dlg.layout().insertWidget(0, hdr_btn)
             if dlg.exec() != dlg.DialogCode.Accepted:
                 continue
+            # Quick header-only read for spatial extent (no amplitude data)
+            try:
+                from cross_section_tool.io.segy import read_segy_header
+                with _wait_cursor():
+                    hdr = read_segy_header(
+                        path,
+                        x_field=dlg.x_field,
+                        y_field=dlg.y_field,
+                        apply_scalar=dlg.apply_scalar,
+                    )
+                xr, yr = hdr["x_range"], hdr["y_range"]
+                n_tot = hdr["n_traces"]
+            except Exception:
+                xr, yr, n_tot = (0.0, 0.0), (0.0, 0.0), 0
+
             ref = SeismicRef(
                 path=path,
                 name=os.path.splitext(fname)[0],
@@ -1138,8 +1153,41 @@ class MainWindow(QMainWindow):
                 domain=dlg.domain,
                 depth_units=dlg.depth_units,
                 crs_epsg=self._state.project.crs_epsg,
+                extent_x_min=float(xr[0]),
+                extent_x_max=float(xr[1]),
+                extent_y_min=float(yr[0]),
+                extent_y_max=float(yr[1]),
+                n_traces_total=int(n_tot),
             )
             self._state.add_seismic_ref(ref)
+
+            # Eagerly load amplitude data with a progress dialog so the first
+            # section render is instant rather than hanging for 60+ seconds.
+            from PySide6.QtCore import Qt as _Qt
+            from PySide6.QtWidgets import QProgressDialog, QApplication as _QApp
+            progress = QProgressDialog(
+                f"Loading {fname}…", "Cancel", 0, 100, self
+            )
+            progress.setWindowModality(_Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(300)
+            progress.show()
+            _QApp.processEvents()
+            cancelled = False
+
+            def _prog(pct: int) -> None:
+                nonlocal cancelled
+                progress.setValue(pct)
+                _QApp.processEvents()
+                if progress.wasCanceled():
+                    cancelled = True
+
+            try:
+                self._section_view.preload_seismic_ref(ref, _prog)
+            except Exception as exc:
+                QMessageBox.warning(self, "SEG-Y Load Warning",
+                                    f"Could not preload {fname}:\n{exc}")
+            finally:
+                progress.close()
 
     def _on_import_section_image(self) -> None:
         """Import a raster image (scanned section) as a section background."""

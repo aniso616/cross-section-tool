@@ -86,6 +86,7 @@ def read_segy(
     domain: Literal["twt", "depth"] = "twt",
     depth_units: Literal["ms", "m", "ft"] = "ms",
     crs_epsg: int = 32632,
+    progress_callback=None,
 ) -> SeismicDataset:
     """Read a SEG-Y file and return a :class:`SeismicDataset`.
 
@@ -127,11 +128,18 @@ def read_segy(
             trace_x = x_raw.copy()
             trace_y = y_raw.copy()
 
-        data = (
-            f.trace.raw[:].astype(np.float32)
-            if n_traces > 0
-            else np.empty((0, len(samples)), dtype=np.float32)
-        )
+        if n_traces == 0:
+            data = np.empty((0, len(samples)), dtype=np.float32)
+        elif progress_callback is not None:
+            # Chunked read so the caller can update a progress bar
+            data = np.empty((n_traces, len(samples)), dtype=np.float32)
+            chunk = max(1, n_traces // 100)
+            for start in range(0, n_traces, chunk):
+                end = min(start + chunk, n_traces)
+                data[start:end] = f.trace.raw[start:end]
+                progress_callback(int(end * 100 / n_traces))
+        else:
+            data = f.trace.raw[:].astype(np.float32)
 
     return SeismicDataset(
         name=Path(path).stem,

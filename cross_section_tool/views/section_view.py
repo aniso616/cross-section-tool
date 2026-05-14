@@ -526,6 +526,12 @@ class SectionView(QWidget):
     def clear_seismic_cache(self) -> None:
         self._seismic_cache.clear()
 
+    def preload_seismic_ref(self, ref, progress_callback=None) -> None:
+        """Eagerly load a SeismicRef into the cache (with optional progress)."""
+        if ref.path not in self._seismic_cache:
+            ds = ref.load(progress_callback=progress_callback)
+            self._seismic_cache[ref.path] = ds
+
     def set_strat_column_visible(self, visible: bool) -> None:
         self._strat_col_visible = visible
         self._strat_ax.set_visible(visible)
@@ -1332,10 +1338,17 @@ class SectionView(QWidget):
 
         for well in self._state.project.wells:
             collar_dist, perp = well.project_to_section(section)
+            print(f"[WELL] {well.name!r}: pos=({well.x:.0f},{well.y:.0f})  "
+                  f"collar_dist={collar_dist:.1f}  perp={perp:.1f}  "
+                  f"threshold={_WELL_MAX_PERP}")
             if abs(perp) > _WELL_MAX_PERP:
-                continue  # too far off-section
+                print(f"  -> SKIPPED (|{perp:.1f}| > {_WELL_MAX_PERP})")
+                continue
 
             distances, tvds = well.section_track(section)
+            print(f"  -> RENDERING: {len(distances)} pts  "
+                  f"dist=[{distances.min():.0f},{distances.max():.0f}]  "
+                  f"tvd=[{tvds.min():.0f},{tvds.max():.0f}]")
 
             # Well stick
             self._ax.plot(distances, tvds, color="#4A3728", linewidth=1.5,
