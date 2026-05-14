@@ -12,7 +12,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MultipleLocator
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -185,6 +185,13 @@ class SectionView(QWidget):
 
         # ---- rubber-band cursor position ----
         self._cursor_data: tuple[float, float] | None = None
+
+        # ---- render throttle and re-entry guard ----
+        self._is_rendering = False
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.setInterval(50)   # max 20 redraws/sec from signals
+        self._redraw_timer.timeout.connect(self.render)
 
         self._setup_ui()
         self._connect_signals()
@@ -557,11 +564,26 @@ class SectionView(QWidget):
     # Rendering
     # ------------------------------------------------------------------
 
+    def request_render(self, *_args) -> None:
+        """Schedule a render on the next idle cycle (debounced for signal bursts)."""
+        if not self._redraw_timer.isActive():
+            self._redraw_timer.start()
+
     def render(self, *_args) -> None:
         """Full redraw of the active section."""
+        if self._is_rendering:
+            return
         # Guard against degenerate canvas size (avoids AGG MemoryError cascade)
         if self._canvas.width() < 4 or self._canvas.height() < 4:
             return
+        self._is_rendering = True
+        try:
+            self._render_impl()
+        finally:
+            self._is_rendering = False
+
+    def _render_impl(self) -> None:
+        """Internal render body — called only from render() with re-entry guard held."""
 
         _t0 = time.perf_counter()
 
@@ -2214,7 +2236,7 @@ class SectionView(QWidget):
             self._state.set_active_tool("select")
 
     def _on_active_section_changed(self, section) -> None:
-        self._ax_limits_set = False   # FIX 2: new section gets default limits
+        self._ax_limits_set = False   # new section gets default limits
         if section is not None and self._ve_lock_btn.isChecked():
             locked_ve = self._ve_spin.value()
             if abs(getattr(section, "vertical_exaggeration", 1.0) - locked_ve) > 0.001:

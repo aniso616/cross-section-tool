@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
-from pyvistaqt import QtInteractor
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 from cross_section_tool.app_state import AppState
 from cross_section_tool.core.section import Section
@@ -151,6 +151,7 @@ class Viewer3D(QWidget):
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._plotter = None  # lazy — created only when user clicks Enable
         self._setup_ui()
         self._connect_signals()
 
@@ -159,11 +160,29 @@ class Viewer3D(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._plotter = QtInteractor(self)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._plotter)
-        self._plotter.show()
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._placeholder = QLabel("3D View — click Enable to activate")
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._enable_btn = QPushButton("Enable 3D View")
+        self._enable_btn.clicked.connect(self._init_plotter)
+        self._layout.addWidget(self._placeholder)
+        self._layout.addWidget(self._enable_btn)
+
+    def _init_plotter(self) -> None:
+        """Create the PyVista Qt widget — only on explicit user request."""
+        try:
+            from pyvistaqt import QtInteractor
+            self._plotter = QtInteractor(self)
+            self._layout.removeWidget(self._placeholder)
+            self._layout.removeWidget(self._enable_btn)
+            self._placeholder.deleteLater()
+            self._enable_btn.deleteLater()
+            self._layout.addWidget(self._plotter)
+            self._plotter.show()
+            self.render()
+        except Exception as e:
+            self._placeholder.setText(f"3D View failed to initialize: {e}")
 
     def _connect_signals(self) -> None:
         s = self._state
@@ -187,7 +206,7 @@ class Viewer3D(QWidget):
     # ------------------------------------------------------------------
 
     @property
-    def plotter(self) -> QtInteractor:
+    def plotter(self):
         return self._plotter
 
     # ------------------------------------------------------------------
@@ -196,6 +215,8 @@ class Viewer3D(QWidget):
 
     def render(self, *_args) -> None:
         """Full redraw: clear the scene and re-add all meshes."""
+        if self._plotter is None:
+            return
         try:
             self._plotter.clear()
         except Exception:

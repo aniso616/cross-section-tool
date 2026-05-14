@@ -2,8 +2,27 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 
-from PySide6.QtCore import Qt, QSize, QSettings
+
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    """Show an error dialog instead of crashing on unhandled exceptions."""
+    error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    print(f"UNHANDLED EXCEPTION:\n{error_msg}", file=sys.stderr)
+    try:
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "Unexpected Error",
+            f"An error occurred:\n\n{exc_value}\n\n"
+            "The application may be unstable. Save your work.",
+        )
+    except Exception:
+        pass
+
+
+sys.excepthook = _global_exception_handler
+
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -110,6 +129,11 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._update_status()
         self.resize(1280, 800)
+        # Auto-save every 5 minutes
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(5 * 60 * 1000)
+        self._autosave_timer.timeout.connect(self._on_autosave)
+        self._autosave_timer.start()
         # Restore saved layout if available
         _s = QSettings("Geoscience", "CrossSectionTool")
         _geom = _s.value("window/geometry")
@@ -782,6 +806,7 @@ class MainWindow(QMainWindow):
         """Load a project from *path*. Returns True on success, False on error (no dialog)."""
         try:
             self._state.open_project(path)
+            self._check_autosave_recovery()
             return True
         except Exception:
             return False
@@ -859,13 +884,37 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Import LAS Files", "", "LAS Files (*.las *.LAS);;All Files (*)"
         )
-        for path in paths:
-            try:
-                from cross_section_tool.io.las import read_las
-                well = read_las(path, crs_epsg=self._state.project.crs_epsg)
-                self._state.add_well(well)
-            except Exception as exc:
-                QMessageBox.warning(self, "Import Warning", f"{path}:\n{exc}")
+        if not paths:
+            return
+        from cross_section_tool.io.las import read_las
+        from cross_section_tool.core.wells import LogCurve
+        _MAX_LOG_SAMPLES = 10_000
+        added = []
+        errors = []
+        try:
+            self._state.blockSignals(True)
+            for path in paths:
+                try:
+                    well = read_las(path, crs_epsg=self._state.project.crs_epsg)
+                    # Downsample very large logs for display performance
+                    for log_name in well.log_names:
+                        log = well.get_log(log_name)
+                        if log.n_samples > _MAX_LOG_SAMPLES:
+                            step = log.n_samples // _MAX_LOG_SAMPLES
+                            well.add_log(LogCurve(
+                                log.name, log.units,
+                                log._depths[::step], log._values[::step],
+                            ))
+                    self._state.project.wells.append(well)
+                    added.append(well)
+                except Exception as exc:
+                    errors.append(f"{path}:\n{exc}")
+        finally:
+            self._state.blockSignals(False)
+            if added:
+                self._state.project_changed.emit()
+        for msg in errors:
+            QMessageBox.warning(self, "Import Warning", msg)
 
     def _on_import_segy(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1636,9 +1685,48 @@ class MainWindow(QMainWindow):
         fps = 1000.0 / max(ms, 0.1)
         self._hint_label.setText(f"{ms:.0f} ms  |  {fps:.0f} fps")
 
+    def _on_autosave(self) -> None:
+        """Auto-save to a .autosave.h5 sidecar every 5 minutes if modified."""
+        if not self._state.is_modified or not self._state.project_path:
+            return
+        autosave_path = self._state.project_path + ".autosave.h5"
+        try:
+            self._state.project.save(autosave_path)
+            self._flash_status("Auto-saved")
+        except Exception:
+            pass
+
+    def _check_autosave_recovery(self) -> None:
+        """On startup, offer to recover from an autosave if one is newer than the project."""
+        path = self._state.project_path
+        if not path:
+            return
+        autosave_path = path + ".autosave.h5"
+        if not os.path.exists(autosave_path):
+            return
+        try:
+            import os.path as _osp
+            if _osp.getmtime(autosave_path) <= _osp.getmtime(path):
+                return
+        except OSError:
+            return
+        reply = QMessageBox.question(
+            self, "Recover Auto-save",
+            "An auto-saved version from a previous session was found and is newer "
+            "than the saved project.\nRecover it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                self._state.open_project(autosave_path)
+                # Restore the original path so next Save goes to the right file
+                self._state._project_path = str(path)
+                self._state.project_path_changed.emit(str(path))
+            except Exception as exc:
+                QMessageBox.warning(self, "Recovery Failed", str(exc))
+
     def _flash_status(self, msg: str) -> None:
-        """Phase 7: briefly show *msg* in the status bar, then restore."""
-        from PySide6.QtCore import QTimer
+        """Briefly show *msg* in the status bar, then restore."""
         self._status_label.setText(msg)
         QTimer.singleShot(2000, self._update_status)
 

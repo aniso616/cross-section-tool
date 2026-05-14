@@ -299,12 +299,17 @@ class TestViewer3DConstruction:
     def test_is_qwidget(self, viewer):
         assert viewer.isWidgetType()
 
-    def test_has_plotter(self, viewer):
-        from pyvistaqt import QtInteractor
-        assert isinstance(viewer.plotter, QtInteractor)
+    def test_plotter_starts_uninitialized(self, viewer):
+        # Plotter is lazy — None until user clicks Enable
+        assert viewer.plotter is None
 
-    def test_plotter_is_widget(self, viewer):
-        assert viewer.plotter.isWidgetType()
+    def test_has_enable_button(self, viewer):
+        from PySide6.QtWidgets import QPushButton
+        assert isinstance(viewer._enable_btn, QPushButton)
+
+    def test_has_placeholder_label(self, viewer):
+        from PySide6.QtWidgets import QLabel
+        assert isinstance(viewer._placeholder, QLabel)
 
 
 class TestViewer3DRenderNoCrash:

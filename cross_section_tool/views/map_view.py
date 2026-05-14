@@ -7,7 +7,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from cross_section_tool.app_state import AppState
@@ -84,6 +84,13 @@ class MapView(QWidget):
         self._pan_ylim0:   tuple[float, float] | None = None
         self._pan_inv      = None   # inverse transform captured at press
 
+        # ---- render throttle and re-entry guard ----
+        self._is_rendering = False
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.setInterval(50)   # max 20 redraws/sec from signals
+        self._redraw_timer.timeout.connect(self.render)
+
         self._setup_ui()
         self._connect_signals()
 
@@ -155,11 +162,26 @@ class MapView(QWidget):
     # Rendering
     # ------------------------------------------------------------------
 
+    def request_render(self, *_args) -> None:
+        """Schedule a render on the next idle cycle (debounced for signal bursts)."""
+        if not self._redraw_timer.isActive():
+            self._redraw_timer.start()
+
     def render(self, *_args) -> None:
         """Full redraw of the map view."""
+        if self._is_rendering:
+            return
         # Guard against degenerate canvas size (causes AGG MemoryError)
         if self._canvas.width() < 4 or self._canvas.height() < 4:
             return
+        self._is_rendering = True
+        try:
+            self._render_impl()
+        finally:
+            self._is_rendering = False
+
+    def _render_impl(self) -> None:
+        """Internal render body — called only from render() with re-entry guard held."""
 
         self._ax.clear()
         # 'box' adjusts axes dimensions, not data limits — avoids the
