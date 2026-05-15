@@ -605,7 +605,13 @@ class SectionView(QWidget):
         )
 
     def _is_seismic_cache_valid(self, section) -> bool:
-        """True when the existing imshow artists match the current state and view."""
+        """True when the existing imshow artists match the current state.
+
+        xlim/ylim are intentionally NOT checked: a matplotlib AxesImage with
+        data-coordinate extent renders correctly at any zoom level without
+        being recreated.  Only settings changes and section switches require
+        a full seismic re-render.
+        """
         if not self._seismic_img_artists:
             return False
         if section is None:
@@ -613,16 +619,8 @@ class SectionView(QWidget):
         # Check artists are still attached to the axes
         if any(getattr(a, "axes", None) is None for a in self._seismic_img_artists):
             return False
-        # Check display settings
-        if self._seismic_img_cache_key != self._seismic_settings_key(section):
-            return False
-        # Check xlim/ylim (invalidated by zoom, not by pan-during-drag)
-        try:
-            xl = tuple(round(v, 2) for v in self._ax.get_xlim())
-            yl = tuple(round(v, 2) for v in self._ax.get_ylim())
-        except Exception:
-            return False
-        return xl == self._seismic_cache_xlim and yl == self._seismic_cache_ylim
+        # Check display settings (colormap, gain, clip %, display mode, …)
+        return self._seismic_img_cache_key == self._seismic_settings_key(section)
 
     def _clear_overlay_artists(self) -> None:
         """Remove all artists from the main axes EXCEPT ax.images (seismic imshow)."""
@@ -927,15 +925,22 @@ class SectionView(QWidget):
         y_span = abs(yl[1] - yl[0])
         x_interval = _nice_interval(x_span / 5)
         y_interval = _nice_interval(y_span / 5)
-        grid_kw = dict(color="#e0e0e0", linewidth=0.5, linestyle="--", zorder=2)
-        xs = np.arange(math.floor(xl[0] / x_interval) * x_interval, xl[1] + x_interval, x_interval)
-        ys = np.arange(math.floor(min(yl) / y_interval) * y_interval, max(yl) + y_interval, y_interval)
-        if len(xs) <= 500:
-            for x in xs:
-                self._ax.axvline(x, **grid_kw)
-        if len(ys) <= 500:
-            for y in ys:
-                self._ax.axhline(y, **grid_kw)
+
+        # Build grid as a single LineCollection — O(1) artists instead of O(N lines)
+        xs = np.arange(math.floor(xl[0] / x_interval) * x_interval,
+                       xl[1] + x_interval, x_interval)
+        ys = np.arange(math.floor(min(yl) / y_interval) * y_interval,
+                       max(yl) + y_interval, y_interval)
+        segments = []
+        for x in xs[:200]:   # hard cap
+            segments.append([(x, yl[0]), (x, yl[1])])
+        for y in ys[:200]:
+            segments.append([(xl[0], y), (xl[1], y)])
+        if segments:
+            lc = LineCollection(segments, colors="#e0e0e0", linewidths=0.5,
+                                linestyles="--", zorder=2)
+            self._ax.add_collection(lc)
+
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.ticklabel_format(style="plain", axis="both")
@@ -2341,25 +2346,22 @@ class SectionView(QWidget):
             self._object_drag_press_pt = None
 
     def _on_sv_resize(self, _event) -> None:
-        """Window resize: invalidate seismic xlim/ylim cache and redraw."""
-        self._seismic_cache_xlim = None
-        self._seismic_cache_ylim = None
-        self._canvas.draw_idle()
+        """Window resize: schedule an overlay redraw."""
+        self.request_render()
 
     def _on_scroll_sv(self, event) -> None:
         if event.inaxes is not self._ax:
             return
-        # Zoom changes view limits → invalidate the xlim/ylim portion of the cache
-        # (seismic data/settings cache remains valid — only the view state changes)
-        self._seismic_cache_xlim = None
-        self._seismic_cache_ylim = None
+        # Update view limits — seismic imshow adapts automatically (no cache
+        # invalidation needed: extent is in data coords and survives any zoom).
         factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
         cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
         cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
         xl, yl = self._ax.get_xlim(), self._ax.get_ylim()
         self._ax.set_xlim([cx + (x - cx) * factor for x in xl])
         self._ax.set_ylim([cy + (y - cy) * factor for y in yl])
-        self._canvas.draw_idle()
+        self._canvas.draw_idle()    # instant visual feedback (seismic + existing overlays)
+        self.request_render()       # schedules overlay redraw at new limits after debounce
 
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
