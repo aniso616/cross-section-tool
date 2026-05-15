@@ -268,6 +268,12 @@ class HorizonPick:
     # Per-section access
     # ------------------------------------------------------------------
 
+    def section_names(self) -> list[str]:
+        """Return sorted unique non-empty section names across all picks."""
+        return sorted(set(
+            str(s) for s in self._section_names if str(s) != ""
+        ))
+
     def section_indices(self, section_name: str) -> np.ndarray:
         """Full-array indices for picks on *section_name* or global picks ('')."""
         mask = (self._section_names == section_name) | (self._section_names == "")
