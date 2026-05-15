@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS horizon_picks (
     section_name   TEXT    NOT NULL,
     distance_along REAL    NOT NULL,
     depth          REAL    NOT NULL,
+    -- elevation is positive-up (source of truth when populated);
+    -- depth = -elevation for display. Populated in a future migration.
+    elevation      REAL,
     confidence     REAL    DEFAULT 1.0,
     quality        TEXT    DEFAULT 'picked',
     note           TEXT,
@@ -86,6 +89,7 @@ CREATE TABLE IF NOT EXISTS fault_picks (
     section_name   TEXT    NOT NULL,
     distance_along REAL    NOT NULL,
     depth          REAL    NOT NULL,
+    elevation      REAL,
     confidence     REAL    DEFAULT 1.0,
     quality        TEXT    DEFAULT 'picked',
     note           TEXT,
@@ -104,6 +108,8 @@ CREATE TABLE IF NOT EXISTS wells (
     original_y          REAL,
     original_crs_epsg   INTEGER,
     las_file_path       TEXT,
+    status              TEXT    DEFAULT 'actual',       -- actual, planned, hypothetical
+    purpose             TEXT    DEFAULT 'exploration',  -- exploration, production, injection, geothermal, observation, model_only
     created_date        TEXT
 );
 
@@ -130,19 +136,39 @@ CREATE TABLE IF NOT EXISTS well_logs (
     data_json   TEXT
 );
 
+CREATE TABLE IF NOT EXISTS lithologies (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                        TEXT    UNIQUE NOT NULL,
+    porosity_surface            REAL,   -- phi0, dimensionless (Sclater & Christie 1980)
+    compaction_coeff            REAL,   -- c, 1/m
+    grain_density               REAL,   -- kg/m³
+    matrix_thermal_conductivity REAL,   -- W/(m·K)
+    matrix_velocity             REAL,   -- m/s (interval velocity at zero porosity)
+    specific_heat_capacity      REAL,   -- J/(kg·K)
+    radiogenic_heat_production  REAL    -- µW/m³
+);
+
 CREATE TABLE IF NOT EXISTS formations (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                 TEXT    UNIQUE NOT NULL,
-    strat_order          INTEGER DEFAULT 0,
-    age_top_ma           REAL,
-    age_base_ma          REAL,
-    color                TEXT    DEFAULT '#888888',
-    opacity              REAL    DEFAULT 0.6,
-    lithology_pattern    TEXT    DEFAULT 'none',
-    primary_lithology    TEXT    DEFAULT 'shale',
-    sand_fraction        REAL    DEFAULT 0.0,
-    shale_fraction       REAL    DEFAULT 1.0,
-    carbonate_fraction   REAL    DEFAULT 0.0
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT    UNIQUE NOT NULL,
+    uuid                  TEXT    UNIQUE,               -- UUID4 for cross-referencing
+    rank                  TEXT    DEFAULT 'formation',  -- supergroup, group, formation, member, bed
+    parent_id             INTEGER REFERENCES formations(id),
+    primary_lithology_id  INTEGER REFERENCES lithologies(id),
+    strat_order           INTEGER DEFAULT 0,
+    age_top_ma            REAL,
+    age_base_ma           REAL,
+    color                 TEXT    DEFAULT '#888888',
+    opacity               REAL    DEFAULT 0.6,
+    lithology_pattern     TEXT    DEFAULT 'none',
+    -- Petrophysical overrides (NULL → inherit from referenced lithology)
+    porosity_surface      REAL,
+    compaction_coeff      REAL,
+    grain_density         REAL,
+    matrix_thermal_conductivity REAL,
+    sand_fraction         REAL    DEFAULT 0.0,
+    shale_fraction        REAL    DEFAULT 1.0,
+    carbonate_fraction    REAL    DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS polygons (
@@ -211,11 +237,85 @@ CREATE TABLE IF NOT EXISTS events (
     related_objects_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS measurements (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    well_id     INTEGER REFERENCES wells(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL,
+    -- kind is one of: vitrinite_ro, aft_age, aft_length, ahe_age, zhe_age,
+    --                 bht, dst_temp, fluid_inclusion, clumped_isotope, cai
+    depth_md    REAL    NOT NULL,
+    depth_tvd   REAL,
+    value       REAL    NOT NULL,
+    uncertainty REAL,
+    units       TEXT,
+    sample_id   TEXT,
+    lab         TEXT,
+    method      TEXT,
+    note        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS well_sections (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    well_id              INTEGER REFERENCES wells(id)    ON DELETE CASCADE,
+    section_id           INTEGER REFERENCES sections(id) ON DELETE CASCADE,
+    distance_along       REAL,
+    perpendicular_offset REAL,
+    nearest_segment      INTEGER,
+    display_mode         TEXT    DEFAULT 'auto',   -- on_plane, near, far, hidden
+    projection_tolerance REAL    DEFAULT 2000
+);
+
 CREATE TABLE IF NOT EXISTS velocity_model (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
 """
+
+# ---------------------------------------------------------------------------
+# Lithology defaults — Sclater & Christie 1980 + common additions
+# ---------------------------------------------------------------------------
+
+_LITHOLOGY_DEFAULTS: list[dict] = [
+    {"name": "Sandstone",      "porosity_surface": 0.49, "compaction_coeff": 0.00027, "grain_density": 2650, "matrix_thermal_conductivity": 3.0},
+    {"name": "Shale",          "porosity_surface": 0.63, "compaction_coeff": 0.00051, "grain_density": 2720, "matrix_thermal_conductivity": 1.5},
+    {"name": "Limestone",      "porosity_surface": 0.40, "compaction_coeff": 0.00040, "grain_density": 2710, "matrix_thermal_conductivity": 2.5},
+    {"name": "Dolomite",       "porosity_surface": 0.35, "compaction_coeff": 0.00038, "grain_density": 2850, "matrix_thermal_conductivity": 3.5},
+    {"name": "Chalk",          "porosity_surface": 0.70, "compaction_coeff": 0.00071, "grain_density": 2710, "matrix_thermal_conductivity": 2.0},
+    {"name": "Salt/Halite",    "porosity_surface": 0.01, "compaction_coeff": 0.0,     "grain_density": 2170, "matrix_thermal_conductivity": 6.0},
+    {"name": "Anhydrite",      "porosity_surface": 0.01, "compaction_coeff": 0.0,     "grain_density": 2960, "matrix_thermal_conductivity": 5.5},
+    {"name": "Coal",           "porosity_surface": 0.30, "compaction_coeff": 0.00030, "grain_density": 1500, "matrix_thermal_conductivity": 0.3},
+    {"name": "Basement/Granite","porosity_surface": 0.02, "compaction_coeff": 0.0,    "grain_density": 2750, "matrix_thermal_conductivity": 2.8},
+    {"name": "Basalt",         "porosity_surface": 0.05, "compaction_coeff": 0.0,     "grain_density": 2950, "matrix_thermal_conductivity": 1.7},
+    {"name": "Siltstone",      "porosity_surface": 0.56, "compaction_coeff": 0.00039, "grain_density": 2680, "matrix_thermal_conductivity": 2.0},
+    {"name": "Marl",           "porosity_surface": 0.50, "compaction_coeff": 0.00045, "grain_density": 2700, "matrix_thermal_conductivity": 2.0},
+    {"name": "Conglomerate",   "porosity_surface": 0.30, "compaction_coeff": 0.00020, "grain_density": 2650, "matrix_thermal_conductivity": 3.0},
+    {"name": "Volcanic tuff",  "porosity_surface": 0.40, "compaction_coeff": 0.00035, "grain_density": 2400, "matrix_thermal_conductivity": 1.5},
+    {"name": "Gypsum",         "porosity_surface": 0.01, "compaction_coeff": 0.0,     "grain_density": 2350, "matrix_thermal_conductivity": 1.5},
+]
+
+# Hardcoded property defaults (level 3 of the inheritance chain)
+_PROPERTY_DEFAULTS: dict[str, float] = {
+    "porosity_surface":            0.30,
+    "compaction_coeff":            0.00027,
+    "grain_density":               2650.0,
+    "matrix_thermal_conductivity": 2.0,
+    "matrix_velocity":             3500.0,
+    "specific_heat_capacity":      800.0,
+    "radiogenic_heat_production":  1.0,
+}
+
+# ---------------------------------------------------------------------------
+# Depth / elevation conversion helpers
+# ---------------------------------------------------------------------------
+
+def depth_to_elevation(depth: float) -> float:
+    """Convert depth-positive-down to elevation-positive-up."""
+    return -depth
+
+
+def elevation_to_depth(elevation: float) -> float:
+    """Convert elevation-positive-up to depth-positive-down."""
+    return -elevation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -254,6 +354,7 @@ class ProjectDatabase:
         self.conn = sqlite3.connect(self._path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._seed_lithologies()
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -510,30 +611,34 @@ class ProjectDatabase:
         row = self.conn.execute(
             "SELECT id FROM wells WHERE name=?", (well.name,)
         ).fetchone()
+        status  = getattr(well, "status",  "actual")
+        purpose = getattr(well, "purpose", "exploration")
         if row:
             wid = row["id"]
             self.conn.execute(
                 """UPDATE wells SET uwi=?, x=?, y=?, kb_elevation=?, td=?,
-                   original_x=?, original_y=?, original_crs_epsg=?
+                   original_x=?, original_y=?, original_crs_epsg=?,
+                   status=?, purpose=?
                    WHERE id=?""",
                 (well.uwi, well.x, well.y, well.kb,
                  well.deviation.max_tvd,
                  getattr(well, "original_x", None),
                  getattr(well, "original_y", None),
                  getattr(well, "original_crs_epsg", None),
-                 wid)
+                 status, purpose, wid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO wells(name, uwi, x, y, kb_elevation, td,
-                   original_x, original_y, original_crs_epsg, created_date)
-                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                   original_x, original_y, original_crs_epsg,
+                   status, purpose, created_date)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (well.name, well.uwi, well.x, well.y, well.kb,
                  well.deviation.max_tvd,
                  getattr(well, "original_x", None),
                  getattr(well, "original_y", None),
                  getattr(well, "original_crs_epsg", None),
-                 _now())
+                 status, purpose, _now())
             )
             wid = cur.lastrowid
 
@@ -743,6 +848,194 @@ class ProjectDatabase:
     def get_all_annotations(self) -> list[dict]:
         return [dict(r) for r in
                 self.conn.execute("SELECT * FROM annotations ORDER BY id").fetchall()]
+
+    # ------------------------------------------------------------------
+    # Lithology library
+    # ------------------------------------------------------------------
+
+    def _seed_lithologies(self) -> None:
+        """Insert standard lithologies if the table is empty."""
+        n = self.conn.execute("SELECT COUNT(*) FROM lithologies").fetchone()[0]
+        if n > 0:
+            return
+        for lith in _LITHOLOGY_DEFAULTS:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO lithologies
+                   (name, porosity_surface, compaction_coeff, grain_density,
+                    matrix_thermal_conductivity)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (lith["name"], lith["porosity_surface"], lith["compaction_coeff"],
+                 lith["grain_density"], lith["matrix_thermal_conductivity"])
+            )
+
+    def add_lithology(self, name: str, **props) -> int:
+        allowed = {"porosity_surface", "compaction_coeff", "grain_density",
+                   "matrix_thermal_conductivity", "matrix_velocity",
+                   "specific_heat_capacity", "radiogenic_heat_production"}
+        cols = ["name"] + [k for k in props if k in allowed]
+        vals = [name] + [props[k] for k in cols[1:]]
+        placeholders = ", ".join("?" * len(cols))
+        col_list = ", ".join(cols)
+        cur = self.conn.execute(
+            f"INSERT OR REPLACE INTO lithologies({col_list}) VALUES({placeholders})",
+            vals
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_lithology(self, name: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM lithologies WHERE name=?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_lithology_by_id(self, lid: int) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM lithologies WHERE id=?", (lid,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_all_lithologies(self) -> list[dict]:
+        return [dict(r) for r in
+                self.conn.execute("SELECT * FROM lithologies ORDER BY name").fetchall()]
+
+    def delete_lithology(self, name: str) -> None:
+        self.conn.execute("DELETE FROM lithologies WHERE name=?", (name,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Formation property inheritance
+    # ------------------------------------------------------------------
+
+    def get_formation_property(self, formation_id: int, prop: str) -> float | None:
+        """Walk the three-level inheritance chain for a petrophysical property.
+
+        Level 1: formation record (if the column is not NULL)
+        Level 2: referenced lithology (primary_lithology_id)
+        Level 3: hardcoded default in _PROPERTY_DEFAULTS
+        """
+        # Level 1: check formation record
+        row = self.conn.execute(
+            "SELECT * FROM formations WHERE id=?", (formation_id,)
+        ).fetchone()
+        if row is None:
+            return _PROPERTY_DEFAULTS.get(prop)
+
+        row = dict(row)
+        if prop in row and row[prop] is not None:
+            return float(row[prop])
+
+        # Level 2: referenced lithology
+        lith_id = row.get("primary_lithology_id")
+        if lith_id is not None:
+            lith = self.get_lithology_by_id(int(lith_id))
+            if lith and lith.get(prop) is not None:
+                return float(lith[prop])
+
+        # Level 3: hardcoded default
+        return _PROPERTY_DEFAULTS.get(prop)
+
+    # ------------------------------------------------------------------
+    # Measurements (thermochronology / thermal data)
+    # ------------------------------------------------------------------
+
+    def add_measurement(
+        self,
+        well_id: int,
+        kind: str,
+        depth_md: float,
+        value: float,
+        *,
+        depth_tvd: float | None = None,
+        uncertainty: float | None = None,
+        units: str | None = None,
+        sample_id: str | None = None,
+        lab: str | None = None,
+        method: str | None = None,
+        note: str | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO measurements
+               (well_id, kind, depth_md, depth_tvd, value, uncertainty,
+                units, sample_id, lab, method, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (well_id, kind, depth_md, depth_tvd, value, uncertainty,
+             units, sample_id, lab, method, note)
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_measurements(self, well_id: int, kind: str | None = None) -> list[dict]:
+        if kind:
+            rows = self.conn.execute(
+                "SELECT * FROM measurements WHERE well_id=? AND kind=? ORDER BY depth_md",
+                (well_id, kind)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM measurements WHERE well_id=? ORDER BY depth_md",
+                (well_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_measurement(self, measurement_id: int) -> None:
+        self.conn.execute("DELETE FROM measurements WHERE id=?", (measurement_id,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Well-section projection metadata
+    # ------------------------------------------------------------------
+
+    def upsert_well_section(
+        self,
+        well_id: int,
+        section_id: int,
+        distance_along: float,
+        perpendicular_offset: float,
+        *,
+        nearest_segment: int | None = None,
+        display_mode: str = "auto",
+        projection_tolerance: float = 2000.0,
+    ) -> int:
+        row = self.conn.execute(
+            "SELECT id FROM well_sections WHERE well_id=? AND section_id=?",
+            (well_id, section_id)
+        ).fetchone()
+        if row:
+            self.conn.execute(
+                """UPDATE well_sections
+                   SET distance_along=?, perpendicular_offset=?,
+                       nearest_segment=?, display_mode=?, projection_tolerance=?
+                   WHERE well_id=? AND section_id=?""",
+                (distance_along, perpendicular_offset, nearest_segment,
+                 display_mode, projection_tolerance, well_id, section_id)
+            )
+            rid = row["id"]
+        else:
+            cur = self.conn.execute(
+                """INSERT INTO well_sections
+                   (well_id, section_id, distance_along, perpendicular_offset,
+                    nearest_segment, display_mode, projection_tolerance)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (well_id, section_id, distance_along, perpendicular_offset,
+                 nearest_segment, display_mode, projection_tolerance)
+            )
+            rid = cur.lastrowid
+        self.conn.commit()
+        return rid
+
+    def get_well_sections(self, well_id: int) -> list[dict]:
+        return [dict(r) for r in
+                self.conn.execute(
+                    "SELECT * FROM well_sections WHERE well_id=?", (well_id,)
+                ).fetchall()]
+
+    def delete_well_section(self, well_id: int, section_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM well_sections WHERE well_id=? AND section_id=?",
+            (well_id, section_id)
+        )
+        self.conn.commit()
 
     # ------------------------------------------------------------------
     # Bulk-load helper (used when opening project)
