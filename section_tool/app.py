@@ -133,6 +133,41 @@ class MainWindow(QMainWindow):
     APP_NAME = "Section"
     APP_VERSION = "0.1.0"
 
+    # Central shortcut registry — single source of truth for both
+    # QShortcut registration and the Help → Keyboard Shortcuts dialog.
+    # Space is handled by keyPressEvent/keyReleaseEvent (hold semantics),
+    # so it is documented here but not in the QShortcut objects.
+    SHORTCUT_REGISTRY: list[tuple[str, str, str]] = [
+        # (key_sequence, description, category)
+        ("V",            "Select Object",            "Navigation"),
+        ("A",            "Direct Select (Nodes)",    "Navigation"),
+        ("H",            "Pan",                      "Navigation"),
+        ("Z",            "Zoom",                     "Navigation"),
+        ("Space",        "Temporary Pan (hold)",     "Navigation"),    # keyPressEvent
+        ("P",            "Horizon Pick",             "Interpretation"),
+        ("F",            "Fault Pick",               "Interpretation"),
+        ("G",            "Polygon",                  "Interpretation"),
+        ("S",            "Section Draw",             "Interpretation"),
+        ("R",            "Reference Line (cycle)",   "Construction"),
+        ("M",            "Measure",                  "Construction"),
+        ("Delete",       "Delete Selected",          "Editing"),
+        ("Ctrl+Z",       "Undo",                     "Editing"),
+        ("Ctrl+Shift+Z", "Redo",                     "Editing"),
+        ("Ctrl+C",       "Copy",                     "Editing"),
+        ("Ctrl+V",       "Paste",                    "Editing"),
+        ("Ctrl+A",       "Select All",               "Editing"),
+        ("Escape",       "Cancel / Deselect",        "Editing"),
+        ("Ctrl+N",       "New Project",              "File"),
+        ("Ctrl+O",       "Open Project",             "File"),
+        ("Ctrl+S",       "Save Project",             "File"),
+        ("Ctrl+0",       "Zoom to All Data",         "View"),
+        ("Ctrl+1",       "Toggle Map Panel",         "View"),
+        ("Ctrl+2",       "Toggle Section Panel",     "View"),
+        ("Ctrl+3",       "Toggle 3D View",           "View"),
+        ("Ctrl+4",       "Toggle Project Panel",     "View"),
+        ("Ctrl+5",       "Toggle Properties Panel",  "View"),
+    ]
+
     def __init__(self, state: AppState | None = None) -> None:
         super().__init__()
         self._state = state or AppState()
@@ -346,25 +381,21 @@ class MainWindow(QMainWindow):
         # ================================================================
         file_menu = mb.addMenu("&File")
 
-        self._new_action = QAction("&New Project", self)
-        self._new_action.setShortcut(QKeySequence.StandardKey.New)
+        self._new_action = QAction("&New Project\tCtrl+N", self)
         self._new_action.triggered.connect(self._on_new)
         file_menu.addAction(self._new_action)
 
-        self._open_action = QAction("&Open Project…", self)
-        self._open_action.setShortcut(QKeySequence.StandardKey.Open)
+        self._open_action = QAction("&Open Project…\tCtrl+O", self)
         self._open_action.triggered.connect(self._on_open)
         file_menu.addAction(self._open_action)
 
         file_menu.addSeparator()
 
-        self._save_action = QAction("&Save", self)
-        self._save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._save_action = QAction("&Save\tCtrl+S", self)
         self._save_action.triggered.connect(self._on_save)
         file_menu.addAction(self._save_action)
 
-        self._save_as_action = QAction("Save &As…", self)
-        self._save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self._save_as_action = QAction("Save &As…\tCtrl+Shift+S", self)
         self._save_as_action.triggered.connect(self._on_save_as)
         file_menu.addAction(self._save_as_action)
 
@@ -407,7 +438,6 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
         self._exit_action = QAction("E&xit", self)
-        self._exit_action.setShortcut(QKeySequence.StandardKey.Quit)
         self._exit_action.triggered.connect(self.close)
         file_menu.addAction(self._exit_action)
 
@@ -415,43 +445,44 @@ class MainWindow(QMainWindow):
         # Edit
         # ================================================================
         edit_menu = mb.addMenu("&Edit")
-        undo_a = QAction("&Undo", self)
-        undo_a.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_a = QAction("&Undo\tCtrl+Z", self)
         undo_a.triggered.connect(self._state.undo)
         edit_menu.addAction(undo_a)
-        redo_a = QAction("&Redo", self)
-        redo_a.setShortcut(QKeySequence("Ctrl+Shift+Z"))
+        redo_a = QAction("&Redo\tCtrl+Shift+Z", self)
         redo_a.triggered.connect(self._state.redo)
         edit_menu.addAction(redo_a)
         edit_menu.addSeparator()
-        selall_a = QAction("Select &All", self)
-        selall_a.setShortcut(QKeySequence("Ctrl+A"))
+        selall_a = QAction("Select &All\tCtrl+A", self)
         edit_menu.addAction(selall_a)
 
         # ================================================================
         # View
         # ================================================================
         view_menu = mb.addMenu("&View")
-        # Dock panel toggles — each QDockWidget provides a ready-made checkable action
+        # Dock panel toggles — shortcuts registered as ApplicationShortcut QShortcuts
+        # in _register_shortcuts(); the \t hints show them in the menu.
         _map_ta = self._map_dock.toggleViewAction()
-        _map_ta.setShortcut(QKeySequence("Ctrl+2"))
+        _map_ta.setText(_map_ta.text() + "\tCtrl+1")
         view_menu.addAction(_map_ta)
         _sec_ta = self._section_dock.toggleViewAction()
-        _sec_ta.setShortcut(QKeySequence("Ctrl+3"))
+        _sec_ta.setText(_sec_ta.text() + "\tCtrl+2")
         view_menu.addAction(_sec_ta)
-        view_menu.addAction(self._view3d_dock.toggleViewAction())
+        _3d_ta = self._view3d_dock.toggleViewAction()
+        _3d_ta.setText(_3d_ta.text() + "\tCtrl+3")
+        view_menu.addAction(_3d_ta)
         view_menu.addSeparator()
         _proj_ta = self._project_panel.toggleViewAction()
-        _proj_ta.setShortcut(QKeySequence("Ctrl+1"))
+        _proj_ta.setText(_proj_ta.text() + "\tCtrl+4")
         view_menu.addAction(_proj_ta)
-        view_menu.addAction(self._properties_panel.toggleViewAction())
+        _props_ta = self._properties_panel.toggleViewAction()
+        _props_ta.setText(_props_ta.text() + "\tCtrl+5")
+        view_menu.addAction(_props_ta)
         view_menu.addSeparator()
         reset_layout_a = QAction("&Reset Layout", self)
         reset_layout_a.triggered.connect(self._reset_layout)
         view_menu.addAction(reset_layout_a)
         view_menu.addSeparator()
-        zfit_a = QAction("Zoom to &Fit", self)
-        zfit_a.setShortcut(QKeySequence("Ctrl+0"))
+        zfit_a = QAction("Zoom to &Fit\tCtrl+0", self)
         zfit_a.triggered.connect(self._zoom_to_fit)
         view_menu.addAction(zfit_a)
         view_menu.addSeparator()
@@ -568,6 +599,10 @@ class MainWindow(QMainWindow):
         # Help
         # ================================================================
         help_menu = mb.addMenu("&Help")
+        kbd_action = QAction("&Keyboard Shortcuts…", self)
+        kbd_action.triggered.connect(self._on_show_shortcuts_dialog)
+        help_menu.addAction(kbd_action)
+        help_menu.addSeparator()
         self._about_action = QAction("&About Section…", self)
         self._about_action.triggered.connect(self._on_about)
         help_menu.addAction(self._about_action)
@@ -688,50 +723,8 @@ class MainWindow(QMainWindow):
         s.annotation_modified.connect(lambda *_: self._section_view.request_render())
         # FPS display from section view
         self._section_view.frame_time_ms.connect(self._on_frame_time)
-        # Keyboard shortcuts for tools (application-wide)
-        _tool_keys = {
-            "V": "select",    "A": "node_edit",
-            "H": "pan",       "Z": "zoom",
-            "S": "new_section",
-            "P": "horizon_pick", "F": "fault_pick",
-            "G": "polygon",   "M": "measure",
-        }
-        for key, tool_id in _tool_keys.items():
-            sc = QShortcut(QKeySequence(key), self)
-            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            sc.activated.connect(
-                lambda tid=tool_id: self._tool_palette.set_active_tool(tid)
-            )
-
-        # Shift+Z → zoom to fit
-        sc_fit = QShortcut(QKeySequence("Shift+Z"), self)
-        sc_fit.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc_fit.activated.connect(self._zoom_to_fit)
-
-        # R → cycle through reference line tools
-        self._ref_cycle_idx = 0
-        sc_ref = QShortcut(QKeySequence("R"), self)
-        sc_ref.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc_ref.activated.connect(self._cycle_ref_line_tool)
-        # Global undo/redo shortcuts (Phase 7)
-        sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
-        sc_undo.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc_undo.activated.connect(self._state.undo)
-        sc_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
-        sc_redo.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc_redo.activated.connect(self._state.redo)
-
-        # Panel toggle shortcuts — dock widgets already have shortcuts via View menu,
-        # these QShortcuts provide application-wide coverage (catches focus anywhere)
-        sc1 = QShortcut(QKeySequence("Ctrl+1"), self)
-        sc1.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc1.activated.connect(self._project_panel.toggleViewAction().trigger)
-        sc2 = QShortcut(QKeySequence("Ctrl+2"), self)
-        sc2.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc2.activated.connect(self._map_dock.toggleViewAction().trigger)
-        sc3 = QShortcut(QKeySequence("Ctrl+3"), self)
-        sc3.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc3.activated.connect(self._section_dock.toggleViewAction().trigger)
+        # All keyboard shortcuts registered centrally
+        self._register_shortcuts()
         # Initial tool availability pass
         self._update_tool_availability()
 
@@ -1966,6 +1959,84 @@ class MainWindow(QMainWindow):
         else:
             self._ref_cycle_idx = 0
         self._tool_palette.set_active_tool(tools[self._ref_cycle_idx])
+
+    def _register_shortcuts(self) -> None:
+        """Register all keyboard shortcuts as application-level QShortcut objects.
+
+        ApplicationShortcut context ensures shortcuts fire regardless of which
+        panel currently has keyboard focus (canvas, tree, property widget, etc.).
+
+        QAction.setShortcut is intentionally NOT used for these keys to avoid
+        duplicate-fire ambiguity.  Menu items show hints via \\t in their text.
+
+        Space-bar temporary-pan is handled by keyPressEvent/keyReleaseEvent
+        (requires hold semantics) and therefore does not appear here.
+        """
+        _ctx = Qt.ShortcutContext.ApplicationShortcut
+        self._ref_cycle_idx = 0
+
+        def _sc(key: str, slot) -> QShortcut:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(_ctx)
+            sc.activated.connect(slot)
+            return sc
+
+        def _tool(tid: str):
+            return lambda: self._tool_palette.set_active_tool(tid)
+
+        # ── Navigation / tool selection ───────────────────────────────────
+        _sc("V", _tool("select"))
+        _sc("A", _tool("node_edit"))
+        _sc("H", _tool("pan"))
+        _sc("Z", _tool("zoom"))
+
+        # ── Interpretation ────────────────────────────────────────────────
+        _sc("P", _tool("horizon_pick"))
+        _sc("F", _tool("fault_pick"))
+        _sc("G", _tool("polygon"))
+        _sc("S", _tool("new_section"))
+
+        # ── Construction ──────────────────────────────────────────────────
+        _sc("R", self._cycle_ref_line_tool)
+        _sc("M", _tool("measure"))
+
+        # ── Editing ───────────────────────────────────────────────────────
+        _sc("Delete",       self._on_delete_shortcut)
+        _sc("Ctrl+Z",       self._state.undo)
+        _sc("Ctrl+Shift+Z", self._state.redo)
+        _sc("Ctrl+C",       lambda: None)   # stub — future copy
+        _sc("Ctrl+V",       lambda: None)   # stub — future paste
+        _sc("Ctrl+A",       lambda: None)   # stub — future select all
+        _sc("Escape",       self._on_escape_shortcut)
+
+        # ── File ──────────────────────────────────────────────────────────
+        _sc("Ctrl+N", self._on_new)
+        _sc("Ctrl+O", self._on_open)
+        _sc("Ctrl+S", self._on_save)
+
+        # ── View ──────────────────────────────────────────────────────────
+        _sc("Ctrl+0", self._zoom_to_fit)
+        _sc("Ctrl+1", self._map_dock.toggleViewAction().trigger)
+        _sc("Ctrl+2", self._section_dock.toggleViewAction().trigger)
+        _sc("Ctrl+3", self._view3d_dock.toggleViewAction().trigger)
+        _sc("Ctrl+4", self._project_panel.toggleViewAction().trigger)
+        _sc("Ctrl+5", self._properties_panel.toggleViewAction().trigger)
+
+    def _on_escape_shortcut(self) -> None:
+        """Escape: cancel current operation and return to select tool."""
+        self._tool_palette.set_active_tool("select")
+
+    def _on_delete_shortcut(self) -> None:
+        """Delete: cancel active pick or remove the last-added pick point."""
+        tool = self._state.active_tool
+        if tool in ("horizon_pick", "fault_pick"):
+            self._tool_palette.set_active_tool("select")
+
+    def _on_show_shortcuts_dialog(self) -> None:
+        """Help → Keyboard Shortcuts: show the shortcuts reference dialog."""
+        from section_tool.views.shortcuts_dialog import KeyboardShortcutsDialog
+        dlg = KeyboardShortcutsDialog(self.SHORTCUT_REGISTRY, self)
+        dlg.exec()
 
     # Space-bar temporary pan
     def keyPressEvent(self, event) -> None:
