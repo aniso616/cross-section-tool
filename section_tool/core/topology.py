@@ -62,10 +62,15 @@ class SectionTopology:
     # ------------------------------------------------------------------
 
     def update_bounds(self, section_length: float, max_depth: float) -> None:
-        """Update the section extent and rebuild boundary lines."""
+        """Update the section extent, rebuild boundaries, and re-extend user lines."""
         self._section_length = float(section_length)
         self._max_depth = float(max_depth)
         self._update_boundaries()
+        # Re-extend all user lines so they still reach the new edges
+        for name, (ltype, ls) in list(self._lines.items()):
+            if not name.startswith("__"):
+                extended = self._extend_to_edges(list(ls.coords))
+                self._lines[name] = (ltype, LineString(extended))
         self._dirty = True
 
     # ------------------------------------------------------------------
@@ -119,18 +124,39 @@ class SectionTopology:
     # ------------------------------------------------------------------
 
     def get_all_faces(self):
-        """Return closed Shapely Polygons representing all bounded faces."""
+        """Return closed Shapely Polygons representing all bounded faces.
+
+        Always includes the section boundary rectangle, even when no
+        interpretation lines exist (returns a single polygon covering the
+        whole section).  Slivers smaller than 0.1 % of the section area
+        are filtered out.
+        """
         if self._dirty:
             self.recompute_all()
-        if len(self._lines) < 3:
-            return []
+
         all_ls = [ls for _, ls in self._lines.values()]
+        if not all_ls:
+            return []
+
+        # Ensure the boundary ring is present even if it was somehow cleared
+        xl, xr = 0.0, self._section_length
+        yt, yb = 0.0, self._max_depth
+        boundary_ring = LineString(
+            [(xl, yt), (xr, yt), (xr, yb), (xl, yb), (xl, yt)]
+        )
+        # Only add if our stored boundary is the 4-segment variant; the single
+        # ring replaces them to give polygonize clean shared nodes.
+        user_ls = [ls for n, (_, ls) in self._lines.items()
+                   if not n.startswith("__")]
+        lines_to_poly = [boundary_ring] + user_ls
+
         try:
-            merged = unary_union(all_ls)
+            merged = unary_union(lines_to_poly)
             polys = list(polygonize(merged))
         except Exception:
             return []
-        # Filter slivers (< 0.1% of section bounding box)
+
+        # Filter slivers (< 0.1 % of section bounding box)
         bbox_area = self._section_length * self._max_depth
         min_area = bbox_area * 0.001 if bbox_area > 0 else 1.0
         return [p for p in polys if p.area >= min_area]
@@ -174,27 +200,43 @@ class SectionTopology:
     def _extend_to_edges(self,
                          coords: list[tuple[float, float]],
                          ) -> list[tuple[float, float]]:
-        """Extrapolate the line to reach x=0 and x=section_length."""
+        """Extrapolate the line to reach x=0 and x=section_length.
+
+        Uses linear extrapolation from the nearest two picks.  When only a
+        single pick exists the line is held constant at that pick's depth.
+        The resulting z-values are clamped to [0, max_depth].
+        """
         coords = sorted(coords, key=lambda p: p[0])
         xl, xr = 0.0, self._section_length
         yt, yb = 0.0, self._max_depth
         result = list(coords)
 
+        def _clamp(z: float) -> float:
+            return max(yt, min(yb, z))
+
+        def _extrapolate(d0, z0, d1, z1, x_target):
+            dd = d1 - d0
+            if abs(dd) < 1e-9:
+                return z0
+            return z0 + (z1 - z0) * (x_target - d0) / dd
+
         # Extend left
         if coords[0][0] > xl:
-            d0, z0 = coords[0][0], coords[0][1]
-            d1, z1 = coords[1][0], coords[1][1]
-            dd = d1 - d0
-            z_xl = z0 + (z1 - z0) * (xl - d0) / dd if abs(dd) > 1e-9 else z0
-            result = [(xl, max(yt, min(yb, z_xl)))] + result
+            if len(coords) >= 2:
+                z_xl = _extrapolate(coords[0][0], coords[0][1],
+                                     coords[1][0], coords[1][1], xl)
+            else:
+                z_xl = coords[0][1]
+            result = [(xl, _clamp(z_xl))] + result
 
         # Extend right
         if coords[-1][0] < xr:
-            d0, z0 = coords[-2][0], coords[-2][1]
-            d1, z1 = coords[-1][0], coords[-1][1]
-            dd = d1 - d0
-            z_xr = z0 + (z1 - z0) * (xr - d0) / dd if abs(dd) > 1e-9 else z1
-            result = result + [(xr, max(yt, min(yb, z_xr)))]
+            if len(coords) >= 2:
+                z_xr = _extrapolate(coords[-2][0], coords[-2][1],
+                                     coords[-1][0], coords[-1][1], xr)
+            else:
+                z_xr = coords[-1][1]
+            result = result + [(xr, _clamp(z_xr))]
 
         return result
 
