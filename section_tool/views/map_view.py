@@ -948,7 +948,7 @@ class MapView(QWidget):
             thru_well.triggered.connect(
                 lambda _, w=nearest_well: self._create_section_at(w.x, w.y, "ew"))
 
-        menu.exec(QCursor.pos())
+        menu.popup(QCursor.pos())
 
     def _create_section_at(self, cx: float, cy: float, orientation: str) -> None:
         """Create a 10km section centered at (cx, cy) in the given orientation."""

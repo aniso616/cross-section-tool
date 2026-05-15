@@ -1467,6 +1467,8 @@ class MainWindow(QMainWindow):
         """Add a simple 10-km east–west section centred on current map view."""
         cx, cy = self._get_smart_center()
         existing = self._state.project.sections
+        if existing:
+            cy = existing[-1].nodes[0, 1] + 1_000.0  # 1 km north of last section
         sec = Section(
             [(cx - 5_000.0, cy), (cx + 5_000.0, cy)],
             name=f"Section {len(existing) + 1}",

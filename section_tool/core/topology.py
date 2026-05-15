@@ -220,21 +220,27 @@ class SectionTopology:
                 return z0
             return z0 + (z1 - z0) * (x_target - d0) / dd
 
-        # Extend left — skip for vertical/near-vertical lines (dx ≈ 0)
+        # Extend left
         if coords[0][0] > xl:
-            dx_left = coords[1][0] - coords[0][0] if len(coords) >= 2 else 0.0
-            if abs(dx_left) > 1e-9:
-                z_xl = _extrapolate(coords[0][0], coords[0][1],
-                                     coords[1][0], coords[1][1], xl)
-                result = [(xl, _clamp(z_xl))] + result
+            if len(coords) >= 2:
+                dx_left = coords[1][0] - coords[0][0]
+                if abs(dx_left) > 1e-9:  # skip vertical segments
+                    z_xl = _extrapolate(coords[0][0], coords[0][1],
+                                         coords[1][0], coords[1][1], xl)
+                    result = [(xl, _clamp(z_xl))] + result
+            else:
+                result = [(xl, _clamp(coords[0][1]))] + result
 
-        # Extend right — skip for vertical/near-vertical lines (dx ≈ 0)
+        # Extend right
         if coords[-1][0] < xr:
-            dx_right = coords[-1][0] - coords[-2][0] if len(coords) >= 2 else 0.0
-            if abs(dx_right) > 1e-9:
-                z_xr = _extrapolate(coords[-2][0], coords[-2][1],
-                                     coords[-1][0], coords[-1][1], xr)
-                result = result + [(xr, _clamp(z_xr))]
+            if len(coords) >= 2:
+                dx_right = coords[-1][0] - coords[-2][0]
+                if abs(dx_right) > 1e-9:  # skip vertical segments
+                    z_xr = _extrapolate(coords[-2][0], coords[-2][1],
+                                         coords[-1][0], coords[-1][1], xr)
+                    result = result + [(xr, _clamp(z_xr))]
+            else:
+                result = result + [(xr, _clamp(coords[0][1]))]
 
         return result
 

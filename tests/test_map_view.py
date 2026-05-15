@@ -6,6 +6,7 @@ import copy
 
 import numpy as np
 import pytest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from section_tool.app_state import AppState
@@ -186,10 +187,10 @@ class TestAxesState:
         view.render()
         assert "Northing" in view.axes.get_ylabel()
 
-    def test_aspect_equal(self, view, state):
+    def test_aspect_auto(self, view, state):
         state.add_section(_sec())
         view.render()
-        assert view.axes.get_aspect() == 1.0  # 'equal' stores as 1.0
+        assert view.axes.get_aspect() == "auto"  # equal aspect was removed to avoid flat-map display
 
     def test_section_produces_lines(self, view, state):
         state.add_section(_sec())
@@ -238,6 +239,7 @@ class TestAxesState:
 class TestAutoRender:
     def test_section_added_triggers_render(self, view, state):
         state.add_section(_sec(name="Auto"))
+        QTest.qWait(100)
         assert len(view.axes.lines) > 0
 
     def test_section_removed_triggers_render(self, view, state):
@@ -254,6 +256,7 @@ class TestAutoRender:
         state.add_section(sec1)
         state.add_section(sec2)
         state.set_active_section(sec1)
+        QTest.qWait(100)
         # Check active color applied to sec1
         from section_tool.views.map_view import _ACTIVE_COLOR, _INACTIVE_COLOR
         active_colors = [l.get_color() for l in view.axes.lines
@@ -265,17 +268,21 @@ class TestAutoRender:
 
     def test_well_added_triggers_render(self, view, state):
         state.add_well(_well())
+        QTest.qWait(100)
         assert len(view.axes.collections) > 0
 
     def test_well_removed_triggers_render(self, view, state):
         w = _well()
         state.add_well(w)
+        QTest.qWait(100)
         n_before = len(view.axes.collections)
         state.remove_well(w)
+        QTest.qWait(100)
         assert len(view.axes.collections) < n_before
 
     def test_surface_added_triggers_render(self, view, state):
         state.add_surface(_surf())
+        QTest.qWait(100)
         assert len(view.axes.patches) > 0
 
     def test_surface_removed_triggers_render(self, view, state):
