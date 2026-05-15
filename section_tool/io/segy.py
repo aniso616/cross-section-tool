@@ -10,14 +10,38 @@ import segyio
 from segyio import TraceField
 
 
+def detect_domain(sample_interval_us: float) -> tuple[Literal["twt", "depth"], Literal["ms", "m", "ft"]]:
+    """Infer seismic domain from the binary-header sample interval.
+
+    SEG-Y stores the sample interval in *microseconds*.
+
+    * 1 000 – 8 000 µs (1 – 8 ms): typical TWT recording, returns ``("twt", "ms")``.
+    * Values outside that range (or 0): assumed depth-migrated, returns
+      ``("depth", "m")``.
+
+    Parameters
+    ----------
+    sample_interval_us:
+        Binary-header sample interval in **microseconds**.
+
+    Returns
+    -------
+    (domain, depth_units)
+    """
+    if 1_000 <= sample_interval_us <= 8_000:
+        return "twt", "ms"
+    return "depth", "m"
+
+
 @dataclass
 class SeismicDataset:
     """In-memory 2D seismic dataset read from a SEG-Y file.
 
-    data:            float32, shape (n_traces, n_samples)
-    trace_x / y:     float64, CRS easting/northing for each trace
-    samples:         float64, sample-axis positions (ms for TWT, m for depth)
-    sample_interval: float, dt in the same units as *samples*
+    data:               float32, shape (n_traces, n_samples)
+    trace_x / y:        float64, CRS easting/northing for each trace
+    samples:            float64, sample-axis positions (ms for TWT, m for depth)
+    sample_interval:    float, dt in the same units as *samples*
+    sample_interval_ms: float, dt **always** in milliseconds regardless of domain
     """
 
     name: str
@@ -29,6 +53,15 @@ class SeismicDataset:
     domain: Literal["twt", "depth"]
     depth_units: Literal["ms", "m", "ft"]
     crs_epsg: int
+    # Sample interval stored in ms for consistent comparison across domains
+    sample_interval_ms: float = 0.0
+
+    @property
+    def time_range(self) -> tuple[float, float]:
+        """(t_min, t_max) of the sample axis in its native units (ms for TWT)."""
+        if len(self.samples) == 0:
+            return (0.0, 0.0)
+        return (float(self.samples[0]), float(self.samples[-1]))
 
     @property
     def n_traces(self) -> int:
@@ -83,8 +116,8 @@ def read_segy(
     y_field: int = TraceField.CDP_Y,
     scalar_field: int = TraceField.SourceGroupScalar,
     apply_scalar: bool = True,
-    domain: Literal["twt", "depth"] = "twt",
-    depth_units: Literal["ms", "m", "ft"] = "ms",
+    domain: Literal["twt", "depth"] | None = None,
+    depth_units: Literal["ms", "m", "ft"] | None = None,
     crs_epsg: int = 32632,
     progress_callback=None,
 ) -> SeismicDataset:
@@ -115,7 +148,15 @@ def read_segy(
     with segyio.open(path, ignore_geometry=True) as f:
         n_traces = f.tracecount
         samples = np.asarray(f.samples, dtype=float)
-        dt_ms = float(segyio.tools.dt(f)) / 1000.0  # us -> ms
+        dt_us = float(segyio.tools.dt(f))            # microseconds
+        dt_ms = dt_us / 1000.0                       # milliseconds
+
+        # Auto-detect domain from sample interval if caller did not override
+        detected_domain, detected_units = detect_domain(dt_us)
+        if domain is None:
+            domain = detected_domain
+        if depth_units is None:
+            depth_units = detected_units
 
         x_raw = f.attributes(x_field)[:].astype(float)
         y_raw = f.attributes(y_field)[:].astype(float)
@@ -151,6 +192,7 @@ def read_segy(
         domain=domain,
         depth_units=depth_units,
         crs_epsg=crs_epsg,
+        sample_interval_ms=dt_ms,
     )
 
 

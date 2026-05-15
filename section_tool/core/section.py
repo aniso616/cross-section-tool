@@ -33,6 +33,71 @@ class Section:
         # Phase 5: per-section seismic display settings
         from section_tool.core.seismic_settings import SeismicDisplaySettings
         self.seismic_display: SeismicDisplaySettings = SeismicDisplaySettings()
+        # User-overridable display domain (None → follows depth_domain)
+        self._display_domain: Literal["depth", "twt"] | None = None
+
+    # ------------------------------------------------------------------
+    # Display domain and axis properties
+    # ------------------------------------------------------------------
+
+    @property
+    def display_domain(self) -> Literal["depth", "twt"]:
+        """The domain shown on the Y axis: 'twt' or 'depth'.
+
+        If the user has not overridden this, it follows :attr:`depth_domain`.
+        """
+        return self._display_domain if self._display_domain is not None else self.depth_domain
+
+    @display_domain.setter
+    def display_domain(self, value: Literal["depth", "twt"]) -> None:
+        if value not in ("depth", "twt"):
+            raise ValueError(f"display_domain must be 'depth' or 'twt', got {value!r}")
+        self._display_domain = value
+
+    @property
+    def y_label(self) -> str:
+        """Axis label string appropriate for :attr:`display_domain`."""
+        if self.display_domain == "twt":
+            return "TWT (ms)"
+        units = self.depth_units or "m"
+        return f"Depth ({units})"
+
+    @property
+    def y_range(self) -> tuple[float, float]:
+        """Default Y-axis range (top, bottom) appropriate for the display domain.
+
+        Returns (0, 3000) ms for TWT and (0, 5000) m for depth by default.
+        These are intentionally conservative starting values; the section view
+        overrides them based on loaded data.
+        """
+        if self.display_domain == "twt":
+            return (0.0, 3000.0)   # ms
+        return (0.0, 5000.0)       # m (or ft)
+
+    # ------------------------------------------------------------------
+    # Velocity conversion stubs
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def depth_to_twt(depth_m: float, x: float = 0.0, y: float = 0.0) -> float:
+        """Convert depth (m) to two-way travel time (ms).
+
+        **Stub implementation** — uses a constant velocity of 2 000 m/s
+        (v_interval = 2 000 m/s → TWT = 2 * depth / v_interval * 1 000 ms/s).
+        The full implementation will call the project VelocityModel.
+        """
+        _V0 = 2_000.0   # m/s — placeholder
+        return depth_m * 2.0 / _V0 * 1_000.0
+
+    @staticmethod
+    def twt_to_depth(twt_ms: float, x: float = 0.0, y: float = 0.0) -> float:
+        """Convert two-way travel time (ms) to depth (m).
+
+        **Stub implementation** — uses a constant velocity of 2 000 m/s.
+        The full implementation will call the project VelocityModel.
+        """
+        _V0 = 2_000.0   # m/s — placeholder
+        return twt_ms / 1_000.0 * _V0 / 2.0
 
     # ------------------------------------------------------------------
     # Properties

@@ -1,0 +1,288 @@
+"""Tests for seismic domain handling: TWT detection, display domain, velocity stubs."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from section_tool.io.segy import SeismicDataset, detect_domain
+from section_tool.core.section import Section
+from section_tool.io.database import ProjectDatabase
+
+
+# ---------------------------------------------------------------------------
+# 1. Domain detection from sample interval
+# ---------------------------------------------------------------------------
+
+class TestDetectDomain:
+    def test_2ms_is_twt(self):
+        domain, units = detect_domain(2_000)  # 2 000 µs = 2 ms
+        assert domain == "twt"
+        assert units == "ms"
+
+    def test_4ms_is_twt(self):
+        domain, units = detect_domain(4_000)
+        assert domain == "twt"
+        assert units == "ms"
+
+    def test_1ms_boundary_is_twt(self):
+        domain, units = detect_domain(1_000)
+        assert domain == "twt"
+        assert units == "ms"
+
+    def test_8ms_boundary_is_twt(self):
+        domain, units = detect_domain(8_000)
+        assert domain == "twt"
+        assert units == "ms"
+
+    def test_500us_is_depth(self):
+        """Very short interval → depth-migrated data."""
+        domain, units = detect_domain(500)
+        assert domain == "depth"
+        assert units == "m"
+
+    def test_10ms_is_depth(self):
+        """Above 8 ms → unusual, treated as depth."""
+        domain, units = detect_domain(10_000)
+        assert domain == "depth"
+        assert units == "m"
+
+    def test_zero_interval_is_depth(self):
+        domain, units = detect_domain(0)
+        assert domain == "depth"
+        assert units == "m"
+
+    def test_f3_typical_4ms_interval(self):
+        """F3 Demo uses 4 ms sample interval."""
+        domain, units = detect_domain(4_000)
+        assert domain == "twt"
+        assert units == "ms"
+
+
+# ---------------------------------------------------------------------------
+# 2. SeismicDataset: time_range and sample_interval_ms
+# ---------------------------------------------------------------------------
+
+def _make_dataset(domain="twt", dt_ms=2.0, n_samples=500) -> SeismicDataset:
+    samples = np.arange(n_samples, dtype=float) * dt_ms
+    return SeismicDataset(
+        name="test",
+        data=np.zeros((10, n_samples), dtype=np.float32),
+        trace_x=np.zeros(10),
+        trace_y=np.zeros(10),
+        samples=samples,
+        sample_interval=dt_ms,
+        domain=domain,
+        depth_units="ms",
+        crs_epsg=32631,
+        sample_interval_ms=dt_ms,
+    )
+
+
+class TestSeismicDataset:
+    def test_time_range_twt(self):
+        ds = _make_dataset(domain="twt", dt_ms=4.0, n_samples=462)
+        t_min, t_max = ds.time_range
+        assert t_min == pytest.approx(0.0)
+        assert t_max == pytest.approx(461 * 4.0)
+
+    def test_time_range_empty(self):
+        ds = SeismicDataset(
+            name="empty", data=np.empty((0, 0), dtype=np.float32),
+            trace_x=np.array([]), trace_y=np.array([]),
+            samples=np.array([]), sample_interval=2.0,
+            domain="twt", depth_units="ms", crs_epsg=32631,
+        )
+        assert ds.time_range == (0.0, 0.0)
+
+    def test_sample_interval_ms_stored(self):
+        ds = _make_dataset(dt_ms=2.0)
+        assert ds.sample_interval_ms == pytest.approx(2.0)
+
+    def test_domain_field(self):
+        ds = _make_dataset(domain="twt")
+        assert ds.domain == "twt"
+
+    def test_depth_domain_field(self):
+        ds = _make_dataset(domain="depth")
+        assert ds.domain == "depth"
+
+
+# ---------------------------------------------------------------------------
+# 3. Section: display_domain, y_label, y_range
+# ---------------------------------------------------------------------------
+
+def _make_section(**kwargs) -> Section:
+    return Section([(0, 0), (10000, 0)], name="S1", **kwargs)
+
+
+class TestSectionDisplayDomain:
+    def test_default_display_domain_follows_depth_domain(self):
+        s = _make_section(depth_domain="depth")
+        assert s.display_domain == "depth"
+
+    def test_default_display_domain_twt(self):
+        s = _make_section(depth_domain="twt")
+        assert s.display_domain == "twt"
+
+    def test_override_display_domain(self):
+        s = _make_section(depth_domain="depth")
+        s.display_domain = "twt"
+        assert s.display_domain == "twt"
+        # depth_domain unchanged
+        assert s.depth_domain == "depth"
+
+    def test_invalid_display_domain_raises(self):
+        s = _make_section()
+        with pytest.raises(ValueError):
+            s.display_domain = "seconds"
+
+    def test_y_label_depth_m(self):
+        s = _make_section(depth_domain="depth", depth_units="m")
+        assert s.y_label == "Depth (m)"
+
+    def test_y_label_depth_ft(self):
+        s = _make_section(depth_domain="depth", depth_units="ft")
+        assert s.y_label == "Depth (ft)"
+
+    def test_y_label_twt(self):
+        s = _make_section(depth_domain="twt")
+        assert s.y_label == "TWT (ms)"
+
+    def test_y_label_override_depth_to_twt(self):
+        s = _make_section(depth_domain="depth")
+        s.display_domain = "twt"
+        assert s.y_label == "TWT (ms)"
+
+    def test_y_range_depth_default(self):
+        s = _make_section(depth_domain="depth")
+        top, bot = s.y_range
+        assert top == pytest.approx(0.0)
+        assert bot > 0
+
+    def test_y_range_twt_default(self):
+        s = _make_section(depth_domain="twt")
+        top, bot = s.y_range
+        assert top == pytest.approx(0.0)
+        assert bot > 0
+
+    def test_y_range_twt_in_ms(self):
+        """TWT range should be in milliseconds, not seconds."""
+        s = _make_section(depth_domain="twt")
+        _, bot = s.y_range
+        assert bot >= 100  # at least 100 ms (not 0.1 s)
+
+
+# ---------------------------------------------------------------------------
+# 4. Velocity conversion stubs (round-trip)
+# ---------------------------------------------------------------------------
+
+class TestVelocityStubs:
+    _V0 = 2_000.0  # m/s constant assumed by the stubs
+
+    def test_depth_to_twt_zero(self):
+        assert Section.depth_to_twt(0.0) == pytest.approx(0.0)
+
+    def test_depth_to_twt_1000m(self):
+        # TWT = 2 * 1000 / 2000 * 1000 ms = 1000 ms
+        assert Section.depth_to_twt(1000.0) == pytest.approx(1000.0)
+
+    def test_depth_to_twt_2500m(self):
+        assert Section.depth_to_twt(2500.0) == pytest.approx(2500.0)
+
+    def test_twt_to_depth_zero(self):
+        assert Section.twt_to_depth(0.0) == pytest.approx(0.0)
+
+    def test_twt_to_depth_1000ms(self):
+        # depth = 1000 / 1000 * 2000 / 2 = 1000 m
+        assert Section.twt_to_depth(1000.0) == pytest.approx(1000.0)
+
+    def test_twt_to_depth_2500ms(self):
+        assert Section.twt_to_depth(2500.0) == pytest.approx(2500.0)
+
+    @pytest.mark.parametrize("depth_m", [0.0, 100.0, 500.0, 1000.0, 3150.0, 5000.0])
+    def test_round_trip_depth_twt_depth(self, depth_m):
+        twt = Section.depth_to_twt(depth_m)
+        recovered = Section.twt_to_depth(twt)
+        assert recovered == pytest.approx(depth_m, abs=1e-9)
+
+    @pytest.mark.parametrize("twt_ms", [0.0, 500.0, 1000.0, 2000.0, 3000.0])
+    def test_round_trip_twt_depth_twt(self, twt_ms):
+        depth = Section.twt_to_depth(twt_ms)
+        recovered = Section.depth_to_twt(depth)
+        assert recovered == pytest.approx(twt_ms, abs=1e-9)
+
+    def test_stubs_accept_xy_args(self):
+        """Stub must accept x, y positional args without error."""
+        t = Section.depth_to_twt(1000.0, 606554.0, 6080126.0)
+        assert t > 0
+        d = Section.twt_to_depth(1000.0, 606554.0, 6080126.0)
+        assert d > 0
+
+    def test_linearity(self):
+        """Conversion should be linear for a constant-velocity model."""
+        d1 = Section.depth_to_twt(1000.0)
+        d2 = Section.depth_to_twt(2000.0)
+        assert d2 == pytest.approx(d1 * 2.0)
+
+
+# ---------------------------------------------------------------------------
+# 5. Database: display_domain stored and retrieved
+# ---------------------------------------------------------------------------
+
+class TestDatabaseDisplayDomain:
+    def test_display_domain_column_exists(self, tmp_path):
+        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
+        cols = {r[1] for r in db.conn.execute(
+            "PRAGMA table_info(sections)"
+        ).fetchall()}
+        assert "display_domain" in cols
+        db.close()
+
+    def test_display_domain_default_depth(self, tmp_path):
+        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
+        sec = _make_section(depth_domain="depth")
+        db.upsert_section(sec)
+        row = db.get_all_sections()[0]
+        assert row["display_domain"] == "depth"
+        db.close()
+
+    def test_display_domain_twt_stored(self, tmp_path):
+        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
+        sec = _make_section(depth_domain="twt")
+        db.upsert_section(sec)
+        row = db.get_all_sections()[0]
+        assert row["display_domain"] == "twt"
+        db.close()
+
+    def test_display_domain_override_stored(self, tmp_path):
+        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
+        sec = _make_section(depth_domain="depth")
+        sec.display_domain = "twt"   # user override
+        db.upsert_section(sec)
+        row = db.get_all_sections()[0]
+        assert row["depth_domain"] == "depth"     # original
+        assert row["display_domain"] == "twt"     # override
+        db.close()
+
+    def test_display_domain_update(self, tmp_path):
+        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
+        sec = _make_section(depth_domain="depth")
+        db.upsert_section(sec)
+        sec.display_domain = "twt"
+        db.upsert_section(sec)   # update
+        row = db.get_all_sections()[0]
+        assert row["display_domain"] == "twt"
+        db.close()
+
+    def test_round_trip_display_domain(self, tmp_path):
+        path = str(tmp_path / "rt.sqlite")
+        db1 = ProjectDatabase(path)
+        sec = _make_section(depth_domain="depth")
+        sec.display_domain = "twt"
+        db1.upsert_section(sec)
+        db1.close()
+
+        db2 = ProjectDatabase(path)
+        row = db2.get_all_sections()[0]
+        assert row["display_domain"] == "twt"
+        db2.close()

@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS sections (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
     name                  TEXT    UNIQUE NOT NULL,
     nodes_json            TEXT    NOT NULL,
-    depth_domain          TEXT    DEFAULT 'md',
+    depth_domain          TEXT    DEFAULT 'depth',
+    display_domain        TEXT    DEFAULT 'depth',  -- user-visible axis domain (twt or depth)
     depth_units           TEXT    DEFAULT 'm',
     vertical_exaggeration REAL    DEFAULT 1.0,
     crs_epsg              INTEGER DEFAULT 32632,
@@ -413,12 +414,14 @@ class ProjectDatabase:
         row = self.conn.execute(
             "SELECT id FROM sections WHERE name=?", (section.name,)
         ).fetchone()
+        dd = getattr(section, "depth_domain", "depth")
+        disp_dd = getattr(section, "display_domain", dd)
         if row:
             self.conn.execute(
-                """UPDATE sections SET nodes_json=?, depth_domain=?, depth_units=?,
-                   vertical_exaggeration=?, crs_epsg=?, modified_date=?
+                """UPDATE sections SET nodes_json=?, depth_domain=?, display_domain=?,
+                   depth_units=?, vertical_exaggeration=?, crs_epsg=?, modified_date=?
                    WHERE name=?""",
-                (nodes_json, getattr(section, "depth_domain", "md"),
+                (nodes_json, dd, disp_dd,
                  getattr(section, "depth_units", "m"),
                  getattr(section, "vertical_exaggeration", 1.0),
                  getattr(section, "crs_epsg", 32632),
@@ -427,11 +430,10 @@ class ProjectDatabase:
             sid = row["id"]
         else:
             cur = self.conn.execute(
-                """INSERT INTO sections(name, nodes_json, depth_domain, depth_units,
-                   vertical_exaggeration, crs_epsg, created_date, modified_date)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                (section.name, nodes_json,
-                 getattr(section, "depth_domain", "md"),
+                """INSERT INTO sections(name, nodes_json, depth_domain, display_domain,
+                   depth_units, vertical_exaggeration, crs_epsg, created_date, modified_date)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (section.name, nodes_json, dd, disp_dd,
                  getattr(section, "depth_units", "m"),
                  getattr(section, "vertical_exaggeration", 1.0),
                  getattr(section, "crs_epsg", 32632),
