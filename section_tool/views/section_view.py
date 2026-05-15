@@ -306,6 +306,43 @@ class SectionView(QWidget):
         )
         hl.addWidget(self._ve_lock_btn)
 
+        # ---- Seismic stretch domain + velocity (FIX 5) ----
+        _sep = QLabel("  |")
+        _sep.setStyleSheet("color: #cccccc; font-size: 9pt;")
+        hl.addWidget(_sep)
+        _dom_lbl = QLabel("Seismic:")
+        _dom_lbl.setStyleSheet("color: #555555; font-size: 8pt;")
+        hl.addWidget(_dom_lbl)
+        self._seismic_domain_combo = QComboBox()
+        self._seismic_domain_combo.addItem("Depth – linear stretch", "linear")
+        self._seismic_domain_combo.addItem("TWT (native ms)", "native_twt")
+        self._seismic_domain_combo.setFixedWidth(150)
+        self._seismic_domain_combo.setToolTip(
+            "Seismic Y-axis domain:\n"
+            "Depth – linear stretch: convert TWT to depth using constant velocity\n"
+            "TWT (native): display sample axis in milliseconds as recorded"
+        )
+        self._seismic_domain_combo.setStyleSheet("color: #333333; background: #ffffff;")
+        self._seismic_domain_combo.currentIndexChanged.connect(
+            self._on_seismic_domain_changed)
+        hl.addWidget(self._seismic_domain_combo)
+
+        self._seismic_vel_spin = QDoubleSpinBox()
+        self._seismic_vel_spin.setRange(500.0, 6000.0)
+        self._seismic_vel_spin.setSingleStep(100.0)
+        self._seismic_vel_spin.setValue(2000.0)
+        self._seismic_vel_spin.setDecimals(0)
+        self._seismic_vel_spin.setFixedWidth(80)
+        self._seismic_vel_spin.setSuffix(" m/s")
+        self._seismic_vel_spin.setToolTip(
+            "Constant interval velocity used to convert TWT (ms) to depth (m).\n"
+            "depth = twt_ms × V / 2000"
+        )
+        self._seismic_vel_spin.setStyleSheet(
+            "color: #333333; background: #ffffff; border: 1px solid #999999;")
+        self._seismic_vel_spin.valueChanged.connect(self._on_seismic_velocity_changed)
+        hl.addWidget(self._seismic_vel_spin)
+
         # Pick mode banner — hidden until picking is active
         self._pick_banner = QWidget()
         self._pick_banner.setFixedHeight(26)
@@ -596,11 +633,13 @@ class SectionView(QWidget):
         return (
             section.name,
             tuple(ref.path for ref in self._state.project.seismic_refs),
-            sds.clip_percentile if sds else 99.0,
-            sds.gain            if sds else 1.0,
-            sds.opacity         if sds else 1.0,
-            sds.colormap        if sds else "seismic_red_blue",
-            sds.show_wiggle     if sds else False,
+            sds.clip_percentile   if sds else 99.0,
+            sds.gain              if sds else 1.0,
+            sds.opacity           if sds else 1.0,
+            sds.colormap          if sds else "seismic_red_blue",
+            sds.show_wiggle       if sds else False,
+            sds.stretch_mode      if sds else "linear",
+            sds.constant_velocity if sds else 2000.0,
             self._display_mode,
         )
 
@@ -733,6 +772,18 @@ class SectionView(QWidget):
             self._ve_spin.setValue(section.vertical_exaggeration)
             self._ve_spin.blockSignals(False)
 
+        # Sync seismic domain / velocity controls from section settings
+        sds = getattr(section, "seismic_display", None)
+        dom_idx = 0 if (sds is None or sds.stretch_mode == "linear") else 1
+        vel_val = sds.constant_velocity if sds else 2000.0
+        self._seismic_domain_combo.blockSignals(True)
+        self._seismic_domain_combo.setCurrentIndex(dom_idx)
+        self._seismic_domain_combo.blockSignals(False)
+        self._seismic_vel_spin.blockSignals(True)
+        self._seismic_vel_spin.setValue(vel_val)
+        self._seismic_vel_spin.blockSignals(False)
+        self._seismic_vel_spin.setVisible(dom_idx == 0)
+
         # ── Layer 1: background (seismic + image overlays) ────────────
         if seismic_valid:
             # Fast path: keep existing imshow artists, clear overlay only
@@ -785,6 +836,7 @@ class SectionView(QWidget):
         self._render_snap_indicator()         # zorder=13
         self._render_polygon_in_progress()    # zorder=14
         self._render_annotations(section)     # zorder=15
+        self._render_seismic_watermark(section)  # corner label when stretch active
 
         # Phase 4: stratigraphic column (shared Y)
         if self._strat_col_visible:
@@ -811,6 +863,8 @@ class SectionView(QWidget):
         max_d = self._compute_max_depth(section)
         y_range = max_d / max(ve, 0.01)
         self._ax.set_ylim(y_range, 0.0)   # inverted: 0 at top
+        # Prevent imshow / other artists from autoscaling Y away from this range
+        self._ax.set_autoscaley_on(False)
 
         # Labels
         units = section.depth_units
@@ -871,7 +925,16 @@ class SectionView(QWidget):
         for ref in self._state.project.seismic_refs:
             ds = self._seismic_cache.get(ref.path)
             if ds is not None:
-                candidates.append(float(ds.samples[-1]))
+                last = float(ds.samples[-1])
+                if ds.domain == "twt":
+                    # Apply the current velocity stretch so the seismic extent
+                    # is expressed in metres, not milliseconds.
+                    sds = getattr(section, "seismic_display", None)
+                    mode = sds.stretch_mode      if sds else "linear"
+                    v    = sds.constant_velocity if sds else 2000.0
+                    if mode == "linear":
+                        last = last * v / 2000.0
+                candidates.append(last)
         return max(candidates)
 
     # ------------------------------------------------------------------
@@ -944,6 +1007,27 @@ class SectionView(QWidget):
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.ticklabel_format(style="plain", axis="both")
+
+    def _render_seismic_watermark(self, section: Section) -> None:
+        """Show a subtle corner label when linear TWT→depth stretch is active."""
+        sds = getattr(section, "seismic_display", None)
+        if sds is None or sds.stretch_mode != "linear":
+            return
+        # Only show if there is at least one TWT seismic ref loaded
+        has_twt = any(
+            (ds := self._seismic_cache.get(ref.path)) is not None
+            and getattr(ds, "domain", "") == "twt"
+            for ref in self._state.project.seismic_refs
+        )
+        if not has_twt:
+            return
+        self._ax.text(
+            0.99, 0.01,
+            f"Linear stretch  V = {sds.constant_velocity:.0f} m/s",
+            fontsize=7, color="#999999", style="italic",
+            ha="right", va="bottom", zorder=20,
+            transform=self._ax.transAxes,
+        )
 
     def _render_annotations(self, section: Section) -> None:
         """Phase 6: draw text annotations (and optional leader lines)."""
@@ -1301,13 +1385,25 @@ class SectionView(QWidget):
                 vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
                 self._seismic_vmax_cache[vmax_key] = vmax
 
+            # Compute Y extent — apply TWT→depth stretch if requested
+            stretch = sds.stretch_mode      if sds else "linear"
+            v_ms    = sds.constant_velocity if sds else 2000.0
+            if stretch == "linear" and ds.domain == "twt":
+                # depth(m) = twt(ms) * V(m/s) / 2000
+                scale = v_ms / 2000.0
+                y_top = float(ds.samples[0])  * scale
+                y_bot = float(ds.samples[-1]) * scale
+            else:
+                y_top = float(ds.samples[0])
+                y_bot = float(ds.samples[-1])
+
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
                 artist = self._ax.imshow(
                     data.T,
                     aspect="auto",
-                    extent=[distances[0], distances[-1], ds.samples[-1], ds.samples[0]],
+                    extent=[distances[0], distances[-1], y_bot, y_top],
                     origin="upper",
                     cmap=cmap_name,
                     vmin=-vmax, vmax=vmax,
@@ -2001,6 +2097,32 @@ class SectionView(QWidget):
             sec_copy = copy.deepcopy(section)
             sec_copy.vertical_exaggeration = value
             self._state.update_section(idx, sec_copy)
+
+    def _on_seismic_domain_changed(self, _index: int = 0) -> None:
+        """User changed the seismic display domain (linear stretch / native TWT)."""
+        from section_tool.core.seismic_settings import SeismicDisplaySettings
+        mode = self._seismic_domain_combo.currentData()
+        self._seismic_vel_spin.setVisible(mode == "linear")
+        section = self._state.active_section
+        if section is not None:
+            sds = getattr(section, "seismic_display", None) or SeismicDisplaySettings()
+            sds.stretch_mode = mode
+            section.seismic_display = sds
+        self._ax_limits_set = False    # force _setup_axes to recalculate depth range
+        self._invalidate_seismic_cache()
+        self.request_render()
+
+    def _on_seismic_velocity_changed(self, value: float) -> None:
+        """User changed the constant velocity for linear TWT→depth stretch."""
+        from section_tool.core.seismic_settings import SeismicDisplaySettings
+        section = self._state.active_section
+        if section is not None:
+            sds = getattr(section, "seismic_display", None) or SeismicDisplaySettings()
+            sds.constant_velocity = value
+            section.seismic_display = sds
+        self._ax_limits_set = False
+        self._invalidate_seismic_cache()
+        self.request_render()
 
     # ------------------------------------------------------------------
     # Event handlers
