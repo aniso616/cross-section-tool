@@ -4,6 +4,7 @@ import sys
 
 import numpy as np
 import pytest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from section_tool.app_state import AppState
@@ -243,8 +244,10 @@ class TestAutoRender:
         state.add_section(sec1)
         state.add_section(sec2)
         state.set_active_section(sec1)
+        QTest.qWait(100)  # flush 50ms debounce timer
         assert "First" in view._section_name_label.text()
         state.set_active_section(sec2)
+        QTest.qWait(100)
         assert "Second" in view._section_name_label.text()
 
     def test_project_changed_triggers_render(self, view, state):
@@ -258,8 +261,10 @@ class TestAutoRender:
         sec = _east_section()
         state.add_section(sec)
         state.set_active_section(sec)
+        QTest.qWait(100)
         n_before = len(view.axes.lines)
         state.add_horizon_pick(_horizon_pick())
+        QTest.qWait(100)
         assert len(view.axes.lines) > n_before
 
     def test_horizon_pick_removed_triggers_render(self, view, state):
@@ -268,24 +273,30 @@ class TestAutoRender:
         state.set_active_section(sec)
         pick = _horizon_pick()
         state.add_horizon_pick(pick)
+        QTest.qWait(100)
         n_with = len(view.axes.lines)
         state.remove_horizon_pick(pick)
+        QTest.qWait(100)
         assert len(view.axes.lines) < n_with
 
     def test_well_added_triggers_render(self, view, state):
         sec = _east_section()
         state.add_section(sec)
         state.set_active_section(sec)
+        QTest.qWait(100)
         n_before = len(view.axes.lines)
         state.add_well(_well())
+        QTest.qWait(100)
         assert len(view.axes.lines) > n_before
 
     def test_surface_added_triggers_render(self, view, state):
         sec = _east_section()
         state.add_section(sec)
         state.set_active_section(sec)
+        QTest.qWait(100)
         n_before = len(view.axes.lines)
         state.add_surface(_surface())
+        QTest.qWait(100)
         assert len(view.axes.lines) > n_before
 
     def test_seismic_ref_removed_clears_cache(self, view, state):
