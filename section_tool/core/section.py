@@ -2,9 +2,32 @@ from __future__ import annotations
 
 import copy
 import math
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Elevation / depth helpers (module-level)
+# ---------------------------------------------------------------------------
+
+def depth_to_elevation(depth: float) -> float:
+    """Convert depth-positive-down to elevation-positive-up.
+
+    depth_to_elevation(1000) → -1000  (1000 m below surface)
+    depth_to_elevation(0)    →  0     (at sea level)
+    """
+    return -depth
+
+
+def elevation_to_depth(elevation: float) -> float:
+    """Convert elevation-positive-up to depth-positive-down.
+
+    elevation_to_depth(-1000) → 1000
+    elevation_to_depth(50)    → -50  (50 m above datum)
+    """
+    return -elevation
 
 
 class Section:
@@ -198,6 +221,76 @@ class Section:
 
         return best_s, best_perp
 
+    def project_point(self, x: float, y: float) -> tuple[float, float]:
+        """Project map point (x, y) onto the section, returning an *unclamped* result.
+
+        Unlike :meth:`map_to_section`, ``distance_along`` is not clamped to
+        ``[0, total_length]``:
+
+        * A point before the section start yields ``distance_along < 0``.
+        * A point past the section end yields ``distance_along > total_length``.
+        * Interior points are projected onto the nearest segment (clamped per
+          segment for segment selection, then unclamped for the chosen segment's
+          first and last positions).
+
+        Parameters
+        ----------
+        x, y : float
+            Map-space coordinates (same CRS as the section nodes).  Works
+            correctly with large projected coordinates (e.g. UTM 6 000 000+).
+
+        Returns
+        -------
+        (distance_along, perpendicular_offset)
+            *distance_along* — signed distance from node 0 along the polyline.
+            *perpendicular_offset* — signed perpendicular offset; positive is
+            to the left of the direction of travel (A → B convention).
+        """
+        cum = self.cumulative_distances()
+        n = self.n_segments
+
+        best_euclidean = math.inf
+        best_s = 0.0
+        best_perp = 0.0
+
+        for i in range(n):
+            ax = float(self._nodes[i, 0])
+            ay = float(self._nodes[i, 1])
+            bx = float(self._nodes[i + 1, 0])
+            by = float(self._nodes[i + 1, 1])
+            dx, dy = bx - ax, by - ay
+            seg_len = math.hypot(dx, dy)
+            if seg_len < 1e-12:
+                continue
+
+            # Work with offsets from A to avoid precision loss with large coords
+            ox, oy = x - ax, y - ay
+
+            # Unclamped parametric position along this segment
+            t = (ox * dx + oy * dy) / (seg_len * seg_len)
+
+            # Signed perpendicular distance (positive = left of A→B)
+            perp = (dx * oy - dy * ox) / seg_len
+
+            # Euclidean distance to nearest point on the FINITE segment
+            t_clamped = max(0.0, min(1.0, t))
+            dist = math.hypot(ox - t_clamped * dx, oy - t_clamped * dy)
+
+            if dist < best_euclidean:
+                best_euclidean = dist
+                best_perp = perp
+
+                if i == 0 and t < 0.0:
+                    # Before section start: extend first segment backwards
+                    best_s = t * seg_len          # negative
+                elif i == n - 1 and t > 1.0:
+                    # Past section end: extend last segment forwards
+                    best_s = cum[i] + t * seg_len  # > total_length
+                else:
+                    best_s = cum[i] + t_clamped * seg_len
+
+        return best_s, best_perp
+
     def section_to_map(self, distance_along: float) -> tuple[float, float]:
         """Convert distance_along_section → (x, y) map coordinates.
 
@@ -348,4 +441,74 @@ class Section:
             f"Section(name={self.name!r}, n_nodes={self.n_nodes}, "
             f"length={self.total_length():.1f} {self.depth_units}, "
             f"crs_epsg={self.crs_epsg})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Well-section projection
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WellSectionProjection:
+    """Result of projecting a well collar onto a section line.
+
+    Attributes
+    ----------
+    well_name : str
+    section_name : str
+    distance_along : float
+        Signed distance from section node 0 (m).  Negative if the well projects
+        before the section start; greater than the section total length if past
+        the end.
+    perpendicular_offset : float
+        Signed perpendicular distance from the section plane (m).  Positive =
+        left of the direction of travel (A → B convention), i.e. roughly north
+        for an east-ward section.
+    display_tier : str
+        One of ``"on_plane"``, ``"near"``, ``"far"``, ``"hidden"`` — based on
+        the absolute perpendicular offset.
+
+    Tier thresholds (with default *tolerance* = 2 000 m):
+        on_plane  |offset| < 100 m
+        near      |offset| < tolerance (2 000 m)
+        far       |offset| < tolerance × 2.5 (5 000 m)
+        hidden    otherwise
+    """
+
+    well_name: str
+    section_name: str
+    distance_along: float
+    perpendicular_offset: float
+    display_tier: str
+
+    @staticmethod
+    def compute(well, section: Section, tolerance: float = 2_000.0) -> "WellSectionProjection":
+        """Compute the projection of *well* onto *section*.
+
+        Parameters
+        ----------
+        well :
+            Any object with ``.name``, ``.x``, ``.y`` attributes.
+        section : Section
+            The section to project onto.
+        tolerance : float
+            Near-plane threshold in the same units as the section CRS (default
+            2 000 m).  ``far`` extends to ``tolerance × 2.5``.
+        """
+        dist, offset = section.project_point(well.x, well.y)
+        abs_off = abs(offset)
+        if abs_off < 100.0:
+            tier = "on_plane"
+        elif abs_off < tolerance:
+            tier = "near"
+        elif abs_off < tolerance * 2.5:
+            tier = "far"
+        else:
+            tier = "hidden"
+        return WellSectionProjection(
+            well_name=well.name,
+            section_name=section.name,
+            distance_along=dist,
+            perpendicular_offset=offset,
+            display_tier=tier,
         )
