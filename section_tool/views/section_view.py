@@ -119,6 +119,11 @@ class SectionView(QWidget):
         self._blit_background = None    # canvas.copy_from_bbox result
         self._blit_valid: bool = False  # True while background is current
         self._blit_artists: list = []   # dynamic overlay artists (for removal)
+        # Pending zoom limits set by scroll handler — applied at END of full render
+        # (before canvas.draw) so they survive the ax.clear() + _setup_axes() cycle.
+        self._pending_xlim: tuple | None = None
+        self._pending_ylim: tuple | None = None
+        self._user_has_zoomed: bool = False
         # vmax cache: key → float (expensive percentile computation)
         self._seismic_vmax_cache: dict[tuple, float] = {}
         # Legacy names kept for backward compat with tests/other code
@@ -759,45 +764,54 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _do_full_render(self, section) -> None:
-        """Full render: rebuild seismic + static, cache bitmap, blit dynamic."""
-        # Save/restore user zoom
-        if self._ax_limits_set:
-            saved_xl, saved_yl = self._ax.get_xlim(), self._ax.get_ylim()
-        else:
-            saved_xl = saved_yl = None
+        """Full render: ax.clear → seismic → static → apply limits → draw → blit dynamic.
 
+        Zoom limits are applied AFTER all rendering but BEFORE canvas.draw() so
+        they survive the ax.clear() / _setup_axes() cycle.  Seismic is rendered
+        unconditionally — no caching logic around the imshow call.
+        """
         # Remove old animated artists so axes are clean before clear
         for art in self._blit_artists:
             try: art.remove()
             except Exception: pass
         self._blit_artists.clear()
 
-        # Rebuild axes
+        # Clear and set up default axes (labels, tick formatters, autoscale off)
         self._ax.clear()
         self._setup_axes(section)
-        if saved_xl is not None:
-            self._ax.set_xlim(saved_xl)
-            self._ax.set_ylim(saved_yl)
-        else:
-            self._ax_limits_set = True
+
+        # ── Render seismic unconditionally — always re-create imshow ───
+        self._render_image_overlays(section)   # raster images at zorder=0
+        self._render_seismic(section)          # imshow at zorder=1
 
         # ── Static background layers ───────────────────────────────────
-        self._render_image_overlays(section)   # raster images at zorder=0
-        self._render_seismic(section)          # imshow at zorder=1  ← expensive
         self._render_grid(section)             # LineCollection at zorder=2
-        self._render_topography(section)       # fill + line at zorder=2.2-2.3
+        self._render_topography(section)       # fill + line at zorder=2.2–2.3
         self._render_sea_level(section)        # axhline at zorder=2.5
         self._render_section_ends(section)     # end-cap lines at zorder=2
         if self._strat_col_visible:
             self._render_strat_column(section)
 
-        # Rasterise everything to the canvas bitmap and capture it
+        # ── Apply zoom limits NOW — after rendering, before draw ───────
+        # This is the critical ordering: limits set here survive ax.clear()
+        # and are not overridden by imshow autoscale.
+        if self._pending_xlim is not None:
+            self._ax.set_xlim(self._pending_xlim)
+            self._ax.set_ylim(self._pending_ylim)
+            self._pending_xlim = None
+            self._pending_ylim = None
+            self._ax_limits_set = True
+        elif self._user_has_zoomed and self._ax_limits_set:
+            pass   # keep whatever limits _setup_axes + user interactions left
+        else:
+            self._ax_limits_set = True   # default limits from _setup_axes are correct
+
+        # Rasterise to canvas bitmap and capture the static background
         self._canvas.draw()
         try:
             self._blit_background = self._canvas.copy_from_bbox(self._ax.bbox)
             self._blit_valid = True
         except Exception:
-            # copy_from_bbox can fail on some backends — fall back to draw_idle
             self._blit_background = None
             self._blit_valid = False
             self._render_dynamic_overlays(section)
@@ -2489,18 +2503,29 @@ class SectionView(QWidget):
         cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
         cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
         xl, yl = self._ax.get_xlim(), self._ax.get_ylim()
-        self._ax.set_xlim([cx + (x - cx) * factor for x in xl])
-        self._ax.set_ylim([cy + (y - cy) * factor for y in yl])
-        # Instant visual feedback: show the cached bitmap at new limits (slightly
-        # off-scale but immediate), then schedule a proper full re-render.
+        new_xl = tuple(cx + (x - cx) * factor for x in xl)
+        new_yl = tuple(cy + (y - cy) * factor for y in yl)
+
+        # Store the desired limits — _do_full_render applies them after rendering
+        # so they survive the ax.clear() / _setup_axes() cycle.
+        self._pending_xlim = new_xl
+        self._pending_ylim = new_yl
+        self._user_has_zoomed = True
+
+        # Update axes immediately for any partial visual
+        self._ax.set_xlim(new_xl)
+        self._ax.set_ylim(new_yl)
+
+        # Instant feedback: restore cached bitmap (slightly off-scale but immediate)
         if self._blit_valid and self._blit_background is not None:
             try:
                 self._canvas.restore_region(self._blit_background)
                 self._canvas.blit(self._ax.bbox)
             except Exception:
-                self._canvas.draw_idle()
-        self._blit_valid = False        # zoom needs full re-render
-        self.request_render()           # proper render after debounce
+                pass
+
+        self._blit_valid = False        # full re-render needed
+        self.request_render()           # debounced — fires 50ms after last scroll
 
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
@@ -2587,6 +2612,11 @@ class SectionView(QWidget):
         """Clear projection cache and seismic image cache when section changes."""
         self._seismic_proj_cache.clear()
         self._invalidate_seismic_cache()
+        # New section gets default limits from _setup_axes
+        self._user_has_zoomed = False
+        self._pending_xlim = None
+        self._pending_ylim = None
+        self._ax_limits_set = False
 
     # ------------------------------------------------------------------
     # Context menu
