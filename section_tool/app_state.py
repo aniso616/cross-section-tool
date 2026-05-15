@@ -307,6 +307,22 @@ class AppState(QObject):
         data = db.load_all()
         meta = data["meta"]
 
+        # ── Load diagnostics (printed to console to aid debugging) ────
+        _sections = data.get("sections", [])
+        _wells    = data.get("wells", [])
+        _horizons = data.get("horizons", [])
+        _seismic  = data.get("seismic", [])
+        print(f"[LOAD] {len(_sections)} sections:")
+        for s in _sections:
+            print(f"  Section '{s['name']}': nodes_json={s['nodes_json'][:60]}...")
+        print(f"[LOAD] {len(_wells)} wells:")
+        for w in _wells:
+            print(f"  Well '{w['name']}': x={w.get('x')}, y={w.get('y')}, "
+                  f"tops={len(w.get('tops', []))}, logs={len(w.get('logs', []))}")
+        print(f"[LOAD] {len(_horizons)} horizons, "
+              f"{sum(len(h.get('picks',[])) for h in _horizons)} picks")
+        print(f"[LOAD] {len(_seismic)} seismic refs")
+
         proj = Project(
             name=meta.get("name", ""),
             crs_epsg=int(meta.get("crs_epsg", 32632)),
