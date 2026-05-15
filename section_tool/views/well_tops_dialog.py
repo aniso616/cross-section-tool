@@ -129,7 +129,7 @@ class WellTopsDialog(QDialog):
         Returns a list of ``Well`` objects.
         Raises ``ValueError`` with a message if required columns are missing.
         """
-        from cross_section_tool.core.wells import Well
+        from section_tool.core.wells import Well
 
         ci_wn  = self._col_index("well_name")
         ci_x   = self._col_index("x")

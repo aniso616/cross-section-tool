@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from cross_section_tool.core.topology import IntersectionPoint, SectionTopology
+from section_tool.core.topology import IntersectionPoint, SectionTopology
 
 
 @pytest.fixture

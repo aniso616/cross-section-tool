@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.app.MainWindow."""
+"""Tests for section_tool.app.MainWindow."""
 
 import sys
 
@@ -6,14 +6,14 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDockWidget, QSplitter, QTabWidget
 
-from cross_section_tool.app import MainWindow
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
-from cross_section_tool.views.map_view import MapView
-from cross_section_tool.views.section_view import SectionView
-from cross_section_tool.views.tool_palette import ToolPalette
-from cross_section_tool.views.viewer_3d import Viewer3D
+from section_tool.app import MainWindow
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
+from section_tool.views.map_view import MapView
+from section_tool.views.section_view import SectionView
+from section_tool.views.tool_palette import ToolPalette
+from section_tool.views.viewer_3d import Viewer3D
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ class TestTitleBar:
 
     def test_title_updates_on_open(self, win, state, tmp_path):
         path = str(tmp_path / "loaded.h5")
-        from cross_section_tool.io.project import Project
+        from section_tool.io.project import Project
         Project().save(path)
         win._open_project(path)
         assert "loaded.h5" in win.windowTitle()
@@ -146,7 +146,7 @@ class TestStatusBar:
 
     def test_status_shows_filename_after_open(self, win, tmp_path):
         path = str(tmp_path / "status_test.h5")
-        from cross_section_tool.io.project import Project
+        from section_tool.io.project import Project
         Project().save(path)
         win._open_project(path)
         assert "status_test.h5" in win._status_label.text()
@@ -161,7 +161,7 @@ class TestStatusBar:
         assert "2S" in win._status_label.text()
 
     def test_status_well_count(self, win, state):
-        from cross_section_tool.core.wells import Well
+        from section_tool.core.wells import Well
         state.add_well(Well("W1", 500, 0))
         assert "1W" in win._status_label.text()
 
@@ -228,7 +228,7 @@ class TestFileOperations:
         assert result is False
 
     def test_open_project_loads_sections(self, win, state, tmp_path):
-        from cross_section_tool.io.project import Project
+        from section_tool.io.project import Project
         p = Project()
         p.sections.append(Section([(0, 0), (1000, 0)], name="Loaded"))
         path = str(tmp_path / "load.h5")
@@ -237,7 +237,7 @@ class TestFileOperations:
         assert state.project.sections[0].name == "Loaded"
 
     def test_open_project_returns_true_on_success(self, win, tmp_path):
-        from cross_section_tool.io.project import Project
+        from section_tool.io.project import Project
         path = str(tmp_path / "valid.h5")
         Project().save(path)
         assert win._open_project(path) is True
@@ -401,7 +401,7 @@ class TestIntegration:
         # Just confirm no crash
 
     def test_open_project_renders_map_view(self, win, tmp_path):
-        from cross_section_tool.io.project import Project
+        from section_tool.io.project import Project
         p = Project()
         p.sections.append(Section([(0, 0), (1000, 0)], name="Map"))
         path = str(tmp_path / "map_test.h5")
@@ -411,7 +411,7 @@ class TestIntegration:
         assert len(win._map_view.axes.lines) >= 0  # no crash
 
     def test_multiple_sections_and_wells(self, win, state):
-        from cross_section_tool.core.wells import Well
+        from section_tool.core.wells import Well
         for i in range(3):
             win._on_new_section()
         state.add_well(Well("W1", 500, 0))

@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.views.viewer_3d."""
+"""Tests for section_tool.views.viewer_3d."""
 
 import sys
 import math
@@ -8,11 +8,11 @@ import pytest
 import pyvista as pv
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.wells import DeviationSurvey, Well
-from cross_section_tool.views.viewer_3d import (
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.wells import DeviationSurvey, Well
+from section_tool.views.viewer_3d import (
     Viewer3D,
     build_horizon_pick_3d,
     build_section_curtain,
@@ -152,7 +152,7 @@ class TestBuildSectionCurtain:
         assert mesh.n_faces == 2
 
     def test_default_max_depth(self):
-        from cross_section_tool.views.viewer_3d import _DEFAULT_DEPTH
+        from section_tool.views.viewer_3d import _DEFAULT_DEPTH
         sec = _sec()
         mesh = build_section_curtain(sec)
         pts = mesh.points
@@ -383,7 +383,7 @@ class TestViewer3DRenderNoCrash:
 
 class TestViewer3DComputeMaxDepth:
     def test_default_when_no_data(self, viewer):
-        from cross_section_tool.views.viewer_3d import _DEFAULT_DEPTH
+        from section_tool.views.viewer_3d import _DEFAULT_DEPTH
         d = viewer._compute_max_depth()
         assert pytest.approx(d) == _DEFAULT_DEPTH
 

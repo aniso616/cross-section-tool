@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.io.las."""
+"""Tests for section_tool.io.las."""
 
 import io
 import math
@@ -9,7 +9,7 @@ import lasio
 import numpy as np
 import pytest
 
-from cross_section_tool.io.las import (
+from section_tool.io.las import (
     las_to_well,
     read_las,
     read_las_header,

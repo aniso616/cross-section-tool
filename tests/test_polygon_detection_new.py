@@ -2,9 +2,9 @@
 import numpy as np
 import pytest
 
-from cross_section_tool.core.polygon_detection import detect_polygons
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
+from section_tool.core.polygon_detection import detect_polygons
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
 
 
 def test_two_horizontal_horizons():

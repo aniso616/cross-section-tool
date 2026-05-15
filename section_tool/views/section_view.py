@@ -24,11 +24,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
-from cross_section_tool.io.project import SeismicRef
-from cross_section_tool.io.segy import SeismicDataset
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
+from section_tool.io.project import SeismicRef
+from section_tool.io.segy import SeismicDataset
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +500,7 @@ class SectionView(QWidget):
     def finish_polygon(self) -> None:
         """Close and commit the in-progress polygon."""
         if len(self._polygon_vertices) >= 3:
-            from cross_section_tool.core.polygons import SectionPolygon
+            from section_tool.core.polygons import SectionPolygon
             pf = self._poly_preflight
             name = pf.get("name") or f"Polygon {len(self._state.project.polygons) + 1}"
             color = pf.get("color", "#9467bd")
@@ -1778,7 +1778,7 @@ class SectionView(QWidget):
 
     def _place_reference_line(self, x: float, y: float) -> None:
         """Phase 2: place a reference line at the clicked position."""
-        from cross_section_tool.core.reference_line import ReferenceLine
+        from section_tool.core.reference_line import ReferenceLine
         tool = self._ref_line_tool
         if tool == "h_ref":
             rl = ReferenceLine(kind="horizontal", value=y,

@@ -10,7 +10,7 @@ class SectionPolygon:
 
     Vertices are stored in the section coordinate frame.  Convert to map
     coordinates via :meth:`to_map_coords` using the associated
-    :class:`~cross_section_tool.core.section.Section`.
+    :class:`~section_tool.core.section.Section`.
 
     Parameters
     ----------

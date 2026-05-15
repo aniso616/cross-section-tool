@@ -1,12 +1,12 @@
-"""Tests for cross_section_tool.core.wells — LogCurve, DeviationSurvey, Well."""
+"""Tests for section_tool.core.wells — LogCurve, DeviationSurvey, Well."""
 
 import math
 
 import numpy as np
 import pytest
 
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
+from section_tool.core.section import Section
+from section_tool.core.wells import DeviationSurvey, LogCurve, Well
 
 
 # ---------------------------------------------------------------------------

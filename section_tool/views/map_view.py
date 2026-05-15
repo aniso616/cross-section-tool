@@ -10,8 +10,8 @@ from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +819,7 @@ class MapView(QWidget):
         # Re-insert at original position
         nodes = sec_copy.nodes
         new_nodes = np.insert(nodes, u["node_idx"], [u["x"], u["y"]], axis=0)
-        import cross_section_tool.core.section as _sec_mod
+        import section_tool.core.section as _sec_mod
         restored = _sec_mod.Section(
             new_nodes,
             name=sec_copy.name,
@@ -842,7 +842,7 @@ class MapView(QWidget):
         if len(nodes) < 2:
             self.render()
             return
-        from cross_section_tool.core.section import Section as _Sec
+        from section_tool.core.section import Section as _Sec
         n_existing = len(self._state.project.sections)
         sec = _Sec(
             nodes,
@@ -953,7 +953,7 @@ class MapView(QWidget):
     def _create_section_at(self, cx: float, cy: float, orientation: str) -> None:
         """Create a 10km section centered at (cx, cy) in the given orientation."""
         import numpy as np
-        from cross_section_tool.core.section import Section
+        from section_tool.core.section import Section
         half = 5_000.0
         if orientation == "ew":
             nodes = np.array([[cx - half, cy], [cx + half, cy]])

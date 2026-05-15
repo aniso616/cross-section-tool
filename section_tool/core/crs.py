@@ -124,7 +124,7 @@ def transform_section(section, to_epsg: int):
     All other Section attributes are preserved.
     """
     # Local import avoids module-level circular dependency if section ever imports crs
-    from cross_section_tool.core.section import Section  # noqa: PLC0415
+    from section_tool.core.section import Section  # noqa: PLC0415
 
     xs = section._nodes[:, 0]
     ys = section._nodes[:, 1]

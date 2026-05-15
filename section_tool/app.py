@@ -106,14 +106,14 @@ class _CollapseStrip(QWidget):
     def set_collapsed(self, collapsed: bool) -> None:
         self._btn.setText("▶" if collapsed else "◀")
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
-from cross_section_tool.views.map_view import MapView
-from cross_section_tool.views.project_panel import ProjectPanel
-from cross_section_tool.views.section_view import SectionView
-from cross_section_tool.views.tool_palette import ToolPalette
-from cross_section_tool.views.viewer_3d import Viewer3D
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
+from section_tool.views.map_view import MapView
+from section_tool.views.project_panel import ProjectPanel
+from section_tool.views.section_view import SectionView
+from section_tool.views.tool_palette import ToolPalette
+from section_tool.views.viewer_3d import Viewer3D
 
 
 class MainWindow(QMainWindow):
@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
         in production the default ``None`` creates a fresh one.
     """
 
-    APP_NAME = "Cross Section Tool"
+    APP_NAME = "Section"
     APP_VERSION = "0.1.0"
 
     def __init__(self, state: AppState | None = None) -> None:
@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         self._setup_project_panel_title_bar()
 
         # ── Properties panel ──────────────────────────────────────────────────
-        from cross_section_tool.views.properties_panel import PropertiesPanel
+        from section_tool.views.properties_panel import PropertiesPanel
         self._properties_panel = PropertiesPanel(self._state, self)
         self._properties_panel.setObjectName("PropertiesDock")
         self._properties_panel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -286,7 +286,7 @@ class MainWindow(QMainWindow):
 
     def _build_options_bar(self) -> None:
         """Phase 3 — full-width context-sensitive options bar (top QToolBar)."""
-        from cross_section_tool.views.context_toolbar import ContextToolbar
+        from section_tool.views.context_toolbar import ContextToolbar
         self._options_bar_tb = QToolBar("Options")
         self._options_bar_tb.setObjectName("OptionsBar")
         self._options_bar_tb.setMovable(False)
@@ -568,7 +568,7 @@ class MainWindow(QMainWindow):
         # Help
         # ================================================================
         help_menu = mb.addMenu("&Help")
-        self._about_action = QAction("&About Cross Section Tool…", self)
+        self._about_action = QAction("&About Section…", self)
         self._about_action.triggered.connect(self._on_about)
         help_menu.addAction(self._about_action)
 
@@ -908,7 +908,7 @@ class MainWindow(QMainWindow):
     def _on_new(self) -> None:
         if not self._check_unsaved_changes():
             return
-        from cross_section_tool.views.new_project_dialog import NewProjectDialog
+        from section_tool.views.new_project_dialog import NewProjectDialog
         dlg = NewProjectDialog(
             current_crs=self._state.project.crs_epsg,
             parent=self,
@@ -958,9 +958,9 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         import lasio
-        from cross_section_tool.io.las import extract_header_full
-        from cross_section_tool.core.wells import LogCurve, Well
-        from cross_section_tool.views.las_import_dialog import LASImportDialog
+        from section_tool.io.las import extract_header_full
+        from section_tool.core.wells import LogCurve, Well
+        from section_tool.views.las_import_dialog import LASImportDialog
         _MAX_LOG_SAMPLES = 10_000
         place_manually_wells: list[int] = []  # indices of wells needing manual placement
 
@@ -1013,7 +1013,7 @@ class MainWindow(QMainWindow):
     def _build_well_from_dialog(self, dlg, las, header, max_samples: int):
         """Construct a Well from a completed LASImportDialog."""
         import numpy as np
-        from cross_section_tool.core.wells import LogCurve, Well, DeviationSurvey
+        from section_tool.core.wells import LogCurve, Well, DeviationSurvey
 
         x, y, kb = dlg.x(), dlg.y(), dlg.kb()
         well_crs = dlg.well_crs_epsg()
@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow):
         # CRS transformation if needed
         if well_crs is not None and well_crs != proj_crs and x != 0.0:
             try:
-                from cross_section_tool.core.crs import transform_points
+                from section_tool.core.crs import transform_points
                 tx, ty = transform_points(
                     np.array([x]), np.array([y]),
                     from_epsg=well_crs, to_epsg=proj_crs,
@@ -1102,7 +1102,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        from cross_section_tool.views.segy_header_dialog import SEGYHeaderDialog
+        from section_tool.views.segy_header_dialog import SEGYHeaderDialog
         SEGYHeaderDialog(path, self).exec()
 
     def _on_create_ew_section_through_well(self, well_idx: int) -> None:
@@ -1115,7 +1115,7 @@ class MainWindow(QMainWindow):
 
     def _create_section_through_well(self, well_idx: int, orientation: str) -> None:
         import numpy as np
-        from cross_section_tool.core.section import Section
+        from section_tool.core.section import Section
         wells = self._state.project.wells
         if well_idx >= len(wells):
             return
@@ -1145,9 +1145,9 @@ class MainWindow(QMainWindow):
             "SEG-Y Files (*.segy *.sgy *.SGY);;All Files (*)",
         )
         for path in paths:
-            from cross_section_tool.io.project import SeismicRef
-            from cross_section_tool.views.seismic_import_dialog import SeismicImportDialog
-            from cross_section_tool.views.segy_header_dialog import SEGYHeaderDialog
+            from section_tool.io.project import SeismicRef
+            from section_tool.views.seismic_import_dialog import SeismicImportDialog
+            from section_tool.views.segy_header_dialog import SEGYHeaderDialog
             fname = os.path.basename(path)
             dlg = SeismicImportDialog(
                 sections=self._state.project.sections,
@@ -1163,7 +1163,7 @@ class MainWindow(QMainWindow):
                 continue
             # Quick header-only read for spatial extent (no amplitude data)
             try:
-                from cross_section_tool.io.segy import read_segy_header
+                from section_tool.io.segy import read_segy_header
                 with _wait_cursor():
                     hdr = read_segy_header(
                         path,
@@ -1319,7 +1319,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        from cross_section_tool.views.well_tops_dialog import WellTopsDialog
+        from section_tool.views.well_tops_dialog import WellTopsDialog
         dlg = WellTopsDialog(path, crs_epsg=self._state.project.crs_epsg, parent=self)
         if dlg.exec() != dlg.DialogCode.Accepted:
             return
@@ -1644,8 +1644,8 @@ class MainWindow(QMainWindow):
             self._add_reference_line_dialog()
 
     def _add_new_horizon(self) -> None:
-        from cross_section_tool.views.horizon_dialog import HorizonDialog
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.views.horizon_dialog import HorizonDialog
+        from section_tool.core.surfaces import HorizonPick
         n = len(self._state.project.horizon_picks) + 1
         default_name = f"Horizon {n}"
         # Remember current tool so we can restore / continue picking
@@ -1673,7 +1673,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No Section",
                                     "Activate a section first.")
             return
-        from cross_section_tool.core.polygons import SectionPolygon
+        from section_tool.core.polygons import SectionPolygon
         import numpy as np
 
         # Diagnostics (printed to terminal for debugging)
@@ -1704,7 +1704,7 @@ class MainWindow(QMainWindow):
         if not polys:
             if topo_error is not None:
                 print("  Falling back to polygon_detection module")
-            from cross_section_tool.core.polygon_detection import detect_polygons
+            from section_tool.core.polygon_detection import detect_polygons
             try:
                 polys = detect_polygons(
                     self._state.project.horizon_picks,
@@ -1765,13 +1765,13 @@ class MainWindow(QMainWindow):
 
     def _on_edit_strat_column(self) -> None:
         """Phase 5: open stratigraphic column editor (stub)."""
-        from cross_section_tool.views.strat_column_dialog import StratColumnDialog
+        from section_tool.views.strat_column_dialog import StratColumnDialog
         dlg = StratColumnDialog(self._state, self)
         dlg.exec()
 
     def _add_reference_line_kind(self, kind: str) -> None:
         from PySide6.QtWidgets import QInputDialog
-        from cross_section_tool.core.reference_line import ReferenceLine
+        from section_tool.core.reference_line import ReferenceLine
         label = "Depth value:" if kind == "horizontal" else "Distance along section:"
         value, ok = QInputDialog.getDouble(self, "Reference Line", label, 0.0)
         if not ok:
@@ -1781,7 +1781,7 @@ class MainWindow(QMainWindow):
 
     def _add_reference_line_dialog(self) -> None:
         from PySide6.QtWidgets import QInputDialog
-        from cross_section_tool.core.reference_line import ReferenceLine
+        from section_tool.core.reference_line import ReferenceLine
         kinds = ["Horizontal (depth)", "Vertical (distance)"]
         kind_str, ok = QInputDialog.getItem(self, "Reference Line", "Type:", kinds, 0, False)
         if not ok:
@@ -1803,7 +1803,7 @@ class MainWindow(QMainWindow):
                                        QLineEdit, QColorDialog, QDoubleSpinBox,
                                        QComboBox)
         from PySide6.QtGui import QColor
-        from cross_section_tool.core.polygons import SectionPolygon
+        from section_tool.core.polygons import SectionPolygon
 
         dlg = QDialog(self)
         dlg.setWindowTitle("New Polygon")
@@ -1859,8 +1859,8 @@ class MainWindow(QMainWindow):
             self._tool_palette.set_active_tool("polygon")
 
     def _add_new_fault(self) -> None:
-        from cross_section_tool.views.fault_dialog import FaultDialog
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.views.fault_dialog import FaultDialog
+        from section_tool.core.surfaces import HorizonPick
         n = len(self._state.project.fault_picks) + 1
         default_name = f"Fault {n}"
         _prev_tool = self._state.active_tool
@@ -1879,7 +1879,7 @@ class MainWindow(QMainWindow):
     def _horizon_properties(self, index: int) -> None:
         """Phase A: edit horizon attributes."""
         import copy
-        from cross_section_tool.views.horizon_dialog import HorizonDialog
+        from section_tool.views.horizon_dialog import HorizonDialog
         picks = self._state.project.horizon_picks
         if index >= len(picks):
             return
@@ -1900,7 +1900,7 @@ class MainWindow(QMainWindow):
     def _fault_properties(self, index: int) -> None:
         """Phase B: edit fault attributes."""
         import copy
-        from cross_section_tool.views.fault_dialog import FaultDialog
+        from section_tool.views.fault_dialog import FaultDialog
         picks = self._state.project.fault_picks
         if index >= len(picks):
             return

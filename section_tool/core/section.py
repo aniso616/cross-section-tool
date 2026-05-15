@@ -31,7 +31,7 @@ class Section:
         self.vertical_exaggeration: float = float(vertical_exaggeration)
         self.crs_epsg: int = int(crs_epsg)
         # Phase 5: per-section seismic display settings
-        from cross_section_tool.core.seismic_settings import SeismicDisplaySettings
+        from section_tool.core.seismic_settings import SeismicDisplaySettings
         self.seismic_display: SeismicDisplaySettings = SeismicDisplaySettings()
 
     # ------------------------------------------------------------------

@@ -15,7 +15,7 @@ import os
 import shutil
 from pathlib import Path
 
-from cross_section_tool.io.database import ProjectDatabase
+from section_tool.io.database import ProjectDatabase
 
 _SUBDIRS = ("seismic", "wells", "images", "exports", "cache", "autosave")
 _DB_NAME = "project.sqlite"

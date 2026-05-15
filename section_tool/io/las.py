@@ -10,7 +10,7 @@ import numpy as np
 import lasio
 from lasio import LASFile
 
-from cross_section_tool.core.wells import LogCurve, Well
+from section_tool.core.wells import LogCurve, Well
 
 
 # Mnemonics to try (in order) when resolving optional header fields

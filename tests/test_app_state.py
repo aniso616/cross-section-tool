@@ -1,13 +1,13 @@
-"""Tests for cross_section_tool.app_state.AppState."""
+"""Tests for section_tool.app_state.AppState."""
 
 import numpy as np
 import pytest
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.wells import DeviationSurvey, Well
-from cross_section_tool.io.project import Project, SeismicRef
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.wells import DeviationSurvey, Well
+from section_tool.io.project import Project, SeismicRef
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +734,7 @@ class TestActiveTool:
         assert received == []
 
     def test_all_palette_tools_settable(self):
-        from cross_section_tool.views.tool_palette import _TOOL_IDS
+        from section_tool.views.tool_palette import _TOOL_IDS
         s = AppState()
         for tid in _TOOL_IDS:
             s.set_active_tool(tid)
@@ -875,7 +875,7 @@ class TestPickTargetSignalChain:
     def test_fault_pick_target_independent_of_horizon(self):
         s = AppState()
         s.add_horizon_pick(HorizonPick([0.0], [100.0]))
-        from cross_section_tool.core.surfaces import HorizonPick as HP
+        from section_tool.core.surfaces import HorizonPick as HP
         s.add_fault_pick(HP([0.0], [100.0], name="F1"))
         s.set_active_pick_target("Horizons", 0)
         assert s.active_pick_category == "Horizons"

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from cross_section_tool.core.formation import Formation, LITHOLOGY_DEFAULTS
+from section_tool.core.formation import Formation, LITHOLOGY_DEFAULTS
 
 _LITHOLOGIES = list(LITHOLOGY_DEFAULTS.keys()) + ["conglomerate", "coal", "volcanic"]
 _PATTERNS    = ["none", "sandstone", "shale", "siltstone", "limestone",

@@ -1,9 +1,9 @@
-"""Tests for cross_section_tool.core.crs."""
+"""Tests for section_tool.core.crs."""
 
 import numpy as np
 import pytest
 
-from cross_section_tool.core.crs import (
+from section_tool.core.crs import (
     CRSInfo,
     get_crs_info,
     is_projected,
@@ -14,7 +14,7 @@ from cross_section_tool.core.crs import (
     units_are_metres,
     validate_projected_crs,
 )
-from cross_section_tool.core.section import Section
+from section_tool.core.section import Section
 
 # ---------------------------------------------------------------------------
 # Well-known EPSG codes used in tests

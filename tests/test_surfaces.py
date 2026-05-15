@@ -1,12 +1,12 @@
-"""Tests for cross_section_tool.core.surfaces — Surface and HorizonPick."""
+"""Tests for section_tool.core.surfaces — Surface and HorizonPick."""
 
 import math
 
 import numpy as np
 import pytest
 
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
 
 
 # ---------------------------------------------------------------------------

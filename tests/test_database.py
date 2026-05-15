@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cross_section_tool.io.database import ProjectDatabase
-from cross_section_tool.io.project_manager import ProjectManager
+from section_tool.io.database import ProjectDatabase
+from section_tool.io.project_manager import ProjectManager
 
 
 # ---------------------------------------------------------------------------

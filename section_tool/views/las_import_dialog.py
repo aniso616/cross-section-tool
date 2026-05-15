@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 def _crs_name(epsg: int) -> str:
     try:
-        from cross_section_tool.core.crs import get_crs_info
+        from section_tool.core.crs import get_crs_info
         return get_crs_info(epsg).name
     except Exception:
         return "Unknown CRS"
@@ -117,7 +117,7 @@ class LASImportDialog(QDialog):
     path:
         File path (for display only).
     header:
-        Dict from :func:`cross_section_tool.io.las.extract_header_full` —
+        Dict from :func:`section_tool.io.las.extract_header_full` —
         contains values *and* ``x_source``, ``y_source`` provenance strings.
     project_crs_epsg:
         EPSG code of the current project CRS.

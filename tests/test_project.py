@@ -1,12 +1,12 @@
-"""Tests for cross_section_tool.io.project — Project save/load round-trips."""
+"""Tests for section_tool.io.project — Project save/load round-trips."""
 
 import numpy as np
 import pytest
 
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
-from cross_section_tool.io.project import FORMAT_VERSION, Project, SeismicRef
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.wells import DeviationSurvey, LogCurve, Well
+from section_tool.io.project import FORMAT_VERSION, Project, SeismicRef
 
 
 # ---------------------------------------------------------------------------

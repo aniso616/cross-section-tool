@@ -7,11 +7,11 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.polygons import SectionPolygon
-from cross_section_tool.core.section import Section
-from cross_section_tool.io.project import Project
-from cross_section_tool.views.section_view import SectionView
+from section_tool.app_state import AppState
+from section_tool.core.polygons import SectionPolygon
+from section_tool.core.section import Section
+from section_tool.io.project import Project
+from section_tool.views.section_view import SectionView
 
 
 @pytest.fixture(scope="session")
@@ -339,7 +339,7 @@ class TestSectionViewPolygonDrawing:
 
 class TestToolPaletteStateMachine:
     def test_only_one_tool_active_across_many_activations(self, qapp):
-        from cross_section_tool.views.tool_palette import ToolPalette, _TOOL_IDS
+        from section_tool.views.tool_palette import ToolPalette, _TOOL_IDS
         p = ToolPalette()
         for tid in _TOOL_IDS:
             p.set_active_tool(tid)
@@ -347,7 +347,7 @@ class TestToolPaletteStateMachine:
             assert checked == [tid], f"After activating {tid}: {checked}"
 
     def test_rapid_switching_emits_each_change(self, qapp):
-        from cross_section_tool.views.tool_palette import ToolPalette
+        from section_tool.views.tool_palette import ToolPalette
         p = ToolPalette()
         sequence = ["pan", "zoom", "select", "horizon_pick", "pan"]
         received = []
@@ -360,7 +360,7 @@ class TestToolPaletteStateMachine:
         assert received == sequence  # each activation is new vs previous
 
     def test_deactivate_polygon_via_select(self, qapp):
-        from cross_section_tool.views.tool_palette import ToolPalette
+        from section_tool.views.tool_palette import ToolPalette
         p = ToolPalette()
         p.set_active_tool("polygon")
         p.set_active_tool("select")

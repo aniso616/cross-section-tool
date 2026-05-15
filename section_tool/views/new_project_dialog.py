@@ -54,7 +54,7 @@ _COMMON_CRS: list[tuple[str, int | None]] = [
 
 def _crs_info(epsg: int):
     try:
-        from cross_section_tool.core.crs import get_crs_info
+        from section_tool.core.crs import get_crs_info
         return get_crs_info(epsg)
     except Exception:
         return None

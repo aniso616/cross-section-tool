@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QSizePolicy, QToolButton, QWidget,
 )
 
-from cross_section_tool.app_state import AppState
+from section_tool.app_state import AppState
 
 
 def _qlbl(text: str) -> QLabel:
@@ -173,7 +173,7 @@ class ContextToolbar(QWidget):
 
         # Contact type quick-set
         self._layout.addWidget(_qlbl("  Type:"))
-        from cross_section_tool.views.horizon_dialog import CONTACT_TYPES
+        from section_tool.views.horizon_dialog import CONTACT_TYPES
         ct_combo = QComboBox(); ct_combo.setFixedWidth(130)
         for ct in CONTACT_TYPES:
             ct_combo.addItem(ct.replace("_", " ").title(), ct)
@@ -188,7 +188,7 @@ class ContextToolbar(QWidget):
         combo = self._pick_target_combo("Faults")
         self._layout.addWidget(combo)
 
-        from cross_section_tool.views.fault_dialog import FAULT_TYPES
+        from section_tool.views.fault_dialog import FAULT_TYPES
         ft_combo = QComboBox(); ft_combo.setFixedWidth(100)
         for ft in FAULT_TYPES:
             ft_combo.addItem(ft.replace("_", " ").title(), ft)

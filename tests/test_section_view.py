@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.views.section_view.SectionView."""
+"""Tests for section_tool.views.section_view.SectionView."""
 
 import sys
 
@@ -6,12 +6,12 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.wells import Well
-from cross_section_tool.io.project import SeismicRef
-from cross_section_tool.views.section_view import SectionView
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.wells import Well
+from section_tool.io.project import SeismicRef
+from section_tool.views.section_view import SectionView
 
 
 # ---------------------------------------------------------------------------
@@ -493,16 +493,16 @@ class TestPolygonPreflight:
 
 class TestSegIntersect:
     def test_crossing_segments(self):
-        from cross_section_tool.views.section_view import _seg_intersect
+        from section_tool.views.section_view import _seg_intersect
         p = _seg_intersect(0, 0, 10, 0, 5, -5, 5, 5)  # horizontal meets vertical
         assert p is not None
         assert abs(p[0] - 5.0) < 0.01
         assert abs(p[1] - 0.0) < 0.01
 
     def test_non_intersecting(self):
-        from cross_section_tool.views.section_view import _seg_intersect
+        from section_tool.views.section_view import _seg_intersect
         assert _seg_intersect(0, 0, 5, 0, 6, -5, 6, 5) is None  # no overlap
 
     def test_parallel_segments(self):
-        from cross_section_tool.views.section_view import _seg_intersect
+        from section_tool.views.section_view import _seg_intersect
         assert _seg_intersect(0, 0, 10, 0, 0, 5, 10, 5) is None  # parallel horizontal

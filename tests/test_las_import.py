@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import pytest
 
-from cross_section_tool.io.las import (
+from section_tool.io.las import (
     _parse_loc_xy,
     _X_KEYS, _Y_KEYS, _KB_KEYS,
     _LOC_X_RE, _LOC_Y_RE,
@@ -114,7 +114,7 @@ def test_kb_keys_include_ekb():
 # CRS auto-suggest (pure logic — no Qt)
 # ---------------------------------------------------------------------------
 
-from cross_section_tool.views.las_import_dialog import _suggest_crs
+from section_tool.views.las_import_dialog import _suggest_crs
 
 
 def test_suggest_crs_geographic():

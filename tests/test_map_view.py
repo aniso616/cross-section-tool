@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.views.map_view.MapView."""
+"""Tests for section_tool.views.map_view.MapView."""
 
 import sys
 import math
@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import Surface
-from cross_section_tool.core.wells import Well
-from cross_section_tool.io.project import SeismicRef
-from cross_section_tool.views.map_view import MapView, _min_dist_to_polyline, _nice_interval
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import Surface
+from section_tool.core.wells import Well
+from section_tool.io.project import SeismicRef
+from section_tool.views.map_view import MapView, _min_dist_to_polyline, _nice_interval
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ class TestAxesState:
         state.set_active_section(sec)
         view.render()
         # Active section line should use active color
-        from cross_section_tool.views.map_view import _ACTIVE_COLOR
+        from section_tool.views.map_view import _ACTIVE_COLOR
         active_line_colors = [
             l.get_color() for l in view.axes.lines if l.get_color() == _ACTIVE_COLOR
         ]
@@ -255,7 +255,7 @@ class TestAutoRender:
         state.add_section(sec2)
         state.set_active_section(sec1)
         # Check active color applied to sec1
-        from cross_section_tool.views.map_view import _ACTIVE_COLOR, _INACTIVE_COLOR
+        from section_tool.views.map_view import _ACTIVE_COLOR, _INACTIVE_COLOR
         active_colors = [l.get_color() for l in view.axes.lines
                          if l.get_color() == _ACTIVE_COLOR]
         inactive_colors = [l.get_color() for l in view.axes.lines

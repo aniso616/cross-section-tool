@@ -4,16 +4,16 @@ import os
 
 from PySide6.QtCore import QObject, Signal
 
-from cross_section_tool.core.annotation import Annotation
-from cross_section_tool.core.command_stack import Command, CommandStack
-from cross_section_tool.core.intersection import FaultHorizonIntersection
-from cross_section_tool.core.polygons import SectionPolygon
-from cross_section_tool.core.reference_line import ReferenceLine
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.topology import SectionTopology
-from cross_section_tool.core.wells import LogCurve, Well
-from cross_section_tool.io.project import Project, SeismicRef
+from section_tool.core.annotation import Annotation
+from section_tool.core.command_stack import Command, CommandStack
+from section_tool.core.intersection import FaultHorizonIntersection
+from section_tool.core.polygons import SectionPolygon
+from section_tool.core.reference_line import ReferenceLine
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.topology import SectionTopology
+from section_tool.core.wells import LogCurve, Well
+from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
 
@@ -132,7 +132,7 @@ class AppState(QObject):
         # Live topology (one per active section)
         self._topology: SectionTopology | None = None
         # SQLite project manager (None when working with legacy HDF5 projects)
-        from cross_section_tool.io.project_manager import ProjectManager
+        from section_tool.io.project_manager import ProjectManager
         self._pm: ProjectManager = ProjectManager()
 
     # ------------------------------------------------------------------
@@ -392,7 +392,7 @@ class AppState(QObject):
 
         # Seismic refs
         for srow in data["seismic"]:
-            from cross_section_tool.io.project import SeismicRef
+            from section_tool.io.project import SeismicRef
             ref = SeismicRef(
                 path=self._pm.resolve_file_path(srow["file_path"]),
                 name=srow["name"],
@@ -769,7 +769,7 @@ class AppState(QObject):
         self.intersection_added.emit(isc)
 
     def compute_and_store_intersections(self, section) -> list:
-        from cross_section_tool.core.intersection import compute_intersections
+        from section_tool.core.intersection import compute_intersections
         new_ints = compute_intersections(
             section,
             self._project.horizon_picks,

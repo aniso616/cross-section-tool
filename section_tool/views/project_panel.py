@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cross_section_tool.app_state import AppState
+from section_tool.app_state import AppState
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QVBoxLayout,
 )
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.formation import Formation
+from section_tool.app_state import AppState
+from section_tool.core.formation import Formation
 
 
 class StratColumnDialog(QDialog):

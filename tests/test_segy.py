@@ -1,4 +1,4 @@
-"""Tests for cross_section_tool.io.segy."""
+"""Tests for section_tool.io.segy."""
 
 import math
 
@@ -7,8 +7,8 @@ import pytest
 import segyio
 from segyio import TraceField
 
-from cross_section_tool.core.section import Section
-from cross_section_tool.io.segy import SeismicDataset, _apply_scalar, read_segy, read_segy_header
+from section_tool.core.section import Section
+from section_tool.io.segy import SeismicDataset, _apply_scalar, read_segy, read_segy_header
 
 # ---------------------------------------------------------------------------
 # SEG-Y file factory

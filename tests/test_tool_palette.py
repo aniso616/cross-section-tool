@@ -1,11 +1,11 @@
-"""Tests for cross_section_tool.views.tool_palette.ToolPalette."""
+"""Tests for section_tool.views.tool_palette.ToolPalette."""
 
 import sys
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.views.tool_palette import ToolPalette, _TOOL_IDS
+from section_tool.views.tool_palette import ToolPalette, _TOOL_IDS
 
 
 @pytest.fixture(scope="session")

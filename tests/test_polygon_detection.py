@@ -2,9 +2,9 @@
 import numpy as np
 import pytest
 
-from cross_section_tool.core.polygon_detection import detect_polygons
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
+from section_tool.core.polygon_detection import detect_polygons
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
 
 
 def _sec() -> Section:
@@ -68,21 +68,21 @@ class TestDetectPolygons:
 
 class TestFormation:
     def test_formation_fields(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation(name="TopSand", primary_lithology="sandstone", age_top_ma=65.0)
         assert f.name == "TopSand"
         assert f.primary_lithology == "sandstone"
         assert f.age_top_ma == 65.0
 
     def test_formation_roundtrip(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation(name="Shale", porosity_surface=0.4)
         assert Formation.from_dict(f.to_dict()).porosity_surface == pytest.approx(0.4)
 
 
 class TestStratigraphicColumn:
     def test_add_and_order(self):
-        from cross_section_tool.core.formation import Formation, StratigraphicColumn
+        from section_tool.core.formation import Formation, StratigraphicColumn
         col = StratigraphicColumn()
         col.add_formation(Formation("A"))
         col.add_formation(Formation("B"))
@@ -90,7 +90,7 @@ class TestStratigraphicColumn:
         assert col.formations[1].name == "B"
 
     def test_is_above(self):
-        from cross_section_tool.core.formation import Formation, StratigraphicColumn
+        from section_tool.core.formation import Formation, StratigraphicColumn
         col = StratigraphicColumn()
         col.add_formation(Formation("A"))
         col.add_formation(Formation("B"))
@@ -98,7 +98,7 @@ class TestStratigraphicColumn:
         assert not col.is_above("B", "A")
 
     def test_reorder(self):
-        from cross_section_tool.core.formation import Formation, StratigraphicColumn
+        from section_tool.core.formation import Formation, StratigraphicColumn
         col = StratigraphicColumn()
         for n in ("A", "B", "C"):
             col.add_formation(Formation(n))
@@ -106,7 +106,7 @@ class TestStratigraphicColumn:
         assert col.formations[0].name == "C"
 
     def test_roundtrip(self):
-        from cross_section_tool.core.formation import Formation, StratigraphicColumn
+        from section_tool.core.formation import Formation, StratigraphicColumn
         col = StratigraphicColumn()
         col.add_formation(Formation("X", age_top_ma=100.0))
         col2 = StratigraphicColumn.from_list(col.to_list())
@@ -136,22 +136,22 @@ class TestSectionSnapshot:
 
 class TestFormationPhysics:
     def test_athy_law_surface(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Shale", porosity_surface=0.63, compaction_coeff=0.00051)
         assert pytest.approx(f.porosity_at_depth(0)) == 0.63
 
     def test_athy_law_depth_decreases(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Shale", porosity_surface=0.63, compaction_coeff=0.00051)
         assert f.porosity_at_depth(1000) < f.porosity_at_depth(0)
 
     def test_athy_law_incompressible(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Salt", porosity_surface=0.01, compaction_coeff=0.0)
         assert pytest.approx(f.porosity_at_depth(5000)) == 0.01
 
     def test_bulk_density_at_surface(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Sand", porosity_surface=0.4, compaction_coeff=0.0,
                       grain_density=2650.0)
         rho = f.bulk_density_at_depth(0.0, fluid_density=1000.0)
@@ -159,30 +159,30 @@ class TestFormationPhysics:
 
     def test_decompaction_greater_than_current(self):
         """Decompacted thickness must be ≥ current (porosity increases at shallower depth)."""
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Shale", porosity_surface=0.63, compaction_coeff=0.00051)
         restored = f.decompacted_thickness(50.0, 3000.0, target_depth=0.0)
         assert restored > 50.0
 
     def test_decompaction_positive(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Shale", porosity_surface=0.63, compaction_coeff=0.00051)
         assert f.decompacted_thickness(100.0, 1000.0) > 0
 
     def test_decompaction_incompressible_unchanged(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("Salt", porosity_surface=0.01, compaction_coeff=0.0)
         assert pytest.approx(f.decompacted_thickness(200.0, 3000.0)) == 200.0
 
     def test_lithology_defaults_populate(self):
-        from cross_section_tool.core.formation import Formation, LITHOLOGY_DEFAULTS
+        from section_tool.core.formation import Formation, LITHOLOGY_DEFAULTS
         f = Formation("SS")
         f.populate_from_lithology("sandstone")
         assert f.porosity_surface == LITHOLOGY_DEFAULTS["sandstone"]["porosity_surface"]
         assert f.grain_density   == LITHOLOGY_DEFAULTS["sandstone"]["grain_density"]
 
     def test_lithology_defaults_change_primary(self):
-        from cross_section_tool.core.formation import Formation
+        from section_tool.core.formation import Formation
         f = Formation("X", primary_lithology="shale")
         f.populate_from_lithology("limestone")
         assert f.primary_lithology == "limestone"
@@ -192,7 +192,7 @@ class TestContactTypeStyle:
     """Verify that the right rendering path is selected per contact_type."""
 
     def _pick(self, ct: str):
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.core.surfaces import HorizonPick
         hp = HorizonPick([0.0, 500.0, 1000.0], [100.0, 120.0, 150.0],
                          name="H", contact_type=ct,
                          section_names=["S"] * 3)
@@ -211,8 +211,8 @@ class TestContactTypeStyle:
         assert hp.contact_type == "sequence_boundary"
 
     def test_contact_types_all_valid(self):
-        from cross_section_tool.core.surfaces import HorizonPick
-        from cross_section_tool.views.horizon_dialog import CONTACT_TYPES
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.views.horizon_dialog import CONTACT_TYPES
         for ct in CONTACT_TYPES:
             hp = self._pick(ct)
             assert hp.contact_type == ct
@@ -220,27 +220,27 @@ class TestContactTypeStyle:
 
 class TestFaultAttributes:
     def test_fault_type_default(self):
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.core.surfaces import HorizonPick
         hp = HorizonPick([0.0], [100.0])
         assert hp.fault_type == "normal"
         assert hp.dip_direction == "right"
 
     def test_fault_type_stored(self):
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.core.surfaces import HorizonPick
         hp = HorizonPick([0.0], [100.0], fault_type="reverse",
                          dip_direction="left")
         assert hp.fault_type == "reverse"
         assert hp.dip_direction == "left"
 
     def test_fault_type_in_empty(self):
-        from cross_section_tool.core.surfaces import HorizonPick
+        from section_tool.core.surfaces import HorizonPick
         hp = HorizonPick.empty(name="F1")
         assert hp.fault_type == "normal"
 
 
 class TestSectionPolygonArea:
     def test_rectangle_area(self):
-        from cross_section_tool.core.polygons import SectionPolygon
+        from section_tool.core.polygons import SectionPolygon
         # 100 × 200 rectangle
         poly = SectionPolygon(
             [(0, 0), (100, 0), (100, 200), (0, 200)], name="R"
@@ -248,7 +248,7 @@ class TestSectionPolygonArea:
         assert pytest.approx(poly.area) == 20_000.0
 
     def test_area_positive(self):
-        from cross_section_tool.core.polygons import SectionPolygon
+        from section_tool.core.polygons import SectionPolygon
         poly = SectionPolygon(
             [(0, 0), (50, 0), (50, 50), (0, 50)]
         )

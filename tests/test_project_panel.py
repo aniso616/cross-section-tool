@@ -1,14 +1,14 @@
-"""Tests for cross_section_tool.views.project_panel.ProjectPanel."""
+"""Tests for section_tool.views.project_panel.ProjectPanel."""
 
 import sys
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick
-from cross_section_tool.views.project_panel import ProjectPanel, _CATEGORIES
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick
+from section_tool.views.project_panel import ProjectPanel, _CATEGORIES
 
 
 @pytest.fixture(scope="session")

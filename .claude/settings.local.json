@@ -30,7 +30,18 @@
       "PowerShell(Tee-Object *)",
       "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/ -q --tb=short; echo \"EXIT:$LASTEXITCODE\")",
       "PowerShell(taskkill *)",
-      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_topology.py tests/test_app.py tests/test_section_view.py tests/test_section.py tests/test_surfaces.py -q --tb=short 2>&1; echo \"EXIT_$LASTEXITCODE\")"
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; python -m pytest tests/test_topology.py tests/test_app.py tests/test_section_view.py tests/test_section.py tests/test_surfaces.py -q --tb=short 2>&1; echo \"EXIT_$LASTEXITCODE\")",
+      "PowerShell(python -m cross_section_tool)",
+      "PowerShell($env:PYTHONPATH = \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; python cross_section_tool/app.py)",
+      "PowerShell(Get-Content *)",
+      "PowerShell($env:PYTHONPATH = \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; python -u cross_section_tool/app.py > \"$env:TEMP\\\\map_diag.txt\" 2>&1)",
+      "PowerShell(cmd /c \"dir J:\\\\\" 2>&1)",
+      "PowerShell(cmd /c \"dir J:\\\\data\" 2>&1)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_las_import.py -v 2>&1 | Select-Object -First 60)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_las_import.py -v 2>&1 | tail -10)",
+      "PowerShell(tail *)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_database.py tests/test_las_import.py -q 2>&1)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -c \"import section_tool.app; print\\('Entry point OK'\\)\")"
     ]
   }
 }

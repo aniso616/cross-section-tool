@@ -1,11 +1,11 @@
-"""Tests for cross_section_tool.core.section.Section."""
+"""Tests for section_tool.core.section.Section."""
 
 import math
 
 import numpy as np
 import pytest
 
-from cross_section_tool.core.section import Section
+from section_tool.core.section import Section
 
 
 # ---------------------------------------------------------------------------

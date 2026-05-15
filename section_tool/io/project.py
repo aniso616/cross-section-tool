@@ -9,16 +9,16 @@ from typing import Any
 import h5py
 import numpy as np
 
-from cross_section_tool.core.annotation import Annotation
-from cross_section_tool.core.event import Event, EventSequence
-from cross_section_tool.core.formation import Formation, StratigraphicColumn
-from cross_section_tool.core.intersection import FaultHorizonIntersection
-from cross_section_tool.core.polygons import SectionPolygon
-from cross_section_tool.core.reference_line import ReferenceLine
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.velocity_model import VelocityModel
-from cross_section_tool.core.wells import DeviationSurvey, LogCurve, Well
+from section_tool.core.annotation import Annotation
+from section_tool.core.event import Event, EventSequence
+from section_tool.core.formation import Formation, StratigraphicColumn
+from section_tool.core.intersection import FaultHorizonIntersection
+from section_tool.core.polygons import SectionPolygon
+from section_tool.core.reference_line import ReferenceLine
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.velocity_model import VelocityModel
+from section_tool.core.wells import DeviationSurvey, LogCurve, Well
 
 FORMAT_VERSION = "1.0"
 
@@ -31,7 +31,7 @@ FORMAT_VERSION = "1.0"
 class SeismicRef:
     """Reference to an external SEG-Y file kept inside a project.
 
-    Stores the file path and all :func:`~cross_section_tool.io.segy.read_segy`
+    Stores the file path and all :func:`~section_tool.io.segy.read_segy`
     keyword arguments so the file can be reloaded with the same parameters.
     """
     path: str
@@ -51,8 +51,8 @@ class SeismicRef:
     n_traces_total: int = 0
 
     def load(self, progress_callback=None):
-        """Load and return the referenced :class:`~cross_section_tool.io.segy.SeismicDataset`."""
-        from cross_section_tool.io.segy import read_segy  # local to avoid circular at module level
+        """Load and return the referenced :class:`~section_tool.io.segy.SeismicDataset`."""
+        from section_tool.io.segy import read_segy  # local to avoid circular at module level
         return read_segy(
             self.path,
             x_field=self.x_field,
@@ -77,10 +77,10 @@ class Project:
     ----------
     name:          Human-readable project name.
     crs_epsg:      Default projected CRS for new objects.
-    sections:      Ordered list of :class:`~cross_section_tool.core.section.Section`.
-    surfaces:      Ordered list of :class:`~cross_section_tool.core.surfaces.Surface`.
-    horizon_picks: Ordered list of :class:`~cross_section_tool.core.surfaces.HorizonPick`.
-    wells:         Ordered list of :class:`~cross_section_tool.core.wells.Well`.
+    sections:      Ordered list of :class:`~section_tool.core.section.Section`.
+    surfaces:      Ordered list of :class:`~section_tool.core.surfaces.Surface`.
+    horizon_picks: Ordered list of :class:`~section_tool.core.surfaces.HorizonPick`.
+    wells:         Ordered list of :class:`~section_tool.core.wells.Well`.
     seismic_refs:  Ordered list of :class:`SeismicRef` (paths to SEG-Y files).
     """
 
@@ -332,7 +332,7 @@ def _load_sections(f: h5py.File) -> list[Section]:
     if "sections" not in f:
         return []
     import json as _json
-    from cross_section_tool.core.seismic_settings import SeismicDisplaySettings as _SDS
+    from section_tool.core.seismic_settings import SeismicDisplaySettings as _SDS
     grp = f["sections"]
     result = []
     for k in _sorted_keys(grp):

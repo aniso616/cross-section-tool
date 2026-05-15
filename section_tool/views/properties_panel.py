@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
-from cross_section_tool.app_state import AppState
+from section_tool.app_state import AppState
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ class PropertiesPanel(QDockWidget):
             lambda: self._commit_pick_name("Horizons", idx, name_ed.text()))
         form.addRow("Name:", name_ed)
 
-        from cross_section_tool.views.horizon_dialog import CONTACT_TYPES
+        from section_tool.views.horizon_dialog import CONTACT_TYPES
         ct_combo = QComboBox()
         for ct in CONTACT_TYPES:
             ct_combo.addItem(ct.replace("_", " ").title(), ct)
@@ -301,7 +301,7 @@ class PropertiesPanel(QDockWidget):
             lambda: self._commit_pick_name("Faults", idx, name_ed.text()))
         form.addRow("Name:", name_ed)
 
-        from cross_section_tool.views.fault_dialog import FAULT_TYPES
+        from section_tool.views.fault_dialog import FAULT_TYPES
         ft_combo = QComboBox()
         for ft in FAULT_TYPES:
             ft_combo.addItem(ft.replace("_", " ").title(), ft)

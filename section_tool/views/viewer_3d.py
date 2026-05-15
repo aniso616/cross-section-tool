@@ -5,10 +5,10 @@ import pyvista as pv
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-from cross_section_tool.app_state import AppState
-from cross_section_tool.core.section import Section
-from cross_section_tool.core.surfaces import HorizonPick, Surface
-from cross_section_tool.core.wells import Well
+from section_tool.app_state import AppState
+from section_tool.core.section import Section
+from section_tool.core.surfaces import HorizonPick, Surface
+from section_tool.core.wells import Well
 
 _DEFAULT_DEPTH = 5000.0  # fallback maximum depth (m) when no data determines it
 
