@@ -270,6 +270,22 @@ CREATE TABLE IF NOT EXISTS velocity_model (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS section_sets (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    name              TEXT    UNIQUE NOT NULL,
+    description       TEXT    DEFAULT '',
+    sort_order_field  TEXT    DEFAULT 'distance',
+    created_date      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS section_set_members (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_id       INTEGER NOT NULL REFERENCES section_sets(id)  ON DELETE CASCADE,
+    section_id   INTEGER NOT NULL REFERENCES sections(id)       ON DELETE CASCADE,
+    sort_index   INTEGER NOT NULL,
+    UNIQUE(set_id, section_id)
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1052,129 @@ class ProjectDatabase:
         self.conn.execute(
             "DELETE FROM well_sections WHERE well_id=? AND section_id=?",
             (well_id, section_id)
+        )
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Section sets
+    # ------------------------------------------------------------------
+
+    def add_section_set(self, name: str, description: str = "",
+                        sort_order_field: str = "distance") -> int:
+        """Create a new section set and return its ID."""
+        cur = self.conn.execute(
+            """INSERT INTO section_sets(name, description, sort_order_field, created_date)
+               VALUES(?, ?, ?, ?)""",
+            (name, description, sort_order_field, _now())
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def delete_section_set(self, set_id: int) -> None:
+        """Delete a section set and all its member entries (CASCADE)."""
+        self.conn.execute("DELETE FROM section_sets WHERE id=?", (set_id,))
+        self.conn.commit()
+
+    def add_section_to_set(self, set_id: int, section_id: int,
+                           sort_index: int) -> int:
+        """Add a section to a set at *sort_index*. Returns member row ID."""
+        cur = self.conn.execute(
+            """INSERT INTO section_set_members(set_id, section_id, sort_index)
+               VALUES(?, ?, ?)""",
+            (set_id, section_id, sort_index)
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def remove_section_from_set(self, set_id: int, section_id: int) -> None:
+        """Remove a section from a set (set itself is not deleted)."""
+        self.conn.execute(
+            "DELETE FROM section_set_members WHERE set_id=? AND section_id=?",
+            (set_id, section_id)
+        )
+        self.conn.commit()
+
+    def get_section_set(self, set_id: int) -> dict | None:
+        """Return set metadata + ordered member list, or None if not found."""
+        row = self.conn.execute(
+            "SELECT * FROM section_sets WHERE id=?", (set_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        members = self.conn.execute(
+            """SELECT ssm.section_id, s.name AS section_name, ssm.sort_index
+               FROM section_set_members ssm
+               JOIN sections s ON s.id = ssm.section_id
+               WHERE ssm.set_id = ?
+               ORDER BY ssm.sort_index""",
+            (set_id,)
+        ).fetchall()
+        result["members"] = [dict(m) for m in members]
+        return result
+
+    def get_all_section_sets(self) -> list[dict]:
+        """Return all section sets with their ordered member lists."""
+        rows = self.conn.execute(
+            "SELECT * FROM section_sets ORDER BY id"
+        ).fetchall()
+        return [self.get_section_set(r["id"]) for r in rows]
+
+    def reorder_set_member(self, set_id: int, section_id: int,
+                           new_sort_index: int) -> None:
+        """Update the sort_index of a member within its set."""
+        self.conn.execute(
+            """UPDATE section_set_members SET sort_index=?
+               WHERE set_id=? AND section_id=?""",
+            (new_sort_index, set_id, section_id)
+        )
+        self.conn.commit()
+
+    def get_adjacent_sections(
+        self, set_id: int, section_id: int
+    ) -> tuple[dict | None, dict | None]:
+        """Return (previous_member, next_member) for *section_id* in the set.
+
+        Members are ordered by sort_index.  Returns ``None`` for the
+        prev/next when *section_id* is at the start/end of the set, or when
+        the section is not a member of the set.
+
+        Each returned member dict has keys: section_id, section_name, sort_index.
+        """
+        members = self.conn.execute(
+            """SELECT ssm.section_id, s.name AS section_name, ssm.sort_index
+               FROM section_set_members ssm
+               JOIN sections s ON s.id = ssm.section_id
+               WHERE ssm.set_id = ?
+               ORDER BY ssm.sort_index""",
+            (set_id,)
+        ).fetchall()
+        members = [dict(m) for m in members]
+        idx = next((i for i, m in enumerate(members)
+                    if m["section_id"] == section_id), None)
+        if idx is None:
+            return None, None
+        prev_m = members[idx - 1] if idx > 0 else None
+        next_m = members[idx + 1] if idx < len(members) - 1 else None
+        return prev_m, next_m
+
+    def update_section_set(self, set_id: int, name: str | None = None,
+                           description: str | None = None,
+                           sort_order_field: str | None = None) -> None:
+        """Update editable fields on a section set."""
+        updates = []
+        vals = []
+        if name is not None:
+            updates.append("name=?"); vals.append(name)
+        if description is not None:
+            updates.append("description=?"); vals.append(description)
+        if sort_order_field is not None:
+            updates.append("sort_order_field=?"); vals.append(sort_order_field)
+        if not updates:
+            return
+        vals.append(set_id)
+        self.conn.execute(
+            f"UPDATE section_sets SET {', '.join(updates)} WHERE id=?", vals
         )
         self.conn.commit()
 
