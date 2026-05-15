@@ -5,7 +5,7 @@ import os
 from PySide6.QtCore import QObject, Signal
 
 from section_tool.core.annotation import Annotation
-from section_tool.core.command_stack import Command, CommandStack
+from section_tool.core.commands import Command, CommandStack
 from section_tool.core.intersection import FaultHorizonIntersection
 from section_tool.core.polygons import SectionPolygon
 from section_tool.core.reference_line import ReferenceLine
@@ -183,11 +183,22 @@ class AppState(QObject):
     def command_stack(self) -> CommandStack:
         return self._cmd_stack
 
+    def execute_command(self, command: Command) -> None:
+        """Execute *command* via the stack (calls do(), pushes, clears redo)."""
+        self._cmd_stack.execute(command)
+        if command.description:
+            self.undo_performed.emit("")   # signal that stack changed
+
     def record_command(self, description: str,
                        undo, redo=None) -> None:
-        """Phase 7: record an already-applied operation for undo/redo."""
+        """Record an already-applied operation for undo/redo (backward compat).
+
+        Equivalent to building a Command with ``do=redo`` and calling push().
+        The operation is NOT re-executed — it must already have been applied.
+        """
         self._cmd_stack.push(Command(description=description,
-                                     undo=undo, redo=redo or (lambda: None)))
+                                     do=redo or (lambda: None),
+                                     undo=undo))
 
     def undo(self) -> None:
         desc = self._cmd_stack.undo()
