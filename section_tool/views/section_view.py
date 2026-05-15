@@ -113,6 +113,16 @@ class SectionView(QWidget):
         # ---- seismic projection cache (expensive per-section computation) ----
         # key: (section_name, ref_path) → (distances, data, perps)
         self._seismic_proj_cache: dict[tuple, tuple] = {}
+        # ---- seismic image artist cache ----
+        # The AxesImage objects from imshow — kept alive to avoid re-creating them.
+        self._seismic_img_artists: list = []
+        # Settings hash when the image artists were created
+        self._seismic_img_cache_key: tuple | None = None
+        # xlim/ylim when image artists were created (used for cache validity)
+        self._seismic_cache_xlim: tuple | None = None
+        self._seismic_cache_ylim: tuple | None = None
+        # vmax cache: key → float (expensive percentile computation)
+        self._seismic_vmax_cache: dict[tuple, float] = {}
         # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
@@ -333,7 +343,7 @@ class SectionView(QWidget):
         self._canvas.mpl_connect("button_release_event", self._on_sv_release)
         self._canvas.mpl_connect("scroll_event",         self._on_scroll_sv)
         self._canvas.mpl_connect("key_press_event",      self._on_sv_key)
-        self._canvas.mpl_connect("resize_event",         lambda _: self._canvas.draw_idle())
+        self._canvas.mpl_connect("resize_event",         self._on_sv_resize)
         self._canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def _connect_signals(self) -> None:
@@ -389,6 +399,7 @@ class SectionView(QWidget):
 
     def set_display_mode(self, mode: Literal["variable_density", "wiggle"]) -> None:
         self._display_mode = mode
+        self._invalidate_seismic_cache()
         self.render()
 
     def render_to_figure(
@@ -575,6 +586,74 @@ class SectionView(QWidget):
     # Rendering
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Seismic image caching helpers
+    # ------------------------------------------------------------------
+
+    def _seismic_settings_key(self, section) -> tuple:
+        """Stable hash of all settings that affect the seismic image appearance."""
+        sds = getattr(section, "seismic_display", None)
+        return (
+            section.name,
+            tuple(ref.path for ref in self._state.project.seismic_refs),
+            sds.clip_percentile if sds else 99.0,
+            sds.gain            if sds else 1.0,
+            sds.opacity         if sds else 1.0,
+            sds.colormap        if sds else "seismic_red_blue",
+            sds.show_wiggle     if sds else False,
+            self._display_mode,
+        )
+
+    def _is_seismic_cache_valid(self, section) -> bool:
+        """True when the existing imshow artists match the current state and view."""
+        if not self._seismic_img_artists:
+            return False
+        if section is None:
+            return False
+        # Check artists are still attached to the axes
+        if any(getattr(a, "axes", None) is None for a in self._seismic_img_artists):
+            return False
+        # Check display settings
+        if self._seismic_img_cache_key != self._seismic_settings_key(section):
+            return False
+        # Check xlim/ylim (invalidated by zoom, not by pan-during-drag)
+        try:
+            xl = tuple(round(v, 2) for v in self._ax.get_xlim())
+            yl = tuple(round(v, 2) for v in self._ax.get_ylim())
+        except Exception:
+            return False
+        return xl == self._seismic_cache_xlim and yl == self._seismic_cache_ylim
+
+    def _clear_overlay_artists(self) -> None:
+        """Remove all artists from the main axes EXCEPT ax.images (seismic imshow)."""
+        for line in list(self._ax.lines):
+            try: line.remove()
+            except Exception: pass
+        for patch in list(self._ax.patches):
+            try: patch.remove()
+            except Exception: pass
+        for coll in list(self._ax.collections):
+            try: coll.remove()
+            except Exception: pass
+        for text in list(self._ax.texts):
+            try: text.remove()
+            except Exception: pass
+        for art in list(self._ax.artists):
+            try: art.remove()
+            except Exception: pass
+
+    def _invalidate_seismic_cache(self) -> None:
+        """Force full seismic re-render on the next render() call."""
+        self._seismic_img_artists.clear()
+        self._seismic_img_cache_key = None
+        self._seismic_cache_xlim = None
+        self._seismic_cache_ylim = None
+        self._seismic_vmax_cache.clear()
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
     def request_render(self, *_args) -> None:
         """Schedule a render on the next idle cycle (debounced for signal bursts)."""
         if not self._redraw_timer.isActive():
@@ -594,18 +673,33 @@ class SectionView(QWidget):
             self._is_rendering = False
 
     def _render_impl(self) -> None:
-        """Internal render body — called only from render() with re-entry guard held."""
+        """Internal render body — called only from render() with re-entry guard held.
 
+        Uses a two-path render pipeline:
+
+        Fast path (seismic cache valid)
+            Removes only overlay artists (lines, patches, texts) from the axes,
+            keeping the seismic AxesImage in place.  Redraws the interpretation
+            layer (picks, grid, wells, etc.) on top.
+
+        Full path (cache invalid)
+            Clears the axes completely, re-renders the seismic imshow, then
+            draws the interpretation layer.  Cache metadata is updated at the
+            end so the next render can use the fast path.
+        """
         _t0 = time.perf_counter()
 
-        # FIX 2: save user's zoom/pan limits before the clear wipes them
+        # Save user zoom/pan before any clear wipes limits
         if self._ax_limits_set:
             _saved_xl = self._ax.get_xlim()
             _saved_yl = self._ax.get_ylim()
         else:
             _saved_xl = _saved_yl = None
 
-        self._ax.clear()
+        section = self._state.active_section
+        seismic_valid = self._is_seismic_cache_valid(section)
+
+        # ── Strat-axis is always cleared (it's cheap) ─────────────────
         self._strat_ax.clear()
         self._strat_ax.tick_params(
             left=False, bottom=False, labelbottom=False, labelleft=False
@@ -614,8 +708,13 @@ class SectionView(QWidget):
             self._strat_ax.spines[sp].set_visible(False)
         self._strat_ax.set_facecolor("white")
 
-        section = self._state.active_section
+        # ── No active section ──────────────────────────────────────────
         if section is None:
+            if not seismic_valid:
+                self._ax.clear()
+                self._seismic_img_artists.clear()
+            else:
+                self._clear_overlay_artists()
             self._section_name_label.setText("— no section —")
             self._ve_spin.setEnabled(False)
             self._depth_units_combo.setEnabled(False)
@@ -623,31 +722,55 @@ class SectionView(QWidget):
             self._canvas.draw_idle()
             return
 
+        # ── Sync header widgets ────────────────────────────────────────
         self._section_name_label.setText(section.name or "Unnamed section")
         self._ve_spin.setEnabled(True)
         self._depth_units_combo.setEnabled(True)
-        # Sync depth units combo
         u = section.depth_units if section.depth_units in _DEPTH_UNITS else "m"
         self._depth_units_combo.blockSignals(True)
         self._depth_units_combo.setCurrentIndex(_DEPTH_UNITS.index(u))
         self._depth_units_combo.blockSignals(False)
-        # Sync VE spinbox only when not locked
         if not self._ve_lock_btn.isChecked():
             self._ve_spin.blockSignals(True)
             self._ve_spin.setValue(section.vertical_exaggeration)
             self._ve_spin.blockSignals(False)
 
-        self._setup_axes(section)          # sets default limits
-        # FIX 2: restore user zoom/pan if limits were already customised
-        if _saved_xl is not None:
-            self._ax.set_xlim(_saved_xl)
-            self._ax.set_ylim(_saved_yl)
+        # ── Layer 1: background (seismic + image overlays) ────────────
+        if seismic_valid:
+            # Fast path: keep existing imshow artists, clear overlay only
+            self._clear_overlay_artists()
+            # Restore limits (they persist but may need explicit refresh)
+            if _saved_xl is not None:
+                self._ax.set_xlim(_saved_xl)
+                self._ax.set_ylim(_saved_yl)
         else:
-            self._ax_limits_set = True     # default limits now active
+            # Full path: rebuild axes and seismic image
+            self._ax.clear()
+            self._seismic_img_artists.clear()
+            self._setup_axes(section)
+            if _saved_xl is not None:
+                self._ax.set_xlim(_saved_xl)
+                self._ax.set_ylim(_saved_yl)
+            else:
+                self._ax_limits_set = True
 
-        # Render order: back → front (z-orders are explicit in each renderer)
-        self._render_image_overlays(section)  # zorder=0
-        self._render_seismic(section)         # zorder=1
+            self._render_image_overlays(section)  # zorder=0
+            self._render_seismic(section)          # zorder=1  ← expensive
+
+            # Store cache metadata after seismic is rendered
+            self._seismic_img_cache_key = self._seismic_settings_key(section)
+            try:
+                self._seismic_cache_xlim = tuple(
+                    round(v, 2) for v in self._ax.get_xlim()
+                )
+                self._seismic_cache_ylim = tuple(
+                    round(v, 2) for v in self._ax.get_ylim()
+                )
+            except Exception:
+                self._seismic_cache_xlim = None
+                self._seismic_cache_ylim = None
+
+        # ── Layer 2: interpretation overlay (always redrawn, fast) ────
         self._render_grid(section)            # zorder=2
         self._render_topography(section)      # zorder=2.2–2.3
         self._render_sea_level(section)       # zorder=2.5
@@ -1164,11 +1287,19 @@ class SectionView(QWidget):
                 distances, data = distances[mask], data[mask]
             if len(distances) < 2:
                 continue
-            vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
+
+            # Cache the expensive percentile computation
+            vmax_key = (section.name, ref.path, clip_pct, gain)
+            if vmax_key in self._seismic_vmax_cache:
+                vmax = self._seismic_vmax_cache[vmax_key]
+            else:
+                vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
+                self._seismic_vmax_cache[vmax_key] = vmax
+
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
-                self._ax.imshow(
+                artist = self._ax.imshow(
                     data.T,
                     aspect="auto",
                     extent=[distances[0], distances[-1], ds.samples[-1], ds.samples[0]],
@@ -1179,6 +1310,8 @@ class SectionView(QWidget):
                     alpha=opacity,
                     zorder=1,
                 )
+                # Store artist so cache-valid renders know it's still alive
+                self._seismic_img_artists.append(artist)
 
     def _render_wiggle(self, distances, data, samples) -> None:
         if len(distances) < 2:
@@ -2207,9 +2340,19 @@ class SectionView(QWidget):
             # Clear drag prep (no actual drag occurred)
             self._object_drag_press_pt = None
 
+    def _on_sv_resize(self, _event) -> None:
+        """Window resize: invalidate seismic xlim/ylim cache and redraw."""
+        self._seismic_cache_xlim = None
+        self._seismic_cache_ylim = None
+        self._canvas.draw_idle()
+
     def _on_scroll_sv(self, event) -> None:
         if event.inaxes is not self._ax:
             return
+        # Zoom changes view limits → invalidate the xlim/ylim portion of the cache
+        # (seismic data/settings cache remains valid — only the view state changes)
+        self._seismic_cache_xlim = None
+        self._seismic_cache_ylim = None
         factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
         cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
         cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
@@ -2296,11 +2439,13 @@ class SectionView(QWidget):
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
         self._seismic_proj_cache.clear()
+        self._invalidate_seismic_cache()
         self.request_render()
 
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
-        """Clear projection cache when section geometry changes."""
+        """Clear projection cache and seismic image cache when section changes."""
         self._seismic_proj_cache.clear()
+        self._invalidate_seismic_cache()
 
     # ------------------------------------------------------------------
     # Context menu
