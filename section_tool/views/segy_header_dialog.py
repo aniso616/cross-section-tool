@@ -8,7 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
     QMessageBox, QPushButton, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout,
+    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 
@@ -69,6 +69,30 @@ _GEOMETRY_FIELDS = [
 ]
 
 
+def _decode_text_header(raw_bytes: bytes) -> str:
+    """Decode a SEG-Y 3200-byte text header, trying EBCDIC then ASCII.
+
+    SEG-Y Rev 1 mandates EBCDIC (cp500), but many modern writers use ASCII.
+    Returns the best-quality decoding found.
+    """
+    for encoding in ("cp500", "cp037"):   # EBCDIC variants
+        try:
+            text = raw_bytes.decode(encoding)
+            printable = sum(1 for c in text if c.isprintable() or c in "\n\r\t")
+            if printable / max(len(text), 1) > 0.7:
+                return text
+        except Exception:
+            pass
+
+    for encoding in ("ascii", "cp1252", "latin-1"):
+        try:
+            return raw_bytes.decode(encoding, errors="replace")
+        except Exception:
+            pass
+
+    return raw_bytes.decode("latin-1", errors="replace")
+
+
 class SEGYHeaderDialog(QDialog):
     """Three-tab SEG-Y header inspector: text header, binary header, trace headers.
 
@@ -114,7 +138,7 @@ class SEGYHeaderDialog(QDialog):
             QApplication.restoreOverrideCursor()
 
         with f_ctx as f:
-            text_hdr = f.text[0].decode("cp500", errors="replace")
+            text_hdr = _decode_text_header(bytes(f.text[0]))
             bin_hdr  = {k: f.bin[k] for k in f.bin.keys()}
             n_show   = min(10, f.tracecount)
             trace_hdrs = [dict(f.header[i]) for i in range(n_show)]
@@ -141,8 +165,11 @@ class SEGYHeaderDialog(QDialog):
         mono = QFont("Courier New", 9)
         mono.setStyleHint(QFont.StyleHint.TypeWriter)
         te.setFont(mono)
-        # Standard text header: 40 lines × 80 chars
-        lines = [text[i*80:(i+1)*80] for i in range(40)]
+        # Text header is 3200 bytes = 40 lines × 80 chars.
+        # Split on fixed 80-char boundaries (handles text already decoded with
+        # embedded newlines from cp500 as well as plain-ASCII files).
+        stripped = text.replace("\r", "").replace("\n", "")
+        lines = [stripped[i:i + 80] for i in range(0, min(len(stripped), 3200), 80)]
         te.setPlainText("\n".join(lines))
         return te
 
