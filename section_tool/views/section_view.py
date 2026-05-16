@@ -113,13 +113,17 @@ class SectionView(QWidget):
         # ---- seismic projection cache (expensive per-section computation) ----
         # key: (section_name, ref_path) → (distances, data, perps)
         self._seismic_proj_cache: dict[tuple, tuple] = {}
-        # Pending zoom limits set by scroll handler — applied at END of full render
-        # (before canvas.draw) so they survive the ax.clear() + _setup_axes() cycle.
+        # Pending zoom limits applied at the start of the next render
         self._pending_xlim: tuple | None = None
         self._pending_ylim: tuple | None = None
         self._user_has_zoomed: bool = False
-        # vmax cache: key → float (expensive percentile computation)
-        self._seismic_vmax_cache: dict[tuple, float] = {}
+        # ---- persistent render artists ----
+        # Seismic imshow artists: created ONCE on full-setup, never destroyed on pan/zoom
+        self._seismic_artists: list = []
+        # All other (overlay) artists: removed and re-added every frame
+        self._overlay_artists: list = []
+        # True → next render does ax.clear() + recreates seismic artists
+        self._needs_full_setup: bool = True
         # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
@@ -238,7 +242,7 @@ class SectionView(QWidget):
         self._toolbar = NavigationToolbar2QT(self._canvas, self)
         self._toolbar.hide()
 
-        # Header bar: [section name] [depth-units combo] [VE spinbox] [VE lock]
+        # ── Row 1: section name, units, VE ─────────────────────────────
         self._header = QWidget()
         self._header.setFixedHeight(28)
         self._header.setStyleSheet(
@@ -252,7 +256,6 @@ class SectionView(QWidget):
         hl.addWidget(self._section_name_label)
         hl.addStretch()
 
-        # Depth units combo
         _units_lbl = QLabel("Units:")
         _units_lbl.setStyleSheet("color: #333333; font-size: 8pt;")
         hl.addWidget(_units_lbl)
@@ -265,39 +268,35 @@ class SectionView(QWidget):
         self._depth_units_combo.currentIndexChanged.connect(self._on_depth_units_changed)
         hl.addWidget(self._depth_units_combo)
 
-        # VE spinbox
         _ve_lbl = QLabel("VE:")
         _ve_lbl.setStyleSheet("color: #333333; font-size: 8pt;")
         hl.addWidget(_ve_lbl)
         self._ve_spin = QDoubleSpinBox()
-        self._ve_spin.setRange(0.5, 20.0)
+        self._ve_spin.setRange(0.5, 50.0)
         self._ve_spin.setSingleStep(0.5)
         self._ve_spin.setValue(1.0)
         self._ve_spin.setFixedWidth(60)
         self._ve_spin.setDecimals(1)
-        self._ve_spin.setKeyboardTracking(False)   # only fire after editing finishes
+        self._ve_spin.setKeyboardTracking(False)
         self._ve_spin.setStyleSheet(
             "color: #333333; background: #ffffff; border: 1px solid #999999; min-width: 60px;")
         self._ve_spin.setToolTip(
             "Vertical exaggeration (1.0 = true scale)\n"
             "Higher values stretch depth axis, steepening apparent dips."
         )
-        # Debounce: 150 ms after last keystroke before applying VE change
         self._ve_timer = QTimer(self)
         self._ve_timer.setSingleShot(True)
-        self._ve_timer.setInterval(150)
+        self._ve_timer.setInterval(200)
         self._ve_timer.timeout.connect(self._on_ve_changed)
         self._ve_spin.valueChanged.connect(lambda _v: self._ve_timer.start())
         hl.addWidget(self._ve_spin)
 
-        # VE lock — icon toggles between 🔒 and 🔓
-        self._ve_lock_btn = QPushButton("\U0001F513")   # 🔓 (unlocked default)
+        self._ve_lock_btn = QPushButton("\U0001F513")
         self._ve_lock_btn.setCheckable(True)
         self._ve_lock_btn.setFixedSize(24, 22)
         self._ve_lock_btn.setToolTip(
             "Lock VE: when locked, the same vertical exaggeration applies\n"
-            "to all sections and is preserved when switching between them.\n"
-            "Scroll or click to unlock."
+            "to all sections and is preserved when switching between them."
         )
         self._ve_lock_btn.setStyleSheet(
             "QPushButton { border: 1px solid #bbb; border-radius: 3px; font-size: 11px;"
@@ -309,17 +308,21 @@ class SectionView(QWidget):
         )
         hl.addWidget(self._ve_lock_btn)
 
-        # ---- Seismic stretch domain + velocity (FIX 5) ----
-        _sep = QLabel("  |")
-        _sep.setStyleSheet("color: #cccccc; font-size: 9pt;")
-        hl.addWidget(_sep)
+        # ── Row 2: seismic controls (hidden when no seismic) ────────────
+        self._seismic_row = QWidget()
+        self._seismic_row.setFixedHeight(26)
+        self._seismic_row.setStyleSheet(
+            "background: #eef2f5; border-bottom: 1px solid #ddd; color: #333333;")
+        sl = QHBoxLayout(self._seismic_row)
+        sl.setContentsMargins(8, 2, 8, 2)
+        sl.setSpacing(6)
         _dom_lbl = QLabel("Seismic:")
-        _dom_lbl.setStyleSheet("color: #555555; font-size: 8pt;")
-        hl.addWidget(_dom_lbl)
+        _dom_lbl.setStyleSheet("color: #555555; font-size: 8pt; font-weight: bold;")
+        sl.addWidget(_dom_lbl)
         self._seismic_domain_combo = QComboBox()
         self._seismic_domain_combo.addItem("Depth – linear stretch", "linear")
         self._seismic_domain_combo.addItem("TWT (native ms)", "native_twt")
-        self._seismic_domain_combo.setFixedWidth(150)
+        self._seismic_domain_combo.setFixedWidth(160)
         self._seismic_domain_combo.setToolTip(
             "Seismic Y-axis domain:\n"
             "Depth – linear stretch: convert TWT to depth using constant velocity\n"
@@ -328,14 +331,16 @@ class SectionView(QWidget):
         self._seismic_domain_combo.setStyleSheet("color: #333333; background: #ffffff;")
         self._seismic_domain_combo.currentIndexChanged.connect(
             self._on_seismic_domain_changed)
-        hl.addWidget(self._seismic_domain_combo)
-
+        sl.addWidget(self._seismic_domain_combo)
+        _vel_lbl = QLabel("V:")
+        _vel_lbl.setStyleSheet("color: #555555; font-size: 8pt;")
+        sl.addWidget(_vel_lbl)
         self._seismic_vel_spin = QDoubleSpinBox()
         self._seismic_vel_spin.setRange(500.0, 6000.0)
         self._seismic_vel_spin.setSingleStep(100.0)
         self._seismic_vel_spin.setValue(2000.0)
         self._seismic_vel_spin.setDecimals(0)
-        self._seismic_vel_spin.setFixedWidth(80)
+        self._seismic_vel_spin.setFixedWidth(76)
         self._seismic_vel_spin.setSuffix(" m/s")
         self._seismic_vel_spin.setToolTip(
             "Constant interval velocity used to convert TWT (ms) to depth (m).\n"
@@ -344,9 +349,11 @@ class SectionView(QWidget):
         self._seismic_vel_spin.setStyleSheet(
             "color: #333333; background: #ffffff; border: 1px solid #999999;")
         self._seismic_vel_spin.valueChanged.connect(self._on_seismic_velocity_changed)
-        hl.addWidget(self._seismic_vel_spin)
+        sl.addWidget(self._seismic_vel_spin)
+        sl.addStretch()
+        self._seismic_row.hide()   # shown when seismic refs are present
 
-        # Pick mode banner — hidden until picking is active
+        # ── Pick mode banner ─────────────────────────────────────────────
         self._pick_banner = QWidget()
         self._pick_banner.setFixedHeight(26)
         self._pick_banner.setObjectName("PickBanner")
@@ -374,6 +381,7 @@ class SectionView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._header)
+        layout.addWidget(self._seismic_row)
         layout.addWidget(self._pick_banner)
         layout.addWidget(self._canvas, stretch=1)
 
@@ -440,7 +448,7 @@ class SectionView(QWidget):
 
     def set_display_mode(self, mode: Literal["variable_density", "wiggle"]) -> None:
         self._display_mode = mode
-        self._invalidate_seismic_cache()
+        self._needs_full_setup = True
         self.render()
 
     def render_to_figure(
@@ -459,13 +467,17 @@ class SectionView(QWidget):
         if section is None:
             return fig
         old_ax, self._ax = self._ax, ax
+        old_seismic_artists = self._seismic_artists
+        old_overlay_artists = self._overlay_artists
+        self._seismic_artists = []
+        self._overlay_artists = []
         try:
             self._setup_axes(section)
             if self._ax_limits_set:
                 self._ax.set_xlim(old_ax.get_xlim())
                 self._ax.set_ylim(old_ax.get_ylim())
             self._render_image_overlays(section)
-            self._render_seismic(section)
+            self._setup_seismic_artists(section)
             self._render_grid(section)
             self._render_section_ends(section)
             self._render_reference_lines(section)
@@ -477,6 +489,8 @@ class SectionView(QWidget):
             self._render_annotations(section)
         finally:
             self._ax = old_ax
+            self._seismic_artists = old_seismic_artists
+            self._overlay_artists = old_overlay_artists
         return fig
 
     def apply_tool_cursor(self, tool_id: str) -> None:
@@ -648,8 +662,8 @@ class SectionView(QWidget):
         )
 
     def _invalidate_seismic_cache(self) -> None:
-        """Clear computed seismic display values — forces recompute on next render."""
-        self._seismic_vmax_cache.clear()
+        """Mark that the seismic artist must be rebuilt on the next render."""
+        self._needs_full_setup = True
 
     # ------------------------------------------------------------------
     # Rendering
@@ -674,11 +688,10 @@ class SectionView(QWidget):
             self._is_rendering = False
 
     def _render_impl(self) -> None:
-        """Single-pass full render."""
         _t0 = time.perf_counter()
         section = self._state.active_section
 
-        # ── Strat axis setup (always, cheap) ──────────────────────────
+        # Strat axis: always clear and re-render (cheap, separate axis)
         self._strat_ax.clear()
         self._strat_ax.tick_params(
             left=False, bottom=False, labelbottom=False, labelleft=False)
@@ -686,17 +699,20 @@ class SectionView(QWidget):
             self._strat_ax.spines[sp].set_visible(False)
         self._strat_ax.set_facecolor("white")
 
-        # ── No active section ──────────────────────────────────────────
         if section is None:
+            # Clear everything and show placeholder
+            self._seismic_artists.clear()
+            self._overlay_artists.clear()
             self._ax.clear()
             self._section_name_label.setText("— no section —")
+            self._seismic_row.hide()
             self._ve_spin.setEnabled(False)
             self._depth_units_combo.setEnabled(False)
             self._ax_limits_set = False
             self._canvas.draw_idle()
             return
 
-        # ── Sync header widgets ────────────────────────────────────────
+        # Sync header widgets
         self._section_name_label.setText(section.name or "Unnamed section")
         self._ve_spin.setEnabled(True)
         self._depth_units_combo.setEnabled(True)
@@ -720,6 +736,10 @@ class SectionView(QWidget):
         self._seismic_vel_spin.blockSignals(False)
         self._seismic_vel_spin.setVisible(dom_idx == 0)
 
+        has_seis = bool(self._state.project.seismic_refs
+                        or self._state.get_seismic_for_section(section.name)[0] is not None)
+        self._seismic_row.setVisible(has_seis)
+
         self._full_render(section)
 
         if self._show_fps:
@@ -727,18 +747,57 @@ class SectionView(QWidget):
             self.frame_time_ms.emit(ms)
 
     def _full_render(self, section) -> None:
-        """Clear axes, render all layers, apply zoom limits, then draw."""
-        self._ax.clear()
-        self._setup_axes(section)
+        """Persistent-artist render pipeline.
 
-        self._render_image_overlays(section)
-        self._render_seismic(section)
+        Full-setup path (seismic changes / section changes):
+            ax.clear() → setup axes → create seismic imshow artists → overlays
+
+        Fast path (picks / wells / zoom / pan):
+            remove overlay artists individually → apply limits → overlays
+            The seismic imshow artists are NEVER touched — Matplotlib clips them
+            to the current axis limits automatically.
+        """
+        if self._needs_full_setup:
+            # Seismic artists are gone after ax.clear — reset tracking
+            self._seismic_artists.clear()
+            self._overlay_artists.clear()
+            self._ax.clear()
+            self._setup_axes(section)
+            self._render_image_overlays(section)
+            self._setup_seismic_artists(section)   # creates persistent imshow(s)
+            # Apply pending limits AFTER seismic setup (imshow must not override them)
+            if self._pending_xlim is not None:
+                self._ax.set_xlim(self._pending_xlim)
+                self._ax.set_ylim(self._pending_ylim)
+                self._pending_xlim = None
+                self._pending_ylim = None
+            self._ax_limits_set = True
+            self._needs_full_setup = False
+        else:
+            # Fast path: only remove overlay artists, seismic artists untouched
+            for art in self._overlay_artists:
+                try: art.remove()
+                except Exception: pass
+            self._overlay_artists.clear()
+            if self._pending_xlim is not None:
+                self._ax.set_xlim(self._pending_xlim)
+                self._ax.set_ylim(self._pending_ylim)
+                self._pending_xlim = None
+                self._pending_ylim = None
+                self._ax_limits_set = True
+
+        # Overlays — always re-rendered, appending to _overlay_artists
+        self._render_overlays(section)
+        self._canvas.draw_idle()
+
+    def _render_overlays(self, section) -> None:
+        """Render all lightweight overlay layers, tracking artists for next-frame removal."""
+        if self._strat_col_visible:
+            self._render_strat_column(section)
         self._render_grid(section)
         self._render_topography(section)
         self._render_sea_level(section)
         self._render_section_ends(section)
-        if self._strat_col_visible:
-            self._render_strat_column(section)
         self._render_reference_lines(section)
         self._render_polygons(section)
         self._render_surfaces(section)
@@ -752,18 +811,6 @@ class SectionView(QWidget):
         self._render_polygon_in_progress()
         self._render_annotations(section)
         self._render_seismic_watermark(section)
-
-        # Apply zoom limits AFTER rendering, BEFORE draw — survives ax.clear()
-        if self._pending_xlim is not None:
-            self._ax.set_xlim(self._pending_xlim)
-            self._ax.set_ylim(self._pending_ylim)
-            self._pending_xlim = None
-            self._pending_ylim = None
-            self._ax_limits_set = True
-        else:
-            self._ax_limits_set = True
-
-        self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Axis setup
@@ -864,44 +911,40 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _render_sea_level(self, section: Section) -> None:
-        """Render a sea level reference line at depth=0."""
         if not self._show_sea_level:
             return
         yl = self._ax.get_ylim()
         if min(yl) <= 0.0 <= max(yl):
-            self._ax.axhline(0.0, color="#4682B4", linewidth=1.5,
-                             linestyle="-", zorder=2.5, alpha=0.85)
+            self._overlay_artists.append(
+                self._ax.axhline(0.0, color="#4682B4", linewidth=1.5,
+                                 linestyle="-", zorder=2.5, alpha=0.85))
             xl = self._ax.get_xlim()
-            self._ax.text(xl[1], 0.0, "  Sea Level", fontsize=7,
-                          color="#4682B4", va="bottom", ha="right",
-                          zorder=2.5, alpha=0.85)
+            self._overlay_artists.append(
+                self._ax.text(xl[1], 0.0, "  Sea Level", fontsize=7,
+                              color="#4682B4", va="bottom", ha="right",
+                              zorder=2.5, alpha=0.85))
 
     def _render_topography(self, section: Section) -> None:
-        """Render a topography profile if one has been loaded for this section."""
         topo_data = self._topography.get(section.name)
         if topo_data is None:
             return
         dists, elevs = topo_data
         if len(dists) < 2:
             return
-        # Sort by distance
         order = np.argsort(dists)
         dists, elevs = dists[order], elevs[order]
-
-        xl = self._ax.get_xlim()
-        yl = self._ax.get_ylim()
-        y_top = min(yl)  # depth axis is inverted (0 at top)
-
-        # Fill sky above the topography line (from y_top to elevation)
-        self._ax.fill_between(dists, y_top, elevs,
-                              color="#87CEEB", alpha=0.30, zorder=2.2,
-                              interpolate=True)
-        # Topography surface line (bold black)
-        self._ax.plot(dists, elevs, color="#222222", linewidth=2.0,
-                      zorder=2.3, solid_capstyle="round")
-        # Label at rightmost point
-        self._ax.text(float(dists[-1]), float(elevs[-1]), "  Surface",
-                      fontsize=7, color="#222222", va="bottom", zorder=2.3)
+        yl    = self._ax.get_ylim()
+        y_top = min(yl)
+        self._overlay_artists.append(
+            self._ax.fill_between(dists, y_top, elevs,
+                                  color="#87CEEB", alpha=0.30, zorder=2.2,
+                                  interpolate=True))
+        self._overlay_artists.extend(
+            self._ax.plot(dists, elevs, color="#222222", linewidth=2.0,
+                          zorder=2.3, solid_capstyle="round"))
+        self._overlay_artists.append(
+            self._ax.text(float(dists[-1]), float(elevs[-1]), "  Surface",
+                          fontsize=7, color="#222222", va="bottom", zorder=2.3))
 
     def _render_grid(self, section: Section) -> None:
         xl  = self._ax.get_xlim()
@@ -911,19 +954,19 @@ class SectionView(QWidget):
         x_interval = _nice_interval(x_span / 5)
         y_interval = _nice_interval(y_span / 5)
 
-        # Build grid as a single LineCollection — O(1) artists instead of O(N lines)
         xs = np.arange(math.floor(xl[0] / x_interval) * x_interval,
                        xl[1] + x_interval, x_interval)
         ys = np.arange(math.floor(min(yl) / y_interval) * y_interval,
                        max(yl) + y_interval, y_interval)
         segments = []
-        for x in xs[:200]:   # hard cap
+        for x in xs[:200]:
             segments.append([(x, yl[0]), (x, yl[1])])
         for y in ys[:200]:
             segments.append([(xl[0], y), (xl[1], y)])
         if segments:
             lc = LineCollection(segments, colors="#e0e0e0", linewidths=0.5,
                                 linestyles="--", zorder=2)
+            self._overlay_artists.append(lc)
             self._ax.add_collection(lc)
 
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
@@ -931,28 +974,27 @@ class SectionView(QWidget):
         self._ax.ticklabel_format(style="plain", axis="both")
 
     def _render_seismic_watermark(self, section: Section) -> None:
-        """Show a subtle corner label when linear TWT→depth stretch is active."""
         sds = getattr(section, "seismic_display", None)
         if sds is None or sds.stretch_mode != "linear":
             return
-        # Only show if there is at least one TWT seismic ref loaded
         has_twt = any(
             (ds := self._seismic_cache.get(ref.path)) is not None
             and getattr(ds, "domain", "") == "twt"
             for ref in self._state.project.seismic_refs
         )
-        if not has_twt:
+        ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
+        if not has_twt and not (ex_meta and ex_meta.get("domain") == "twt"):
             return
-        self._ax.text(
-            0.99, 0.01,
-            f"Linear stretch  V = {sds.constant_velocity:.0f} m/s",
-            fontsize=7, color="#999999", style="italic",
-            ha="right", va="bottom", zorder=20,
-            transform=self._ax.transAxes,
-        )
+        self._overlay_artists.append(
+            self._ax.text(
+                0.99, 0.01,
+                f"Linear stretch  V = {sds.constant_velocity:.0f} m/s",
+                fontsize=7, color="#999999", style="italic",
+                ha="right", va="bottom", zorder=20,
+                transform=self._ax.transAxes,
+            ))
 
     def _render_annotations(self, section: Section) -> None:
-        """Phase 6: draw text annotations (and optional leader lines)."""
         for ann in self._state.project.annotations:
             if ann.section_name and ann.section_name != section.name:
                 continue
@@ -961,33 +1003,32 @@ class SectionView(QWidget):
             px, pz = ann.position
             if ann.anchor_point is not None:
                 ax_, az_ = ann.anchor_point
-                self._ax.annotate(
+                self._overlay_artists.append(self._ax.annotate(
                     ann.text,
                     xy=(ax_, az_), xytext=(px, pz),
                     fontsize=ann.font_size, color=color,
                     rotation=ann.rotation_degrees,
                     arrowprops=dict(arrowstyle="-", color=color, lw=0.8),
                     zorder=15,
-                )
+                ))
             else:
-                self._ax.text(
-                    px, pz, ann.text,
-                    fontsize=ann.font_size, color=color,
-                    rotation=ann.rotation_degrees, zorder=15,
-                )
+                self._overlay_artists.append(
+                    self._ax.text(
+                        px, pz, ann.text,
+                        fontsize=ann.font_size, color=color,
+                        rotation=ann.rotation_degrees, zorder=15,
+                    ))
 
     def _render_section_ends(self, section: Section) -> None:
-        """Draw vertical end-cap lines at x=0 and x=total_length."""
         total = section.total_length()
         yl    = self._ax.get_ylim()
         ylo, yhi = min(yl), max(yl)
         kw = dict(color="#666666", linewidth=1.5, alpha=0.7, zorder=2,
                   solid_capstyle="butt")
-        self._ax.plot([0, 0],         [ylo, yhi], **kw)
-        self._ax.plot([total, total], [ylo, yhi], **kw)
+        self._overlay_artists.extend(self._ax.plot([0, 0],         [ylo, yhi], **kw))
+        self._overlay_artists.extend(self._ax.plot([total, total], [ylo, yhi], **kw))
 
     def _render_reference_lines(self, section: Section) -> None:
-        """Phase 2/4: horizontal, vertical, and angled construction lines."""
         xl = self._ax.get_xlim()
         yl = self._ax.get_ylim()
         ylo, yhi = min(yl), max(yl)
@@ -997,30 +1038,32 @@ class SectionView(QWidget):
                 continue
             label = rl.name or ""
             if rl.kind == "horizontal":
-                self._ax.axhline(rl.value, **kw)
+                self._overlay_artists.append(self._ax.axhline(rl.value, **kw))
                 if label:
-                    self._ax.text(xl[1], rl.value, f" {label}", fontsize=6,
-                                  color="#999", va="center", ha="right", zorder=1)
+                    self._overlay_artists.append(
+                        self._ax.text(xl[1], rl.value, f" {label}", fontsize=6,
+                                      color="#999", va="center", ha="right", zorder=1))
             elif rl.kind == "vertical":
-                self._ax.axvline(rl.value, **kw)
+                self._overlay_artists.append(self._ax.axvline(rl.value, **kw))
                 if label:
-                    self._ax.text(rl.value, ylo, f" {label}", fontsize=6,
-                                  color="#999", va="bottom", ha="left",
-                                  rotation=90, zorder=1)
+                    self._overlay_artists.append(
+                        self._ax.text(rl.value, ylo, f" {label}", fontsize=6,
+                                      color="#999", va="bottom", ha="left",
+                                      rotation=90, zorder=1))
             elif rl.kind == "angled":
-                # Extend far beyond view in both directions, clip to axes
                 ang = math.radians(rl.angle_deg)
                 far = max(abs(xl[1] - xl[0]), abs(yhi - ylo)) * 10
                 dx  = math.cos(ang) * far
-                dy  = -math.sin(ang) * far   # depth increases downward
-                self._ax.plot(
+                dy  = -math.sin(ang) * far
+                self._overlay_artists.extend(self._ax.plot(
                     [rl.anchor_x - dx, rl.anchor_x + dx],
                     [rl.anchor_y - dy, rl.anchor_y + dy],
                     **kw,
-                )
+                ))
                 if label:
-                    self._ax.text(rl.anchor_x, rl.anchor_y, f" {label}",
-                                  fontsize=6, color="#999", zorder=1)
+                    self._overlay_artists.append(
+                        self._ax.text(rl.anchor_x, rl.anchor_y, f" {label}",
+                                      fontsize=6, color="#999", zorder=1))
 
         # A-Ref rubber band (anchor set, cursor pending)
         if self._ref_line_tool == "a_ref" and self._aref_anchor and self._cursor_data:
@@ -1028,30 +1071,23 @@ class SectionView(QWidget):
             cx, cy   = self._cursor_data
             dx, dy   = cx - ax_, cy - ay_
             ang_d    = math.degrees(math.atan2(-dy, dx))
-            self._ax.plot([ax_, cx], [ay_, cy],
-                          color="#888", lw=1.0, linestyle="--", zorder=9)
-            self._ax.text(cx, cy, f"  {ang_d:.0f}°", fontsize=7,
-                          color="#555", zorder=9)
+            self._overlay_artists.extend(
+                self._ax.plot([ax_, cx], [ay_, cy],
+                              color="#888", lw=1.0, linestyle="--", zorder=9))
+            self._overlay_artists.append(
+                self._ax.text(cx, cy, f"  {ang_d:.0f}°", fontsize=7,
+                              color="#555", zorder=9))
 
     def _render_intersections(self, section) -> None:
-        """Render topology intersection markers as display-only overlays.
-
-        These are purely visual — they are NEVER pick nodes and cannot
-        be selected or moved.  They render as small cyan crosshairs that
-        are visually distinct from all pick-node shapes.
-        """
         topo = self._state.topology
         if topo is None or topo.section_name != section.name:
             return
-        # Only show non-boundary intersections (horizon×fault, etc.)
-        ipts = [p for p in topo.intersections
-                if "boundary" not in p.type]
+        ipts = [p for p in topo.intersections if "boundary" not in p.type]
         if not ipts:
             return
         xl, xr = self._ax.get_xlim()
         yl = self._ax.get_ylim()
         y_lo, y_hi = min(yl), max(yl)
-        # 7px crosshair in data units
         try:
             inv = self._ax.transData.inverted()
             p0 = inv.transform([0, 0])
@@ -1064,21 +1100,18 @@ class SectionView(QWidget):
             sx, sy = pt.x, pt.y
             if not (xl <= sx <= xr and y_lo <= sy <= y_hi):
                 continue
-            # Horizontal bar of crosshair
-            self._ax.plot([sx - hw, sx + hw], [sy, sy],
-                          color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round")
-            # Vertical bar of crosshair
-            self._ax.plot([sx, sx], [sy - hh, sy + hh],
-                          color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round")
-            # Tooltip-style annotation (only when very few intersections)
-            # (left out to avoid clutter)
+            self._overlay_artists.extend(
+                self._ax.plot([sx - hw, sx + hw], [sy, sy],
+                              color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round"))
+            self._overlay_artists.extend(
+                self._ax.plot([sx, sx], [sy - hh, sy + hh],
+                              color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round"))
 
     def _render_snap_indicator(self) -> None:
-        """Magenta diamond at snapped cursor position."""
         if self._snap_point is None:
             return
         sx, sy = self._snap_point
-        s = 8  # half-size in screen pixels
+        s = 8
         try:
             inv = self._ax.transData.inverted()
             p0 = inv.transform([0, 0])
@@ -1087,11 +1120,11 @@ class SectionView(QWidget):
             dy = abs(float(p1[1]) - float(p0[1]))
         except Exception:
             return
-        # Rotated square (diamond) in magenta
-        self._ax.plot([sx, sx + dx], [sy, sy + dy], color="magenta", lw=1.5, zorder=13)
-        self._ax.plot([sx + dx, sx], [sy + dy, sy + 2*dy], color="magenta", lw=1.5, zorder=13)
-        self._ax.plot([sx, sx - dx], [sy + 2*dy, sy + dy], color="magenta", lw=1.5, zorder=13)
-        self._ax.plot([sx - dx, sx], [sy + dy, sy], color="magenta", lw=1.5, zorder=13)
+        kw = dict(color="magenta", lw=1.5, zorder=13)
+        self._overlay_artists.extend(self._ax.plot([sx, sx + dx],    [sy, sy + dy],      **kw))
+        self._overlay_artists.extend(self._ax.plot([sx + dx, sx],    [sy + dy, sy+2*dy], **kw))
+        self._overlay_artists.extend(self._ax.plot([sx, sx - dx],    [sy+2*dy, sy + dy], **kw))
+        self._overlay_artists.extend(self._ax.plot([sx - dx, sx],    [sy + dy, sy],      **kw))
 
     # ------------------------------------------------------------------
     # Object renderers
@@ -1145,31 +1178,29 @@ class SectionView(QWidget):
         base_z = 8 if category == "Horizons" else 7
         zorder = base_z + 1 if (is_active or is_selected) else base_z
 
-        # Selection glow (Phase 2)
         if is_selected:
-            self._ax.plot(d_sec, z_sec, color=hp.color,
-                          linewidth=render_lw * 3, alpha=0.20,
-                          zorder=zorder - 1, solid_capstyle="round")
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color,
+                              linewidth=render_lw * 3, alpha=0.20,
+                              zorder=zorder - 1, solid_capstyle="round"))
 
-        # Only draw the main line for non-decorated types (decorated types
-        # draw their own lines in _render_line_decoration)
         if not decorated:
-            self._ax.plot(d_sec, z_sec, color=hp.color,
-                          linewidth=render_lw, linestyle=ls, zorder=zorder)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color,
+                              linewidth=render_lw, linestyle=ls, zorder=zorder))
 
-        # Phase A/B: contact-type / fault-type decorations
         if len(d_sec) >= 2:
             self._render_line_decoration(hp, d_sec, z_sec, category, lw)
 
-        # Phase 2: nodes only in edit mode for this object
         if is_edit:
             for fi_full in sec_idxs:
                 d = float(hp._distances[fi_full])
                 z = float(hp._depths[fi_full])
                 ms, fc, ec, ew = self._pick_point_style(category, obj_idx, fi_full)
-                self._ax.plot(d, z, marker,
-                              markersize=ms, markerfacecolor=fc,
-                              markeredgecolor=ec, markeredgewidth=ew, zorder=11)
+                self._overlay_artists.extend(
+                    self._ax.plot(d, z, marker,
+                                  markersize=ms, markerfacecolor=fc,
+                                  markeredgecolor=ec, markeredgewidth=ew, zorder=11))
 
     def _render_line_decoration(
         self, hp, d_sec: np.ndarray, z_sec: np.ndarray,
@@ -1183,22 +1214,25 @@ class SectionView(QWidget):
 
         if ct in ("unconformity", "angular_unconformity"):
             xw, yw = _wavy_coords(self._ax, d_sec, z_sec, 3.0, 20.0)
-            self._ax.plot(xw, yw, color=hp.color, lw=base_lw, zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(xw, yw, color=hp.color, lw=base_lw, zorder=3))
 
         elif ct == "disconformity":
             xw, yw = _wavy_coords(self._ax, d_sec, z_sec, 3.0, 20.0)
-            self._ax.plot(xw, yw, color=hp.color, lw=base_lw,
-                          linestyle="--", zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(xw, yw, color=hp.color, lw=base_lw, linestyle="--", zorder=3))
 
         elif ct == "intrusive_contact":
             ticks = _line_ticks(self._ax, d_sec, z_sec, 30.0, 6.0, 1.0)
             for x0, y0, x1, y1 in ticks:
-                self._ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
-                                  arrowprops=dict(arrowstyle="x", color=hp.color,
-                                                  lw=0.8), zorder=4)
+                self._overlay_artists.append(
+                    self._ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                                      arrowprops=dict(arrowstyle="x", color=hp.color,
+                                                      lw=0.8), zorder=4))
 
         elif ct == "sequence_boundary":
-            self._ax.plot(d_sec, z_sec, color=hp.color, lw=2.5, zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color, lw=2.5, zorder=3))
 
         elif ct == "maximum_flooding_surface":
             tris = _line_triangles(self._ax, d_sec, z_sec, 40.0, 7.0, -1.0)
@@ -1207,11 +1241,13 @@ class SectionView(QWidget):
                 patch = MplPoly(verts, closed=True,
                                 facecolor=hp.color, edgecolor=hp.color,
                                 lw=0.5, zorder=4)
+                self._overlay_artists.append(patch)
                 self._ax.add_patch(patch)
 
         elif ft == "reverse" or ft == "thrust":
             lw_line = base_lw * (1.3 if ft == "thrust" else 1.0)
-            self._ax.plot(d_sec, z_sec, color=hp.color, lw=lw_line, zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color, lw=lw_line, zorder=3))
             side = 1.0 if getattr(hp, "dip_direction", "right") == "right" else -1.0
             tris = _line_triangles(self._ax, d_sec, z_sec, 40.0, 8.0, side)
             from matplotlib.patches import Polygon as MplPoly
@@ -1219,18 +1255,22 @@ class SectionView(QWidget):
                 patch = MplPoly(verts, closed=True,
                                 facecolor=hp.color, edgecolor=hp.color,
                                 lw=0.5, zorder=4)
+                self._overlay_artists.append(patch)
                 self._ax.add_patch(patch)
 
         elif ft in ("normal", "growth_fault"):
-            self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw, zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw, zorder=3))
             side = 1.0 if getattr(hp, "dip_direction", "right") == "right" else -1.0
             ticks = _line_ticks(self._ax, d_sec, z_sec, 40.0, 8.0, side)
             for x0, y0, x1, y1 in ticks:
-                self._ax.plot([x0, x1], [y0, y1],
-                              color=hp.color, lw=0.9, zorder=4)
+                self._overlay_artists.extend(
+                    self._ax.plot([x0, x1], [y0, y1],
+                                  color=hp.color, lw=0.9, zorder=4))
 
         elif ft == "detachment":
-            self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw * 2, zorder=3)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw * 2, zorder=3))
 
         # else: conformable / strike_slip / marker_bed — rendered by main plot above
 
@@ -1272,26 +1312,54 @@ class SectionView(QWidget):
             except Exception:
                 pass
 
-    def _render_seismic(self, section: Section) -> None:
-        sds        = getattr(section, "seismic_display", None)
-        clip_pct   = sds.clip_percentile   if sds else 99.0
-        gain       = sds.gain              if sds else 1.0
-        opacity    = sds.opacity           if sds else 1.0
-        cmap_key   = sds.colormap          if sds else "seismic_red_blue"
-        show_wig   = (sds.show_wiggle if sds else False) or (self._display_mode == "wiggle")
-        cmap_name  = _SEGY_CMAP.get(cmap_key, "seismic")
-        stretch    = sds.stretch_mode      if sds else "linear"
-        v_ms       = sds.constant_velocity if sds else 2000.0
+    def _setup_seismic_artists(self, section: Section) -> None:
+        """Create persistent seismic imshow artist(s). Called ONCE per full setup.
 
-        # ── Phase 3: extracted data path (fast, visible-window only) ───
+        The created AxesImage objects are stored in ``_seismic_artists`` and are
+        NEVER removed on overlay-only renders — Matplotlib clips them to the
+        current axis limits automatically, making zoom/pan instant.
+        """
+        sds      = getattr(section, "seismic_display", None)
+        clip_pct = sds.clip_percentile   if sds else 99.0
+        gain     = sds.gain              if sds else 1.0
+        opacity  = sds.opacity           if sds else 1.0
+        cmap_key = sds.colormap          if sds else "seismic_red_blue"
+        stretch  = sds.stretch_mode      if sds else "linear"
+        v_ms     = sds.constant_velocity if sds else 2000.0
+        cmap_name = _SEGY_CMAP.get(cmap_key, "seismic")
+
+        def _imshow(img_data, dist0, dist1, y_top, y_bot):
+            vmax = float(np.percentile(np.abs(img_data), clip_pct) or 1.0) * gain
+            art = self._ax.imshow(
+                img_data,
+                aspect="auto",
+                extent=[dist0, dist1, y_bot, y_top],
+                origin="upper",
+                cmap=cmap_name,
+                vmin=-vmax, vmax=vmax,
+                interpolation="bilinear",
+                alpha=opacity,
+                zorder=1,
+            )
+            self._seismic_artists.append(art)
+
+        # Extracted seismic (preferred — already projected onto section)
         ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
         if ex_data is not None and ex_meta is not None:
-            self._render_seismic_extracted(
-                ex_data, ex_meta, cmap_name, clip_pct, gain, opacity, stretch, v_ms
-            )
+            samples   = np.asarray(ex_meta["samples"])
+            distances = np.asarray(ex_meta["distances"])
+            domain    = ex_meta.get("domain", "twt")
+            if stretch == "linear" and domain == "twt":
+                scale = v_ms / 2000.0
+                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+            else:
+                y_top, y_bot = float(samples[0]), float(samples[-1])
+            if ex_data.shape[1] >= 2:
+                _imshow(ex_data, float(distances[0]), float(distances[-1]), y_top, y_bot)
             return
 
-        # ── Fallback: project full SEG-Y on the fly ───────────────────
+        # Fallback: project full SEG-Y on the fly (slow, only when no extraction)
+        show_wig = (sds.show_wiggle if sds else False) or (self._display_mode == "wiggle")
         for ref in self._state.project.seismic_refs:
             ds = self._get_or_load_seismic(ref)
             if ds is None or ds.n_traces == 0:
@@ -1307,135 +1375,15 @@ class SectionView(QWidget):
                 distances, data = distances[mask], data[mask]
             if len(distances) < 2:
                 continue
-
-            vmax_key = (section.name, ref.path, clip_pct, gain)
-            if vmax_key in self._seismic_vmax_cache:
-                vmax = self._seismic_vmax_cache[vmax_key]
-            else:
-                vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
-                self._seismic_vmax_cache[vmax_key] = vmax
-
             if stretch == "linear" and ds.domain == "twt":
                 scale = v_ms / 2000.0
-                y_top = float(ds.samples[0])  * scale
-                y_bot = float(ds.samples[-1]) * scale
+                y_top, y_bot = float(ds.samples[0]) * scale, float(ds.samples[-1]) * scale
             else:
-                y_top = float(ds.samples[0])
-                y_bot = float(ds.samples[-1])
-
+                y_top, y_bot = float(ds.samples[0]), float(ds.samples[-1])
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
-                self._ax.imshow(
-                    data.T,
-                    aspect="auto",
-                    extent=[distances[0], distances[-1], y_bot, y_top],
-                    origin="upper",
-                    cmap=cmap_name,
-                    vmin=-vmax, vmax=vmax,
-                    interpolation="bilinear",
-                    alpha=opacity,
-                    zorder=1,
-                )
-
-    def _render_seismic_extracted(
-        self,
-        data: np.ndarray,
-        meta: dict,
-        cmap_name: str,
-        clip_pct: float,
-        gain: float,
-        opacity: float,
-        stretch: str,
-        v_ms: float,
-    ) -> None:
-        """Render extracted seismic using a zero-copy view of the visible window.
-
-        ``data`` shape: (n_samples, n_traces) — rows = depth/time, cols = distance.
-        ``meta`` contains 'distances' and 'samples' arrays with axis coordinates.
-        """
-        distances = np.asarray(meta["distances"], dtype=np.float64)
-        samples   = np.asarray(meta["samples"],   dtype=np.float64)
-        domain    = meta.get("domain", "twt")
-
-        if len(distances) < 2 or data.shape[1] < 2:
-            return
-
-        # Convert samples to depth coordinates for extent calculation
-        if stretch == "linear" and domain == "twt":
-            scale    = v_ms / 2000.0
-            y_top    = float(samples[0])  * scale
-            y_bot    = float(samples[-1]) * scale
-            # Inverse scale for slicing back to sample indices
-            inv_scale = 1.0 / scale if scale else 1.0
-        else:
-            y_top = float(samples[0])
-            y_bot = float(samples[-1])
-            inv_scale = 1.0
-
-        # ── Visible-window slice — numpy view, zero-copy ──────────────
-        xl = self._ax.get_xlim()
-        yl = self._ax.get_ylim()   # inverted: yl[0]=bottom (deep), yl[1]=top (shallow)
-
-        # Clamp to data range
-        d0 = max(xl[0], float(distances[0]))
-        d1 = min(xl[1], float(distances[-1]))
-        if d0 >= d1:
-            d0, d1 = float(distances[0]), float(distances[-1])
-
-        # Depth axis limits (y is inverted, yl[0] > yl[1] in display)
-        y_vis_top = min(yl)    # numerically smaller = shallower
-        y_vis_bot = max(yl)    # numerically larger  = deeper
-
-        # Convert visible depth limits back to sample-axis coordinates
-        s_vis_top = y_vis_top * inv_scale
-        s_vis_bot = y_vis_bot * inv_scale
-
-        # Trace indices for visible distance window
-        t0 = max(0, int(np.searchsorted(distances, d0, side="left"))  - 1)
-        t1 = min(data.shape[1], int(np.searchsorted(distances, d1, side="right")) + 1)
-
-        # Sample indices for visible depth window
-        # samples array is monotonically increasing (top → bottom)
-        s0 = max(0, int(np.searchsorted(samples, min(s_vis_top, s_vis_bot), side="left"))  - 1)
-        s1 = min(data.shape[0], int(np.searchsorted(samples, max(s_vis_top, s_vis_bot), side="right")) + 1)
-
-        if t1 <= t0 or s1 <= s0:
-            return
-
-        # Zero-copy slice of the visible region
-        vis_data      = data[s0:s1, t0:t1]
-        vis_distances = distances[t0:t1]
-        vis_samples   = samples[s0:s1]
-
-        # Compute clip/gain on the visible slice for fast percentile
-        sec_name = meta.get("section_name", "")
-        vmax_key = ("extracted", sec_name, clip_pct, gain)
-        if vmax_key in self._seismic_vmax_cache:
-            vmax = self._seismic_vmax_cache[vmax_key]
-        else:
-            vmax = float(np.percentile(np.abs(vis_data), clip_pct) or 1.0) * gain
-            self._seismic_vmax_cache[vmax_key] = vmax
-
-        # Convert sample coordinates to depth for extent
-        if stretch == "linear" and domain == "twt":
-            ext_top = float(vis_samples[0])  * (v_ms / 2000.0)
-            ext_bot = float(vis_samples[-1]) * (v_ms / 2000.0)
-        else:
-            ext_top = float(vis_samples[0])
-            ext_bot = float(vis_samples[-1])
-
-        self._ax.imshow(
-            vis_data,
-            aspect="auto",
-            extent=[float(vis_distances[0]), float(vis_distances[-1]), ext_bot, ext_top],
-            origin="upper",
-            cmap=cmap_name,
-            vmin=-vmax, vmax=vmax,
-            interpolation="bilinear",
-            alpha=opacity,
-            zorder=1,
-        )
+                _imshow(data.T, float(distances[0]), float(distances[-1]), y_top, y_bot)
 
     def _render_wiggle(self, distances, data, samples) -> None:
         if len(distances) < 2:
@@ -1454,9 +1402,11 @@ class SectionView(QWidget):
             valid = ~np.isnan(z_values)
             if not np.any(valid):
                 continue
-            self._ax.plot(distances[valid], z_values[valid],
-                          color="darkorange", linewidth=1.5, linestyle="--",
-                          alpha=0.85, zorder=6)
+            self._overlay_artists.extend(
+                self._ax.plot(distances[valid], z_values[valid],
+                              color="darkorange", linewidth=1.5, linestyle="--",
+                              alpha=0.85, zorder=6)
+            )
 
     def _render_polygons(self, section: Section) -> None:
         from matplotlib.patches import Polygon as MplPolygon
@@ -1480,13 +1430,14 @@ class SectionView(QWidget):
                                facecolor=poly.fill_color, alpha=poly.fill_alpha,
                                edgecolor=poly.edge_color, linewidth=poly.edge_width,
                                hatch=hatch, zorder=4)
+            self._overlay_artists.append(patch)
             self._ax.add_patch(patch)
-            # Hatch overlay in a separate transparent patch so hatch color = black
             if hatch:
                 hatch_patch = MplPolygon(verts, closed=True,
                                          facecolor="none", alpha=0.35,
                                          edgecolor="black", linewidth=0,
                                          hatch=hatch, zorder=4)
+                self._overlay_artists.append(hatch_patch)
                 self._ax.add_patch(hatch_patch)
 
             # Phase 5: formation label inside polygon
@@ -1525,27 +1476,30 @@ class SectionView(QWidget):
                 except Exception:
                     text_color = "black"
 
-                self._ax.text(cx, cy, label,
-                              fontsize=fontsize, color=text_color,
-                              ha="center", va="center",
-                              clip_on=True, zorder=5)
+                self._overlay_artists.append(
+                    self._ax.text(cx, cy, label,
+                                  fontsize=fontsize, color=text_color,
+                                  ha="center", va="center",
+                                  clip_on=True, zorder=5))
 
     def _render_polygon_in_progress(self) -> None:
         if not self._polygon_drawing or not self._polygon_vertices:
             return
         xs = [v[0] for v in self._polygon_vertices]
         ys = [v[1] for v in self._polygon_vertices]
-        self._ax.plot(xs, ys, "o-", color="#9467bd", linewidth=1.5,
-                      markersize=5, zorder=10)
+        self._overlay_artists.extend(
+            self._ax.plot(xs, ys, "o-", color="#9467bd", linewidth=1.5,
+                          markersize=5, zorder=10))
         if len(xs) >= 2:
-            self._ax.plot([xs[-1], xs[0]], [ys[-1], ys[0]],
-                          "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10)
-        # rubber-band from last vertex to cursor
+            self._overlay_artists.extend(
+                self._ax.plot([xs[-1], xs[0]], [ys[-1], ys[0]],
+                              "--", color="#9467bd", linewidth=1.0, alpha=0.5, zorder=10))
         if self._cursor_data is not None and len(self._polygon_vertices) >= 1:
             lx, ly = self._polygon_vertices[-1]
             cx, cy = self._cursor_data
-            self._ax.plot([lx, cx], [ly, cy], "--", color="#9467bd",
-                          linewidth=1.0, alpha=0.7, zorder=14)
+            self._overlay_artists.extend(
+                self._ax.plot([lx, cx], [ly, cy], "--", color="#9467bd",
+                              linewidth=1.0, alpha=0.7, zorder=14))
 
     def _render_rubber_band(self, section: Section) -> None:
         """V-shaped dashed ghost line; shows angle-snap guide when Shift held."""
@@ -1582,28 +1536,26 @@ class SectionView(QWidget):
         right    = d > cx
         if left.any():
             li = int(np.where(left)[0][-1])
-            self._ax.plot([d[li], cx], [z[li], cy], **rb_kw)
+            self._overlay_artists.extend(
+                self._ax.plot([d[li], cx], [z[li], cy], **rb_kw))
         if right.any():
             ri = int(np.where(right)[0][0])
-            self._ax.plot([cx, d[ri]], [cy, z[ri]], **rb_kw)
+            self._overlay_artists.extend(
+                self._ax.plot([cx, d[ri]], [cy, z[ri]], **rb_kw))
 
-        # Phase 3: show angle-snap guide line
         if shift_held:
             _, last_d, last_z = self._get_active_pick_last_point()
             if last_d is not None:
-                # Draw full guide line through snap direction
                 ang = math.atan2(-(cy - last_z), cx - last_d)
                 xl = self._ax.get_xlim()
                 far = abs(xl[1] - xl[0])
-                self._ax.plot(
+                self._overlay_artists.extend(self._ax.plot(
                     [last_d - far * math.cos(ang), last_d + far * math.cos(ang)],
                     [last_z + far * math.sin(ang), last_z - far * math.sin(ang)],
                     color=color, lw=0.5, linestyle=":", alpha=0.4, zorder=7,
-                )
+                ))
 
     def _render_wells(self, section: Section) -> None:
-        """Render wells projected onto section with formation tops and offset labels."""
-        # Pixel → data-unit conversion for tick widths
         try:
             inv = self._ax.transData.inverted()
             p0 = inv.transform([0, 0])
@@ -1618,36 +1570,34 @@ class SectionView(QWidget):
                 continue
 
             distances, tvds = well.section_track(section)
-            # Well stick — 2px solid black
-            self._ax.plot(distances, tvds, color="black", linewidth=2.0,
-                          solid_capstyle="round", zorder=9)
+            self._overlay_artists.extend(
+                self._ax.plot(distances, tvds, color="black", linewidth=2.0,
+                              solid_capstyle="round", zorder=9))
 
-            # Name + perpendicular offset annotation
             if len(tvds) > 0:
                 direction = "E" if perp >= 0 else "W"
                 label = f"{well.name}  ({abs(perp):.0f}m {direction})"
-                self._ax.annotate(
-                    label,
-                    xy=(collar_dist, tvds[0]),
-                    xytext=(4, 4), textcoords="offset points",
-                    fontsize=7, color="#4A3728", zorder=10,
-                    ha="left", va="bottom",
-                )
+                self._overlay_artists.append(
+                    self._ax.annotate(
+                        label,
+                        xy=(collar_dist, tvds[0]),
+                        xytext=(4, 4), textcoords="offset points",
+                        fontsize=7, color="#4A3728", zorder=10,
+                        ha="left", va="bottom",
+                    ))
 
-            # Formation tops: small horizontal ticks + name labels
             for top_name in well.formation_tops:
                 try:
                     td, tz = well.formation_top_in_section(top_name, section)
                 except KeyError:
                     continue
-                self._ax.plot([td - tick_w, td + tick_w], [tz, tz],
-                              color="#2a7d2a", linewidth=1.2, zorder=9)
-                self._ax.text(
-                    td + tick_w * 1.4, tz, top_name,
-                    fontsize=6, color="#2a7d2a", va="center", zorder=9,
-                )
+                self._overlay_artists.extend(
+                    self._ax.plot([td - tick_w, td + tick_w], [tz, tz],
+                                  color="#2a7d2a", linewidth=1.2, zorder=9))
+                self._overlay_artists.append(
+                    self._ax.text(td + tick_w * 1.4, tz, top_name,
+                                  fontsize=6, color="#2a7d2a", va="center", zorder=9))
 
-            # Optional GR log as filled wiggle trace
             gr_name = next(
                 (n for n in well.log_names
                  if "GR" in n.upper() or n.upper() in ("GAMMA", "GR")),
@@ -1675,16 +1625,16 @@ class SectionView(QWidget):
         # Map to section-space: 50m track width centred on well
         track_w = 50.0
         xs = collar_dist + (norm - 0.5) * track_w
-        # Draw wiggle + fills
-        self._ax.plot(xs, tvd_depths, color="#8B4513", linewidth=0.6, zorder=9)
-        # Sand fill (left side, low GR) — yellow
-        self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
-                                where=(norm < 0.5),
-                                color="#f5d06e", alpha=0.6, zorder=9)
-        # Shale fill (right side, high GR) — grey
-        self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
-                                where=(norm >= 0.5),
-                                color="#888888", alpha=0.4, zorder=9)
+        self._overlay_artists.extend(
+            self._ax.plot(xs, tvd_depths, color="#8B4513", linewidth=0.6, zorder=9))
+        self._overlay_artists.append(
+            self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
+                                   where=(norm < 0.5),
+                                   color="#f5d06e", alpha=0.6, zorder=9))
+        self._overlay_artists.append(
+            self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
+                                   where=(norm >= 0.5),
+                                   color="#888888", alpha=0.4, zorder=9))
 
     def _render_strat_column(self, section: Section) -> None:
         """Phase 4: render the left-side stratigraphic column sharing the Y axis."""
@@ -2091,8 +2041,19 @@ class SectionView(QWidget):
 
     def _on_ve_changed(self) -> None:
         value = self._ve_spin.value()
+        if value <= 0:
+            return
+        # VE change only affects ylim, not seismic data — use fast path.
+        # Pre-compute new ylim so the fast path can apply it without _setup_axes.
+        section = self._state.active_section
+        if section is not None:
+            max_d = self._compute_max_depth(section)
+            y_range = max_d / value
+            self._pending_ylim = (y_range, 0.0)   # inverted: deep at top of tuple
+            self._pending_xlim = None              # keep current xlim
+            self._user_has_zoomed = False          # reset so default limits apply
+        self._needs_full_setup = False
         if self._ve_lock_btn.isChecked():
-            # Apply to every section
             for i, sec in enumerate(self._state.project.sections):
                 if abs(getattr(sec, "vertical_exaggeration", 1.0) - value) > 0.001:
                     sec_copy = copy.deepcopy(sec)
@@ -2108,7 +2069,6 @@ class SectionView(QWidget):
             self._state.update_section(idx, sec_copy)
 
     def _on_seismic_domain_changed(self, _index: int = 0) -> None:
-        """User changed the seismic display domain (linear stretch / native TWT)."""
         from section_tool.core.seismic_settings import SeismicDisplaySettings
         mode = self._seismic_domain_combo.currentData()
         self._seismic_vel_spin.setVisible(mode == "linear")
@@ -2117,12 +2077,11 @@ class SectionView(QWidget):
             sds = getattr(section, "seismic_display", None) or SeismicDisplaySettings()
             sds.stretch_mode = mode
             section.seismic_display = sds
-        self._ax_limits_set = False    # force _setup_axes to recalculate depth range
-        self._invalidate_seismic_cache()
+        self._ax_limits_set = False
+        self._needs_full_setup = True   # seismic Y extent changed → rebuild artist
         self.request_render()
 
     def _on_seismic_velocity_changed(self, value: float) -> None:
-        """User changed the constant velocity for linear TWT→depth stretch."""
         from section_tool.core.seismic_settings import SeismicDisplaySettings
         section = self._state.active_section
         if section is not None:
@@ -2130,7 +2089,7 @@ class SectionView(QWidget):
             sds.constant_velocity = value
             section.seismic_display = sds
         self._ax_limits_set = False
-        self._invalidate_seismic_cache()
+        self._needs_full_setup = True   # velocity changes imshow extent → rebuild
         self.request_render()
 
     # ------------------------------------------------------------------
@@ -2477,6 +2436,7 @@ class SectionView(QWidget):
             self._object_drag_press_pt = None
 
     def _on_sv_resize(self, _event) -> None:
+        self._needs_full_setup = True   # canvas size changed → full axis/seismic reset
         self.request_render()
 
     def _on_scroll_sv(self, event) -> None:
@@ -2489,11 +2449,12 @@ class SectionView(QWidget):
         new_xl = tuple(cx + (x - cx) * factor for x in xl)
         new_yl = tuple(cy + (y - cy) * factor for y in yl)
 
-        # Store desired limits — _full_render applies them after all rendering
-        # so they survive the ax.clear() / _setup_axes() cycle.
-        self._pending_xlim = new_xl
-        self._pending_ylim = new_yl
+        # Apply limits immediately — no ax.clear() needed, seismic clips automatically
+        self._ax.set_xlim(new_xl)
+        self._ax.set_ylim(new_yl)
         self._user_has_zoomed = True
+        # Fast path: only overlay artists need updating, not the seismic imshow
+        self._needs_full_setup = False
         self.request_render()   # debounced — fires 50 ms after last scroll event
 
     def _on_sv_key(self, event) -> None:
@@ -2574,13 +2535,13 @@ class SectionView(QWidget):
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
         self._seismic_proj_cache.clear()
-        self._invalidate_seismic_cache()
+        self._needs_full_setup = True
         self.request_render()
 
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
-        """Clear projection cache and vmax cache when section changes."""
+        """Force full setup (clear + new seismic artist) when section changes."""
         self._seismic_proj_cache.clear()
-        self._invalidate_seismic_cache()
+        self._needs_full_setup = True
         self._user_has_zoomed = False
         self._pending_xlim = None
         self._pending_ylim = None
@@ -3019,7 +2980,8 @@ class SectionView(QWidget):
         d_sec = hp._distances[sec_idxs]
         z_sec = hp._depths[sec_idxs]
 
-        self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12)
+        self._overlay_artists.extend(
+            self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12))
 
         if tool == "extend" and self._cursor_data is not None:
             endpoint = src.get("endpoint", "end")
@@ -3028,16 +2990,18 @@ class SectionView(QWidget):
                 ox, oz = float(d_sec[0]), float(z_sec[0])
             else:
                 ox, oz = float(d_sec[-1]), float(z_sec[-1])
-            self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
-                          lw=1.5, alpha=0.7, zorder=12)
+            self._overlay_artists.extend(
+                self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
+                              lw=1.5, alpha=0.7, zorder=12))
 
         elif tool == "parallel" and self._cursor_data is not None:
             cx, cy = self._cursor_data
             z_at_cx = float(np.interp(cx, d_sec, z_sec,
                                       left=float(z_sec[0]), right=float(z_sec[-1])))
             offset = cy - z_at_cx
-            self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
-                          lw=1.5, alpha=0.6, zorder=12)
+            self._overlay_artists.extend(
+                self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
+                              lw=1.5, alpha=0.6, zorder=12))
 
     def _flash_hint(self, msg: str) -> None:
         """Show a brief status hint via the parent window's status bar."""
