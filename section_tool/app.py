@@ -540,6 +540,10 @@ class MainWindow(QMainWindow):
         self._strat_column_action = QAction("Edit Stratigraphic Column…", self)
         self._strat_column_action.triggered.connect(self._on_edit_strat_column)
         section_menu.addAction(self._strat_column_action)
+        section_menu.addSeparator()
+        self._extract_seismic_action = QAction("Extract Seismic Along Active Section…", self)
+        self._extract_seismic_action.triggered.connect(self._on_extract_seismic_for_section)
+        section_menu.addAction(self._extract_seismic_action)
 
         # ================================================================
         # Interpret
@@ -1185,36 +1189,101 @@ class MainWindow(QMainWindow):
                 n_traces_total=int(n_tot),
             )
             self._state.add_seismic_ref(ref)
-
-            # Eagerly load amplitude data with a progress dialog so the first
-            # section render is instant rather than hanging for 60+ seconds.
-            from PySide6.QtCore import Qt as _Qt
-            from PySide6.QtWidgets import QProgressDialog, QApplication as _QApp
-            progress = QProgressDialog(
-                f"Loading {fname}…", "Cancel", 0, 100, self
-            )
-            progress.setWindowModality(_Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(300)
-            progress.show()
-            _QApp.processEvents()
-            cancelled = False
-
-            def _prog(pct: int) -> None:
-                nonlocal cancelled
-                progress.setValue(pct)
-                _QApp.processEvents()
-                if progress.wasCanceled():
-                    cancelled = True
-
-            try:
-                self._section_view.preload_seismic_ref(ref, _prog)
-            except Exception as exc:
-                QMessageBox.warning(self, "SEG-Y Load Warning",
-                                    f"Could not preload {fname}:\n{exc}")
-            finally:
-                progress.close()
             # Auto-zoom to show seismic extent
             self._map_view.zoom_to_all_data()
+
+    def _on_extract_seismic_for_section(self) -> None:
+        """Extract seismic traces along the active section from a SEG-Y file."""
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "No Active Section",
+                                    "Activate a section first.")
+            return
+        refs = self._state.project.seismic_refs
+        if not refs:
+            QMessageBox.information(self, "No Seismic Data",
+                                    "Import a SEG-Y file first (File → Import → SEG-Y Seismic).")
+            return
+
+        if len(refs) == 1:
+            ref = refs[0]
+        else:
+            from PySide6.QtWidgets import QInputDialog
+            names = [r.name for r in refs]
+            name, ok = QInputDialog.getItem(
+                self, "Select SEG-Y", "Extract from which seismic volume?",
+                names, 0, False
+            )
+            if not ok:
+                return
+            ref = refs[names.index(name)]
+
+        # Resolve output path into a cache sub-folder alongside the project
+        import os, re
+        _safe = lambda s: re.sub(r"[^\w\-]", "_", s)
+        base_dir = (os.path.dirname(self._state.project_path)
+                    if self._state.project_path else os.getcwd())
+        cache_dir = os.path.join(base_dir, "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        out_npy = os.path.join(
+            cache_dir,
+            f"{_safe(section.name)}_{_safe(ref.name)}.extract.npy"
+        )
+
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QProgressDialog, QApplication as _QApp, QCheckBox, QDialog, QVBoxLayout, QDialogButtonBox, QLabel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Extract Seismic Along Section")
+        vl = QVBoxLayout(dlg)
+        vl.addWidget(QLabel(
+            f"<b>{ref.name}</b> → {section.name}<br>"
+            f"Output: <code>{os.path.basename(out_npy)}</code>"
+        ))
+        interp_cb = QCheckBox("Interpolate traces to regular grid")
+        interp_cb.setChecked(False)
+        vl.addWidget(interp_cb)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        vl.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        progress = QProgressDialog(
+            f"Extracting {ref.name}…", "Cancel", 0, 100, self
+        )
+        progress.setWindowModality(_Qt.WindowModality.WindowModal)
+        progress.show()
+        _QApp.processEvents()
+        cancelled = False
+
+        def _prog(pct: int) -> None:
+            nonlocal cancelled
+            progress.setValue(pct)
+            _QApp.processEvents()
+            if progress.wasCanceled():
+                cancelled = True
+
+        try:
+            import numpy as _np
+            from section_tool.io.segy import extract_seismic_along_section
+            meta = extract_seismic_along_section(
+                ref.path, section, out_npy,
+                x_field=ref.x_field,
+                y_field=ref.y_field,
+                apply_scalar=ref.apply_scalar,
+                interpolate=interp_cb.isChecked(),
+                progress_callback=_prog,
+            )
+            if not cancelled:
+                data = _np.load(out_npy)
+                self._state.set_seismic_for_section(section.name, data, meta)
+        except Exception as exc:
+            QMessageBox.warning(self, "Extraction Error",
+                                f"Seismic extraction failed:\n\n{exc}")
+        finally:
+            progress.close()
 
     def _on_import_section_image(self) -> None:
         """Import a raster image (scanned section) as a section background."""

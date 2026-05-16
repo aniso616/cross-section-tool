@@ -41,7 +41,15 @@
       "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_las_import.py -v 2>&1 | tail -10)",
       "PowerShell(tail *)",
       "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_database.py tests/test_las_import.py -q 2>&1)",
-      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -c \"import section_tool.app; print\\('Entry point OK'\\)\")"
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -c \"import section_tool.app; print\\('Entry point OK'\\)\")",
+      "PowerShell($env:PYTHONPATH = \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; python section_tool/app.py)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_auto_polygon.py -v 2>&1)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_well_projection.py -v 2>&1 | tail -50)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_well_projection.py tests/test_seismic_domain.py tests/test_auto_polygon.py tests/test_database.py tests/test_database_schema.py -q 2>&1 | tail -8)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python _show_schema.py; Remove-Item _show_schema.py)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/ -q --tb=no 2>&1 | Select-Object -Last 5)",
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_well_projection.py tests/test_seismic_domain.py tests/test_auto_polygon.py tests/test_database.py tests/test_database_schema.py tests/test_las_import.py -q --tb=no 2>&1)",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\\\\section_tool\\\\views\\\\section_view.py\" | Measure-Object -Line\\).Lines)"
     ]
   }
 }

@@ -113,12 +113,6 @@ class SectionView(QWidget):
         # ---- seismic projection cache (expensive per-section computation) ----
         # key: (section_name, ref_path) → (distances, data, perps)
         self._seismic_proj_cache: dict[tuple, tuple] = {}
-        # ---- blitting render cache ----
-        # Seismic + static overlays captured as a pixel bitmap.
-        # Fast renders restore this bitmap and blit only the dynamic overlays.
-        self._blit_background = None    # canvas.copy_from_bbox result
-        self._blit_valid: bool = False  # True while background is current
-        self._blit_artists: list = []   # dynamic overlay artists (for removal)
         # Pending zoom limits set by scroll handler — applied at END of full render
         # (before canvas.draw) so they survive the ax.clear() + _setup_axes() cycle.
         self._pending_xlim: tuple | None = None
@@ -126,11 +120,6 @@ class SectionView(QWidget):
         self._user_has_zoomed: bool = False
         # vmax cache: key → float (expensive percentile computation)
         self._seismic_vmax_cache: dict[tuple, float] = {}
-        # Legacy names kept for backward compat with tests/other code
-        self._seismic_img_artists: list = []          # unused — kept for tests
-        self._seismic_img_cache_key: tuple | None = None  # unused
-        self._seismic_cache_xlim: tuple | None = None     # unused
-        self._seismic_cache_ylim: tuple | None = None     # unused
         # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
@@ -286,13 +275,19 @@ class SectionView(QWidget):
         self._ve_spin.setValue(1.0)
         self._ve_spin.setFixedWidth(60)
         self._ve_spin.setDecimals(1)
+        self._ve_spin.setKeyboardTracking(False)   # only fire after editing finishes
         self._ve_spin.setStyleSheet(
             "color: #333333; background: #ffffff; border: 1px solid #999999; min-width: 60px;")
         self._ve_spin.setToolTip(
             "Vertical exaggeration (1.0 = true scale)\n"
             "Higher values stretch depth axis, steepening apparent dips."
         )
-        self._ve_spin.valueChanged.connect(self._on_ve_changed)
+        # Debounce: 150 ms after last keystroke before applying VE change
+        self._ve_timer = QTimer(self)
+        self._ve_timer.setSingleShot(True)
+        self._ve_timer.setInterval(150)
+        self._ve_timer.timeout.connect(self._on_ve_changed)
+        self._ve_spin.valueChanged.connect(lambda _v: self._ve_timer.start())
         hl.addWidget(self._ve_spin)
 
         # VE lock — icon toggles between 🔒 and 🔓
@@ -413,6 +408,7 @@ class SectionView(QWidget):
         s.surface_modified.connect(self._on_data_changed)
         s.seismic_ref_added.connect(self._on_seismic_refs_changed)
         s.seismic_ref_removed.connect(self._on_seismic_refs_changed)
+        s.seismic_extracted.connect(self._on_data_changed)
         s.polygon_added.connect(self._on_data_changed)
         s.polygon_removed.connect(self._on_data_changed)
         s.polygon_modified.connect(self._on_data_changed)
@@ -651,20 +647,8 @@ class SectionView(QWidget):
             self._display_mode,
         )
 
-    def _is_seismic_cache_valid(self, section) -> bool:
-        """Kept for API compat; superseded by _blit_valid."""
-        return self._blit_valid
-
-    def _clear_overlay_artists(self) -> None:
-        """Remove tracked dynamic overlay artists from the axes."""
-        for art in self._blit_artists:
-            try: art.remove()
-            except Exception: pass
-        self._blit_artists.clear()
-
     def _invalidate_seismic_cache(self) -> None:
-        """Invalidate the blit cache — forces a full re-render next frame."""
-        self._blit_valid = False
+        """Clear computed seismic display values — forces recompute on next render."""
         self._seismic_vmax_cache.clear()
 
     # ------------------------------------------------------------------
@@ -690,18 +674,7 @@ class SectionView(QWidget):
             self._is_rendering = False
 
     def _render_impl(self) -> None:
-        """Route to full or fast render based on blit cache validity.
-
-        Full render (blit invalid)
-            Clears axes → renders seismic + static background → canvas.draw()
-            → captures bitmap → renders dynamic overlays → blit.
-            Time: ~150–300 ms.
-
-        Fast render (blit valid)
-            Removes previous dynamic artists → restore_region() restores the
-            cached seismic bitmap → renders dynamic overlays → blit.
-            Time: ~10–30 ms.
-        """
+        """Single-pass full render."""
         _t0 = time.perf_counter()
         section = self._state.active_section
 
@@ -715,8 +688,6 @@ class SectionView(QWidget):
 
         # ── No active section ──────────────────────────────────────────
         if section is None:
-            self._blit_valid = False
-            self._blit_artists.clear()
             self._ax.clear()
             self._section_name_label.setText("— no section —")
             self._ve_spin.setEnabled(False)
@@ -749,145 +720,50 @@ class SectionView(QWidget):
         self._seismic_vel_spin.blockSignals(False)
         self._seismic_vel_spin.setVisible(dom_idx == 0)
 
-        # ── Route to full or fast render ───────────────────────────────
-        if self._blit_valid and self._blit_background is not None:
-            self._do_fast_render(section)
-        else:
-            self._do_full_render(section)
+        self._full_render(section)
 
         if self._show_fps:
             ms = (time.perf_counter() - _t0) * 1000.0
             self.frame_time_ms.emit(ms)
 
-    # ------------------------------------------------------------------
-    # Blitting helpers
-    # ------------------------------------------------------------------
-
-    def _do_full_render(self, section) -> None:
-        """Full render: ax.clear → seismic → static → apply limits → draw → blit dynamic.
-
-        Zoom limits are applied AFTER all rendering but BEFORE canvas.draw() so
-        they survive the ax.clear() / _setup_axes() cycle.  Seismic is rendered
-        unconditionally — no caching logic around the imshow call.
-        """
-        # Remove old animated artists so axes are clean before clear
-        for art in self._blit_artists:
-            try: art.remove()
-            except Exception: pass
-        self._blit_artists.clear()
-
-        # Clear and set up default axes (labels, tick formatters, autoscale off)
+    def _full_render(self, section) -> None:
+        """Clear axes, render all layers, apply zoom limits, then draw."""
         self._ax.clear()
         self._setup_axes(section)
 
-        # ── Render seismic unconditionally — always re-create imshow ───
-        self._render_image_overlays(section)   # raster images at zorder=0
-        self._render_seismic(section)          # imshow at zorder=1
-
-        # ── Static background layers ───────────────────────────────────
-        self._render_grid(section)             # LineCollection at zorder=2
-        self._render_topography(section)       # fill + line at zorder=2.2–2.3
-        self._render_sea_level(section)        # axhline at zorder=2.5
-        self._render_section_ends(section)     # end-cap lines at zorder=2
+        self._render_image_overlays(section)
+        self._render_seismic(section)
+        self._render_grid(section)
+        self._render_topography(section)
+        self._render_sea_level(section)
+        self._render_section_ends(section)
         if self._strat_col_visible:
             self._render_strat_column(section)
+        self._render_reference_lines(section)
+        self._render_polygons(section)
+        self._render_surfaces(section)
+        self._render_faults(section)
+        self._render_horizons(section)
+        self._render_wells(section)
+        self._render_intersections(section)
+        self._render_construct_preview()
+        self._render_rubber_band(section)
+        self._render_snap_indicator()
+        self._render_polygon_in_progress()
+        self._render_annotations(section)
+        self._render_seismic_watermark(section)
 
-        # ── Apply zoom limits NOW — after rendering, before draw ───────
-        # This is the critical ordering: limits set here survive ax.clear()
-        # and are not overridden by imshow autoscale.
+        # Apply zoom limits AFTER rendering, BEFORE draw — survives ax.clear()
         if self._pending_xlim is not None:
             self._ax.set_xlim(self._pending_xlim)
             self._ax.set_ylim(self._pending_ylim)
             self._pending_xlim = None
             self._pending_ylim = None
             self._ax_limits_set = True
-        elif self._user_has_zoomed and self._ax_limits_set:
-            pass   # keep whatever limits _setup_axes + user interactions left
         else:
-            self._ax_limits_set = True   # default limits from _setup_axes are correct
+            self._ax_limits_set = True
 
-        # Rasterise to canvas bitmap and capture the static background
-        self._canvas.draw()
-        try:
-            self._blit_background = self._canvas.copy_from_bbox(self._ax.bbox)
-            self._blit_valid = True
-        except Exception:
-            self._blit_background = None
-            self._blit_valid = False
-            self._render_dynamic_overlays(section)
-            self._canvas.draw_idle()
-            return
-
-        # ── Dynamic overlay layers (on top of cached background) ───────
-        n_before = self._count_artists()
-        self._render_dynamic_overlays(section)
-        self._blit_artists = self._collect_new_artists(*n_before)
-        for art in self._blit_artists:
-            art.set_animated(True)
-            self._ax.draw_artist(art)
-        self._canvas.blit(self._ax.bbox)
-
-    def _do_fast_render(self, section) -> None:
-        """Fast render: restore bitmap, replace dynamic overlays, blit."""
-        # Remove old animated artists from axes
-        for art in self._blit_artists:
-            try: art.remove()
-            except Exception: pass
-        self._blit_artists.clear()
-
-        # Restore the cached seismic + static bitmap
-        try:
-            self._canvas.restore_region(self._blit_background)
-        except Exception:
-            # Background is stale — fall back to full render
-            self._blit_valid = False
-            self._do_full_render(section)
-            return
-
-        # ── Dynamic overlay layers ─────────────────────────────────────
-        n_before = self._count_artists()
-        self._render_dynamic_overlays(section)
-        self._blit_artists = self._collect_new_artists(*n_before)
-        for art in self._blit_artists:
-            art.set_animated(True)
-            self._ax.draw_artist(art)
-        self._canvas.blit(self._ax.bbox)
-
-    def _render_dynamic_overlays(self, section) -> None:
-        """All overlays that change with picks, wells, annotations, etc."""
-        self._render_reference_lines(section)  # zorder=3
-        self._render_polygons(section)         # zorder=4-5
-        self._render_surfaces(section)         # zorder=6
-        self._render_faults(section)           # zorder=7
-        self._render_horizons(section)         # zorder=8
-        self._render_wells(section)            # zorder=9
-        self._render_intersections(section)    # zorder=10
-        self._render_construct_preview()       # zorder=12
-        self._render_rubber_band(section)      # zorder=12
-        self._render_snap_indicator()          # zorder=13
-        self._render_polygon_in_progress()     # zorder=14
-        self._render_annotations(section)      # zorder=15
-        self._render_seismic_watermark(section)
-
-    def _count_artists(self) -> tuple:
-        """Snapshot current artist list lengths."""
-        return (
-            len(self._ax.lines),
-            len(self._ax.patches),
-            len(self._ax.texts),
-            len(self._ax.collections),
-            len(self._ax.artists),
-        )
-
-    def _collect_new_artists(self, nl, np_, nt, nc, na) -> list:
-        """Return artists added to the axes since the snapshot counts."""
-        return (
-            list(self._ax.lines)[nl:]       +
-            list(self._ax.patches)[np_:]    +
-            list(self._ax.texts)[nt:]       +
-            list(self._ax.collections)[nc:] +
-            list(self._ax.artists)[na:]
-        )
+        self._canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Axis setup
@@ -963,19 +839,24 @@ class SectionView(QWidget):
                     candidates.append(hi)
                 except Exception:
                     pass
-        for ref in self._state.project.seismic_refs:
-            ds = self._seismic_cache.get(ref.path)
-            if ds is not None:
-                last = float(ds.samples[-1])
-                if ds.domain == "twt":
-                    # Apply the current velocity stretch so the seismic extent
-                    # is expressed in metres, not milliseconds.
-                    sds = getattr(section, "seismic_display", None)
-                    mode = sds.stretch_mode      if sds else "linear"
-                    v    = sds.constant_velocity if sds else 2000.0
-                    if mode == "linear":
-                        last = last * v / 2000.0
-                candidates.append(last)
+        sds = getattr(section, "seismic_display", None)
+        mode = sds.stretch_mode      if sds else "linear"
+        vel  = sds.constant_velocity if sds else 2000.0
+        # Extracted seismic (preferred — already projected)
+        _ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
+        if ex_meta is not None:
+            last = float(ex_meta.get("sample_max", 0.0))
+            if ex_meta.get("domain") == "twt" and mode == "linear":
+                last = last * vel / 2000.0
+            candidates.append(last)
+        else:
+            for ref in self._state.project.seismic_refs:
+                ds = self._seismic_cache.get(ref.path)
+                if ds is not None:
+                    last = float(ds.samples[-1])
+                    if ds.domain == "twt" and mode == "linear":
+                        last = last * vel / 2000.0
+                    candidates.append(last)
         return max(candidates)
 
     # ------------------------------------------------------------------
@@ -1392,33 +1273,41 @@ class SectionView(QWidget):
                 pass
 
     def _render_seismic(self, section: Section) -> None:
-        sds = getattr(section, "seismic_display", None)
-        clip_pct   = sds.clip_percentile if sds else 99.0
-        gain       = sds.gain            if sds else 1.0
-        opacity    = sds.opacity         if sds else 1.0
-        cmap_key   = sds.colormap        if sds else "seismic_red_blue"
+        sds        = getattr(section, "seismic_display", None)
+        clip_pct   = sds.clip_percentile   if sds else 99.0
+        gain       = sds.gain              if sds else 1.0
+        opacity    = sds.opacity           if sds else 1.0
+        cmap_key   = sds.colormap          if sds else "seismic_red_blue"
         show_wig   = (sds.show_wiggle if sds else False) or (self._display_mode == "wiggle")
         cmap_name  = _SEGY_CMAP.get(cmap_key, "seismic")
+        stretch    = sds.stretch_mode      if sds else "linear"
+        v_ms       = sds.constant_velocity if sds else 2000.0
 
+        # ── Phase 3: extracted data path (fast, visible-window only) ───
+        ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
+        if ex_data is not None and ex_meta is not None:
+            self._render_seismic_extracted(
+                ex_data, ex_meta, cmap_name, clip_pct, gain, opacity, stretch, v_ms
+            )
+            return
+
+        # ── Fallback: project full SEG-Y on the fly ───────────────────
         for ref in self._state.project.seismic_refs:
             ds = self._get_or_load_seismic(ref)
             if ds is None or ds.n_traces == 0:
                 continue
-            # Use projection cache — traces_sorted_by_section is O(n_traces) per call
             proj_key = (section.name, ref.path)
             if proj_key in self._seismic_proj_cache:
                 distances, data, perps = self._seismic_proj_cache[proj_key]
             else:
                 distances, data, perps = ds.traces_sorted_by_section(section)
                 self._seismic_proj_cache[proj_key] = (distances, data, perps)
-            # Filter by perpendicular distance (±500 m by default)
             mask = np.abs(perps) <= 500.0
             if mask.sum() >= 2:
                 distances, data = distances[mask], data[mask]
             if len(distances) < 2:
                 continue
 
-            # Cache the expensive percentile computation
             vmax_key = (section.name, ref.path, clip_pct, gain)
             if vmax_key in self._seismic_vmax_cache:
                 vmax = self._seismic_vmax_cache[vmax_key]
@@ -1426,11 +1315,7 @@ class SectionView(QWidget):
                 vmax = float(np.percentile(np.abs(data), clip_pct) or 1.0) * gain
                 self._seismic_vmax_cache[vmax_key] = vmax
 
-            # Compute Y extent — apply TWT→depth stretch if requested
-            stretch = sds.stretch_mode      if sds else "linear"
-            v_ms    = sds.constant_velocity if sds else 2000.0
             if stretch == "linear" and ds.domain == "twt":
-                # depth(m) = twt(ms) * V(m/s) / 2000
                 scale = v_ms / 2000.0
                 y_top = float(ds.samples[0])  * scale
                 y_bot = float(ds.samples[-1]) * scale
@@ -1452,6 +1337,105 @@ class SectionView(QWidget):
                     alpha=opacity,
                     zorder=1,
                 )
+
+    def _render_seismic_extracted(
+        self,
+        data: np.ndarray,
+        meta: dict,
+        cmap_name: str,
+        clip_pct: float,
+        gain: float,
+        opacity: float,
+        stretch: str,
+        v_ms: float,
+    ) -> None:
+        """Render extracted seismic using a zero-copy view of the visible window.
+
+        ``data`` shape: (n_samples, n_traces) — rows = depth/time, cols = distance.
+        ``meta`` contains 'distances' and 'samples' arrays with axis coordinates.
+        """
+        distances = np.asarray(meta["distances"], dtype=np.float64)
+        samples   = np.asarray(meta["samples"],   dtype=np.float64)
+        domain    = meta.get("domain", "twt")
+
+        if len(distances) < 2 or data.shape[1] < 2:
+            return
+
+        # Convert samples to depth coordinates for extent calculation
+        if stretch == "linear" and domain == "twt":
+            scale    = v_ms / 2000.0
+            y_top    = float(samples[0])  * scale
+            y_bot    = float(samples[-1]) * scale
+            # Inverse scale for slicing back to sample indices
+            inv_scale = 1.0 / scale if scale else 1.0
+        else:
+            y_top = float(samples[0])
+            y_bot = float(samples[-1])
+            inv_scale = 1.0
+
+        # ── Visible-window slice — numpy view, zero-copy ──────────────
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()   # inverted: yl[0]=bottom (deep), yl[1]=top (shallow)
+
+        # Clamp to data range
+        d0 = max(xl[0], float(distances[0]))
+        d1 = min(xl[1], float(distances[-1]))
+        if d0 >= d1:
+            d0, d1 = float(distances[0]), float(distances[-1])
+
+        # Depth axis limits (y is inverted, yl[0] > yl[1] in display)
+        y_vis_top = min(yl)    # numerically smaller = shallower
+        y_vis_bot = max(yl)    # numerically larger  = deeper
+
+        # Convert visible depth limits back to sample-axis coordinates
+        s_vis_top = y_vis_top * inv_scale
+        s_vis_bot = y_vis_bot * inv_scale
+
+        # Trace indices for visible distance window
+        t0 = max(0, int(np.searchsorted(distances, d0, side="left"))  - 1)
+        t1 = min(data.shape[1], int(np.searchsorted(distances, d1, side="right")) + 1)
+
+        # Sample indices for visible depth window
+        # samples array is monotonically increasing (top → bottom)
+        s0 = max(0, int(np.searchsorted(samples, min(s_vis_top, s_vis_bot), side="left"))  - 1)
+        s1 = min(data.shape[0], int(np.searchsorted(samples, max(s_vis_top, s_vis_bot), side="right")) + 1)
+
+        if t1 <= t0 or s1 <= s0:
+            return
+
+        # Zero-copy slice of the visible region
+        vis_data      = data[s0:s1, t0:t1]
+        vis_distances = distances[t0:t1]
+        vis_samples   = samples[s0:s1]
+
+        # Compute clip/gain on the visible slice for fast percentile
+        sec_name = meta.get("section_name", "")
+        vmax_key = ("extracted", sec_name, clip_pct, gain)
+        if vmax_key in self._seismic_vmax_cache:
+            vmax = self._seismic_vmax_cache[vmax_key]
+        else:
+            vmax = float(np.percentile(np.abs(vis_data), clip_pct) or 1.0) * gain
+            self._seismic_vmax_cache[vmax_key] = vmax
+
+        # Convert sample coordinates to depth for extent
+        if stretch == "linear" and domain == "twt":
+            ext_top = float(vis_samples[0])  * (v_ms / 2000.0)
+            ext_bot = float(vis_samples[-1]) * (v_ms / 2000.0)
+        else:
+            ext_top = float(vis_samples[0])
+            ext_bot = float(vis_samples[-1])
+
+        self._ax.imshow(
+            vis_data,
+            aspect="auto",
+            extent=[float(vis_distances[0]), float(vis_distances[-1]), ext_bot, ext_top],
+            origin="upper",
+            cmap=cmap_name,
+            vmin=-vmax, vmax=vmax,
+            interpolation="bilinear",
+            alpha=opacity,
+            zorder=1,
+        )
 
     def _render_wiggle(self, distances, data, samples) -> None:
         if len(distances) < 2:
@@ -2105,7 +2089,8 @@ class SectionView(QWidget):
         sec_copy.depth_units = units
         self._state.update_section(idx, sec_copy)
 
-    def _on_ve_changed(self, value: float) -> None:
+    def _on_ve_changed(self) -> None:
+        value = self._ve_spin.value()
         if self._ve_lock_btn.isChecked():
             # Apply to every section
             for i, sec in enumerate(self._state.project.sections):
@@ -2492,8 +2477,6 @@ class SectionView(QWidget):
             self._object_drag_press_pt = None
 
     def _on_sv_resize(self, _event) -> None:
-        """Window resize: invalidate blit cache and schedule full re-render."""
-        self._blit_valid = False
         self.request_render()
 
     def _on_scroll_sv(self, event) -> None:
@@ -2506,26 +2489,12 @@ class SectionView(QWidget):
         new_xl = tuple(cx + (x - cx) * factor for x in xl)
         new_yl = tuple(cy + (y - cy) * factor for y in yl)
 
-        # Store the desired limits — _do_full_render applies them after rendering
+        # Store desired limits — _full_render applies them after all rendering
         # so they survive the ax.clear() / _setup_axes() cycle.
         self._pending_xlim = new_xl
         self._pending_ylim = new_yl
         self._user_has_zoomed = True
-
-        # Update axes immediately for any partial visual
-        self._ax.set_xlim(new_xl)
-        self._ax.set_ylim(new_yl)
-
-        # Instant feedback: restore cached bitmap (slightly off-scale but immediate)
-        if self._blit_valid and self._blit_background is not None:
-            try:
-                self._canvas.restore_region(self._blit_background)
-                self._canvas.blit(self._ax.bbox)
-            except Exception:
-                pass
-
-        self._blit_valid = False        # full re-render needed
-        self.request_render()           # debounced — fires 50ms after last scroll
+        self.request_render()   # debounced — fires 50 ms after last scroll event
 
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
@@ -2609,10 +2578,9 @@ class SectionView(QWidget):
         self.request_render()
 
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
-        """Clear projection cache and seismic image cache when section changes."""
+        """Clear projection cache and vmax cache when section changes."""
         self._seismic_proj_cache.clear()
         self._invalidate_seismic_cache()
-        # New section gets default limits from _setup_axes
         self._user_has_zoomed = False
         self._pending_xlim = None
         self._pending_ylim = None

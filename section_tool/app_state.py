@@ -115,6 +115,9 @@ class AppState(QObject):
     # Active tool (mirrors ToolPalette; stored here so views can read it)
     tool_changed = Signal(str)
 
+    # Extracted seismic: emitted when new data is loaded for a section
+    seismic_extracted = Signal(str)   # section_name
+
     # ------------------------------------------------------------------
 
     def __init__(self, parent=None) -> None:
@@ -131,6 +134,8 @@ class AppState(QObject):
         self._active_pick_index: int | None = None
         # Live topology (one per active section)
         self._topology: SectionTopology | None = None
+        # Extracted seismic per section: {section_name: (data, meta)}
+        self._section_seismic: dict[str, tuple[np.ndarray, dict]] = {}
         # SQLite project manager (None when working with legacy HDF5 projects)
         from section_tool.io.project_manager import ProjectManager
         self._pm: ProjectManager = ProjectManager()
@@ -182,6 +187,28 @@ class AppState(QObject):
     @property
     def command_stack(self) -> CommandStack:
         return self._cmd_stack
+
+    # ------------------------------------------------------------------
+    # Extracted seismic
+    # ------------------------------------------------------------------
+
+    def get_seismic_for_section(
+        self, section_name: str
+    ) -> tuple["np.ndarray | None", "dict | None"]:
+        """Return (data, meta) for extracted seismic, or (None, None)."""
+        pair = self._section_seismic.get(section_name)
+        if pair is None:
+            return None, None
+        return pair
+
+    def set_seismic_for_section(
+        self, section_name: str, data: "np.ndarray", meta: dict
+    ) -> None:
+        """Register extracted seismic for a section and emit seismic_extracted."""
+        self._section_seismic[section_name] = (data, meta)
+        self.seismic_extracted.emit(section_name)
+
+    # ------------------------------------------------------------------
 
     def execute_command(self, command: Command) -> None:
         """Execute *command* via the stack (calls do(), pushes, clears redo)."""

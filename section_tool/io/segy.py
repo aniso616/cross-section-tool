@@ -249,6 +249,118 @@ def read_segy_header(
 
 
 # ---------------------------------------------------------------------------
+# Section extraction
+# ---------------------------------------------------------------------------
+
+def extract_seismic_along_section(
+    segy_path: str | os.PathLike,
+    section,
+    output_npy_path: str | os.PathLike,
+    *,
+    max_offset: float = 500.0,
+    interpolate: bool = False,
+    x_field: int = TraceField.CDP_X,
+    y_field: int = TraceField.CDP_Y,
+    scalar_field: int = TraceField.SourceGroupScalar,
+    apply_scalar: bool = True,
+    crs_epsg: int = 32632,
+    progress_callback=None,
+) -> dict:
+    """Extract seismic traces along *section* and save to a .npy file.
+
+    The amplitude data is written to *output_npy_path* (float32, shape
+    ``(n_samples, n_traces)``).  A companion ``*.meta.json`` file is written
+    alongside it with all metadata needed for rendering.
+
+    Returns the metadata dict.
+    """
+    import json
+
+    segy_path       = str(segy_path)
+    output_npy_path = str(output_npy_path)
+
+    # Half-progress: reading SEG-Y data
+    def _read_prog(p: int) -> None:
+        if progress_callback:
+            progress_callback(p // 2)
+
+    ds = read_segy(
+        segy_path,
+        x_field=x_field,
+        y_field=y_field,
+        scalar_field=scalar_field,
+        apply_scalar=apply_scalar,
+        crs_epsg=crs_epsg,
+        progress_callback=_read_prog,
+    )
+
+    if ds.n_traces == 0:
+        raise ValueError("No traces in SEG-Y file")
+
+    if progress_callback:
+        progress_callback(50)
+
+    # Project onto section and sort by along-section distance
+    distances, data, perps = ds.traces_sorted_by_section(section)
+    mask = np.abs(perps) <= max_offset
+    distances = distances[mask]
+    data      = data[mask]          # (n_filtered_traces, n_samples)
+
+    if len(distances) < 2:
+        raise ValueError(
+            f"Fewer than 2 traces within {max_offset} m of the section line"
+        )
+
+    if interpolate and len(distances) >= 2:
+        try:
+            from scipy.interpolate import interp1d
+            n_out    = min(len(distances) * 2, 2000)
+            reg_dist = np.linspace(float(distances[0]), float(distances[-1]), n_out)
+            f_interp = interp1d(distances, data, axis=0,
+                                bounds_error=False, fill_value=0.0)
+            data      = f_interp(reg_dist).astype(np.float32)
+            distances = reg_dist
+        except ImportError:
+            pass  # scipy not available — skip interpolation
+
+    if progress_callback:
+        progress_callback(80)
+
+    # Save: (n_samples, n_traces) — rows = depth/time, cols = distance
+    out_data = data.T.astype(np.float32)
+    np.save(output_npy_path, out_data)
+
+    meta: dict = {
+        "segy_path":    segy_path,
+        "section_name": section.name,
+        "n_traces":     int(out_data.shape[1]),
+        "n_samples":    int(out_data.shape[0]),
+        "distances":    distances.tolist(),
+        "dist_min":     float(distances[0]),
+        "dist_max":     float(distances[-1]),
+        "samples":      ds.samples.tolist(),
+        "sample_min":   float(ds.samples[0]),
+        "sample_max":   float(ds.samples[-1]),
+        "sample_interval": ds.sample_interval,
+        "domain":       ds.domain,
+        "depth_units":  ds.depth_units,
+        "crs_epsg":     ds.crs_epsg,
+        "max_offset":   max_offset,
+        "seismic_name": ds.name,
+        "npy_path":     output_npy_path,
+    }
+
+    meta_path = output_npy_path.replace(".npy", ".meta.json")
+    with open(meta_path, "w") as fh:
+        json.dump(meta, fh, indent=2)
+
+    if progress_callback:
+        progress_callback(100)
+
+    return meta
+
+
+# ---------------------------------------------------------------------------
 # Internal
 # ---------------------------------------------------------------------------
 
