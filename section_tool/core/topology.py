@@ -138,14 +138,11 @@ class SectionTopology:
         if not all_ls:
             return []
 
-        # Ensure the boundary ring is present even if it was somehow cleared
         xl, xr = 0.0, self._section_length
         yt, yb = 0.0, self._max_depth
         boundary_ring = LineString(
             [(xl, yt), (xr, yt), (xr, yb), (xl, yb), (xl, yt)]
         )
-        # Only add if our stored boundary is the 4-segment variant; the single
-        # ring replaces them to give polygonize clean shared nodes.
         user_ls = [ls for n, (_, ls) in self._lines.items()
                    if not n.startswith("__")]
         lines_to_poly = [boundary_ring] + user_ls
@@ -156,7 +153,6 @@ class SectionTopology:
         except Exception:
             return []
 
-        # Filter slivers (< 0.1 % of section bounding box)
         bbox_area = self._section_length * self._max_depth
         min_area = bbox_area * 0.001 if bbox_area > 0 else 1.0
         return [p for p in polys if p.area >= min_area]

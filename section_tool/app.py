@@ -1808,6 +1808,10 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+        _POLY_COLORS = [
+            "#4878d0", "#ee854a", "#6acc64", "#d65f5f", "#956cb4",
+            "#8c613c", "#dc7ec0", "#797979", "#d5bb67", "#82c6e2",
+        ]
         existing = len(self._state.project.polygons)
         added_polys = []
         for i, shp in enumerate(polys):
@@ -1819,13 +1823,8 @@ class MainWindow(QMainWindow):
                 coords = coords[:-1]
             if len(coords) < 3:
                 continue
-            # Assign distinct colors cycling through a geological palette
-        _POLY_COLORS = [
-            "#4878d0", "#ee854a", "#6acc64", "#d65f5f", "#956cb4",
-            "#8c613c", "#dc7ec0", "#797979", "#d5bb67", "#82c6e2",
-        ]
-        color = _POLY_COLORS[(existing + i) % len(_POLY_COLORS)]
-        added_polys.append(SectionPolygon(
+            color = _POLY_COLORS[(existing + i) % len(_POLY_COLORS)]
+            added_polys.append(SectionPolygon(
                 vertices=np.array(coords),
                 name=f"Region {existing + i + 1}",
                 fill_color=color,
