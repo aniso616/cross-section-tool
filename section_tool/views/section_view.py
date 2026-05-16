@@ -82,6 +82,88 @@ _PP_SELECTED = (7,  "#ff7f0e", "white", 1.5)
 _PP_DRAG     = (7,  "red",     "white", 1.5)
 
 
+class SectionViewState:
+    """View-state adapter exposing axes extents and pan/zoom for WASDNavigator."""
+
+    def __init__(self, section_view: "SectionView") -> None:
+        self._sv = section_view
+
+    @property
+    def x_min(self) -> float:
+        return float(self._sv._ax.get_xlim()[0])
+
+    @property
+    def x_max(self) -> float:
+        return float(self._sv._ax.get_xlim()[1])
+
+    @property
+    def z_min(self) -> float:
+        # Inverted Y axis: ylim[1] is the shallower (smaller) depth
+        return float(self._sv._ax.get_ylim()[1])
+
+    @property
+    def z_max(self) -> float:
+        # Inverted Y axis: ylim[0] is the deeper (larger) depth
+        return float(self._sv._ax.get_ylim()[0])
+
+    def pan(self, dx_m: float, dz_m: float) -> None:
+        xl = self._sv._ax.get_xlim()
+        yl = self._sv._ax.get_ylim()
+        new_xl = (xl[0] + dx_m, xl[1] + dx_m)
+        new_yl = (yl[0] + dz_m, yl[1] + dz_m)
+        self._sv._ax.set_xlim(new_xl)
+        self._sv._ax.set_ylim(new_yl)
+        self._sv._saved_xlim   = new_xl
+        self._sv._saved_ylim   = new_yl
+        self._sv._user_has_zoomed = True
+        self._sv._canvas.draw_idle()
+
+    def zoom(self, factor: float, center_x_m: float, center_z_m: float) -> None:
+        xl = self._sv._ax.get_xlim()
+        yl = self._sv._ax.get_ylim()
+        x_range = xl[1] - xl[0]
+        y_range = yl[0] - yl[1]  # positive (inverted: yl[0] > yl[1])
+        if x_range == 0 or y_range == 0:
+            return
+        new_x_range = x_range * factor
+        new_y_range = y_range * factor
+        x_frac         = (center_x_m - xl[0]) / x_range
+        y_frac_from_top = (center_z_m - yl[1]) / y_range
+        new_xl = (center_x_m - new_x_range * x_frac,
+                  center_x_m + new_x_range * (1.0 - x_frac))
+        new_yl = (center_z_m + new_y_range * (1.0 - y_frac_from_top),  # bottom
+                  center_z_m - new_y_range * y_frac_from_top)            # top
+        self._sv._ax.set_xlim(new_xl)
+        self._sv._ax.set_ylim(new_yl)
+        self._sv._saved_xlim   = new_xl
+        self._sv._saved_ylim   = new_yl
+        self._sv._user_has_zoomed = True
+        self._sv._canvas.draw_idle()
+
+    def pixel_to_world(self, canvas_pos) -> tuple[float, float]:
+        """Convert QPoint canvas position to (x_m, depth_m)."""
+        px = canvas_pos.x()
+        # Qt: origin top-left; Matplotlib: origin bottom-left
+        py = self._sv._canvas.height() - canvas_pos.y()
+        try:
+            xy = self._sv._ax.transData.inverted().transform([[px, py]])[0]
+            return float(xy[0]), float(xy[1])
+        except Exception:
+            xl = self._sv._ax.get_xlim()
+            yl = self._sv._ax.get_ylim()
+            return (xl[0] + xl[1]) / 2, (yl[0] + yl[1]) / 2
+
+    def pixels_to_metres(self, n_px: int) -> float:
+        """Approximate: n screen pixels → metres in data space."""
+        try:
+            t  = self._sv._ax.transData.inverted()
+            p0 = t.transform([[0, 0]])[0]
+            p1 = t.transform([[n_px, 0]])[0]
+            return abs(float(p1[0] - p0[0]))
+        except Exception:
+            return 100.0
+
+
 class SectionView(QWidget):
     """Matplotlib-based 2D cross-section display.
 
@@ -96,6 +178,7 @@ class SectionView(QWidget):
     -------
     polygon_vertex_added(float, float)  — distance, depth added during drawing
     polygon_finished(object)            — committed SectionPolygon
+    coords_updated(float, float)        — x_m, depth_m on mouse move (game UI)
     """
 
     polygon_vertex_added = Signal(float, float)
@@ -103,10 +186,12 @@ class SectionView(QWidget):
     pick_ended           = Signal()       # emitted when pick sequence ends
     node_selected        = Signal(str, int, int)   # Phase 3: (cat, obj_idx, pt_idx)
     frame_time_ms        = Signal(float)  # Phase 6: FPS display
+    coords_updated       = Signal(float, float)    # game HUD coord readout
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
+        self._game_mode: bool = False
 
         # ---- seismic cache (loaded datasets) ----
         self._seismic_cache: dict[str, SeismicDataset] = {}
@@ -452,6 +537,31 @@ class SectionView(QWidget):
         return self._ax
 
     @property
+    def view_state(self) -> "SectionViewState":
+        return SectionViewState(self)
+
+    def set_game_mode(self, enabled: bool) -> None:
+        """Switch to game UI mode: hide all chrome, suppress pick banner."""
+        self._game_mode = enabled
+        if enabled:
+            self._header.hide()
+            self._seismic_row.hide()
+            self._pick_banner.hide()
+        else:
+            self._header.show()
+
+    def _surface_elev_at(self, x_m: float) -> float:
+        """Return ground-surface elevation (m) at distance x_m along section."""
+        section = self._state.active_section
+        if section is None:
+            return 0.0
+        topo = self._topography.get(section.name)
+        if topo is None or len(topo[0]) == 0:
+            return 0.0
+        distances, elevations = topo
+        return float(np.interp(x_m, distances, elevations))
+
+    @property
     def display_mode(self) -> str:
         return self._display_mode
 
@@ -547,6 +657,8 @@ class SectionView(QWidget):
 
     def _update_pick_banner(self) -> None:
         """Show / hide the pick-mode banner and update its label."""
+        if self._game_mode:
+            return  # banner replaced by HUD tool indicator in game UI
         if self._picking_active or self._fault_picking:
             cat = self._state.active_pick_category
             idx = self._state.active_pick_index
@@ -2371,8 +2483,9 @@ class SectionView(QWidget):
             if _snap_active:
                 self._snap_point = self._compute_snap(cx, cy)
 
-            # Coordinate readout in status bar
+            # Coordinate readout in status bar and game HUD
             self._show_section_coords(cx, cy)
+            self.coords_updated.emit(cx, cy)
             # Snap hint during active picking
             if self._snap_point is not None and (self._picking_active or self._fault_picking):
                 sx, sz = self._snap_point

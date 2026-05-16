@@ -36,7 +36,7 @@ def _global_exception_handler(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _global_exception_handler
 
-from PySide6.QtCore import Qt, QSize, QSettings, QTimer
+from PySide6.QtCore import QObject, Qt, QSize, QSettings, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -49,6 +49,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedLayout,
+    QStackedWidget,
     QStyle,
     QTabWidget,
     QToolBar,
@@ -2409,6 +2411,335 @@ class MainWindow(QMainWindow):
 
 
 # ---------------------------------------------------------------------------
+# Game UI — canvas-first window
+# ---------------------------------------------------------------------------
+
+class _CanvasMouseFilter(QObject):
+    """Event filter installed on FigureCanvasQTAgg.
+
+    Handles Qt-level mouse events the matplotlib backend doesn't expose cleanly:
+    - Updates smart cursor on every move
+    - Shows the styled right-click context menu
+    """
+
+    def __init__(self, window: "SectionMainWindow", parent=None):
+        super().__init__(parent)
+        self._win = window
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent
+        t = event.type()
+        if t == QEvent.Type.MouseMove:
+            self._win._update_smart_cursor(event.pos())
+        elif t == QEvent.Type.MouseButtonPress:
+            from PySide6.QtCore import Qt as _Qt
+            if event.button() == _Qt.MouseButton.RightButton:
+                menu = self._win._build_context_menu()
+                if menu:
+                    menu.exec(event.globalPosition().toPoint())
+                return True
+        return False
+
+
+class SectionMainWindow(MainWindow):
+    """Full-screen game-style UI wrapping all existing MainWindow functionality.
+
+    The section canvas fills the entire window.  A transparent HUD layer floats
+    above it.  Navigation is WASD + scroll; tools are keyboard-activated.
+    """
+
+    # Maps new ToolManager IDs → existing AppState tool IDs
+    _NEW_TO_OLD: dict[str | None, str] = {
+        "horizon":    "horizon_pick",
+        "fault":      "fault_pick",
+        "pick":       "horizon_pick",   # T = pick well top; reuse horizon pick for now
+        "annotation": "select",
+        None:         "select",
+    }
+
+    def __init__(self, state=None):
+        super().__init__(state)
+        self._convert_to_game_ui()
+
+    # ------------------------------------------------------------------
+    # Override: shortcuts — no single-letter conflicts with WASD / tools
+    # ------------------------------------------------------------------
+
+    def _register_shortcuts(self) -> None:
+        _ctx = Qt.ShortcutContext.ApplicationShortcut
+        self._ref_cycle_idx = 0
+
+        def _sc(key: str, slot):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(_ctx)
+            sc.activated.connect(slot)
+            return sc
+
+        # Escape handled via ToolKeyFilter + this shortcut (belt-and-suspenders)
+        _sc("Escape",       self._on_game_escape)
+        _sc("Delete",       self._on_delete_shortcut)
+        _sc("Ctrl+Z",       self._state.undo)
+        _sc("Ctrl+Shift+Z", self._state.redo)
+        _sc("Ctrl+C",       lambda: None)
+        _sc("Ctrl+V",       lambda: None)
+        _sc("Ctrl+A",       lambda: None)
+        _sc("Ctrl+N",       self._on_new)
+        _sc("Ctrl+O",       self._on_open)
+        _sc("Ctrl+S",       self._on_save)
+        _sc("Ctrl+0",       self._zoom_to_fit)
+
+    # ------------------------------------------------------------------
+    # Override: remove Space-bar temporary pan
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event) -> None:
+        super(QMainWindow, self).keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        super(QMainWindow, self).keyReleaseEvent(event)
+
+    # ------------------------------------------------------------------
+    # Game UI construction
+    # ------------------------------------------------------------------
+
+    def _convert_to_game_ui(self) -> None:
+        # 1. Strip chrome
+        self.menuBar().setVisible(False)
+        self.statusBar().setVisible(False)
+        for tb in list(self.findChildren(QToolBar)):
+            tb.setVisible(False)
+            self.removeToolBar(tb)
+
+        # 2. Hide all dock widgets
+        for dock in (self._map_dock, self._section_dock, self._view3d_dock,
+                     self._project_panel, self._properties_panel):
+            dock.setVisible(False)
+
+        # 3. Put section view into game mode (hide header rows, suppress banner)
+        self._section_view.set_game_mode(True)
+
+        # 4. Build root widget with stacked layout
+        root = QWidget(self)
+        root.setStyleSheet("background: #111113;")
+        self.setCentralWidget(root)
+
+        self.canvas_stack = QStackedWidget(root)
+
+        from section_tool.hud.hud_layer import HUDLayer
+        self.hud = HUDLayer(root)
+
+        stacked = QStackedLayout(root)
+        stacked.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        stacked.addWidget(self.canvas_stack)
+        stacked.addWidget(self.hud)
+
+        # 5. Reparent views into canvas_stack
+        from section_tool.modes import Mode, MINIMAP_SOURCES
+        for view in (self._section_view, self._map_view, self._viewer_3d):
+            view.setParent(self.canvas_stack)
+            self.canvas_stack.addWidget(view)
+            view.show()
+
+        self._canvases = {
+            Mode.SECTION: self._section_view,
+            Mode.MAP:     self._map_view,
+            Mode.THREE_D: self._viewer_3d,
+        }
+        self.current_mode = Mode.SECTION
+        self.canvas_stack.setCurrentWidget(self._section_view)
+        self.hud.reconfigure_for_mode(Mode.SECTION)
+
+        # 6. WASD navigator for the section view
+        from section_tool.navigation.wasd_navigator import WASDNavigator
+        self._wasd_nav = WASDNavigator(
+            self._section_view.canvas,
+            self._section_view.view_state,
+        )
+
+        # 7. Tool manager + key filter
+        from section_tool.interaction.tool_manager import ToolManager, ToolKeyFilter
+        self._tool_mgr = ToolManager()
+        self._tool_key_filter = ToolKeyFilter(self._tool_mgr, self)
+        self._tool_key_filter.palette_invoke_requested.connect(
+            self.hud.command_palette.invoke
+        )
+        self._tool_mgr.tool_changed.connect(self._on_game_tool_changed)
+        self._tool_mgr.tool_changed.connect(self.hud.tool_indicator.set_tool)
+
+        # Install filters — navigator AFTER key_filter (LIFO: navigator runs first)
+        self._section_view.canvas.installEventFilter(self._tool_key_filter)
+        self._section_view.canvas.installEventFilter(self._wasd_nav)
+
+        # 8. Smart cursor (scene=None → stub, always returns no-hit)
+        from section_tool.interaction.smart_cursor import SmartCursor
+        self._smart_cursor = SmartCursor(self._section_view.canvas, scene=None)
+        self._tool_mgr.tool_changed.connect(self._smart_cursor.set_active_tool)
+
+        # Mouse filter for smart cursor + right-click menu
+        self._mouse_filter = _CanvasMouseFilter(self, self)
+        self._section_view.canvas.installEventFilter(self._mouse_filter)
+
+        # 9. Coord readout from section view motion
+        self._section_view.coords_updated.connect(self._on_section_coords)
+
+        # 10. Command palette → actions
+        self.hud.command_palette.command_selected.connect(self._on_command)
+
+        # 11. Mode shortcuts
+        QShortcut(QKeySequence("1"), self,
+                  lambda: self.set_mode(Mode.SECTION))
+        QShortcut(QKeySequence("2"), self,
+                  lambda: self.set_mode(Mode.MAP))
+        QShortcut(QKeySequence("3"), self,
+                  lambda: self.set_mode(Mode.THREE_D))
+        QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
+
+        # 12. Maximize
+        self.showMaximized()
+
+    # ------------------------------------------------------------------
+    # Mode switching
+    # ------------------------------------------------------------------
+
+    def set_mode(self, mode) -> None:
+        from section_tool.modes import Mode, MINIMAP_SOURCES
+        self.current_mode = mode
+        self.canvas_stack.setCurrentWidget(self._canvases[mode])
+        self.hud.reconfigure_for_mode(mode)
+        self._refresh_minimap()
+
+    def _refresh_minimap(self) -> None:
+        from section_tool.modes import MINIMAP_SOURCES
+        source = self._canvases[MINIMAP_SOURCES[self.current_mode]]
+        pixmap = source.grab().scaled(
+            192, 152,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.hud.minimap.update_content(pixmap)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+
+    # ------------------------------------------------------------------
+    # Tool routing
+    # ------------------------------------------------------------------
+
+    def _on_game_tool_changed(self, tool) -> None:
+        """Map new ToolManager ID → existing AppState tool and activate it."""
+        old_tool = self._NEW_TO_OLD.get(tool, "select")
+        self._on_tool_changed(old_tool)
+
+    def _on_game_escape(self) -> None:
+        """Escape: reset tool manager (also handled by matplotlib for pick/polygon)."""
+        self._tool_mgr.handle_key(Qt.Key.Key_Escape)
+
+    # ------------------------------------------------------------------
+    # HUD feeds
+    # ------------------------------------------------------------------
+
+    def _on_section_coords(self, x_m: float, depth_m: float) -> None:
+        elev_m = self._section_view._surface_elev_at(x_m) - depth_m
+        self.hud.coord_readout.update_coords(x_m, depth_m, elev_m)
+
+    def _update_smart_cursor(self, canvas_pos) -> None:
+        self._smart_cursor.update(canvas_pos, self._section_view.view_state)
+
+    # ------------------------------------------------------------------
+    # Right-click context menu
+    # ------------------------------------------------------------------
+
+    def _build_context_menu(self) -> QMenu | None:
+        hit = self._smart_cursor.current_hit
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background: rgba(20, 20, 26, 240);
+                border: 1px solid rgba(75, 75, 100, 180);
+                border-radius: 6px;
+                padding: 4px 0;
+                color: rgba(210, 210, 210, 255);
+                font-size: 13px;
+            }
+            QMenu::item          { padding: 6px 24px 6px 16px; border-radius: 4px; }
+            QMenu::item:selected { background: rgba(70, 110, 170, 210); }
+            QMenu::item:disabled { color: rgba(120, 120, 130, 180); }
+            QMenu::separator     { height: 1px;
+                                   background: rgba(75, 75, 100, 120);
+                                   margin: 3px 8px; }
+        """)
+
+        if hit is None:
+            act = self._tool_mgr.active
+            if act == "horizon":
+                menu.addAction("Start Horizon Here")
+            elif act == "fault":
+                menu.addAction("Start Fault Here")
+            menu.addAction("Add Annotation…")
+            menu.addSeparator()
+            tip = menu.addAction("Measure Distance  [hold M]")
+            tip.setEnabled(False)
+            return menu
+
+        if hit.type == "horizon":
+            hdr = menu.addAction(f"Horizon: {hit.object.name}")
+            hdr.setEnabled(False)
+            menu.addSeparator()
+            menu.addAction("Edit Name…",
+                lambda: self._on_panel_rename("horizon", hit.object))
+            menu.addSeparator()
+            menu.addAction("Delete Horizon",
+                lambda: self._on_panel_delete(("horizon", hit.object)))
+            return menu
+
+        if hit.type == "fault":
+            hdr = menu.addAction(f"Fault: {hit.object.name}")
+            hdr.setEnabled(False)
+            menu.addSeparator()
+            menu.addAction("Edit Name…",
+                lambda: self._on_panel_rename("fault", hit.object))
+            menu.addSeparator()
+            menu.addAction("Delete Fault",
+                lambda: self._on_panel_delete(("fault", hit.object)))
+            return menu
+
+        if hit.type == "well_log":
+            hdr = menu.addAction(f"Well: {hit.object.name}")
+            hdr.setEnabled(False)
+            menu.addSeparator()
+            return menu
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Command palette → action routing
+    # ------------------------------------------------------------------
+
+    def _on_command(self, command_id: str) -> None:
+        from section_tool.modes import Mode
+        dispatch = {
+            "tool_horizon":  lambda: self._tool_mgr.handle_key(Qt.Key.Key_H),
+            "tool_fault":    lambda: self._tool_mgr.handle_key(Qt.Key.Key_F),
+            "tool_pick":     lambda: self._tool_mgr.handle_key(Qt.Key.Key_T),
+            "tool_annotate": lambda: self._tool_mgr.handle_key(Qt.Key.Key_A),
+            "mode_section":  lambda: self.set_mode(Mode.SECTION),
+            "mode_map":      lambda: self.set_mode(Mode.MAP),
+            "mode_3d":       lambda: self.set_mode(Mode.THREE_D),
+            "view_fit":      self._zoom_to_fit,
+            "export_image":  self._on_export_section_image,
+            "export_svg":    self._on_export_section_image,
+            "project_open":  self._on_open,
+            "project_save":  self._on_save,
+        }
+        action = dispatch.get(command_id)
+        if action:
+            action()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -2498,7 +2829,8 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtGui import QFont
     QToolTip.setFont(QFont("Segoe UI", 9))
 
-    window = MainWindow()
+    window = SectionMainWindow()
+    # showMaximized() called in _convert_to_game_ui(); show() is a no-op here
     window.show()
     return app.exec()
 
