@@ -38,6 +38,7 @@ class SectionPolygon:
         edge_color: str = "#555555",
         edge_width: float = 1.0,
         formation: str = "",
+        section_name: str = "",
     ) -> None:
         verts = np.asarray(vertices, dtype=float)
         if verts.ndim != 2 or verts.shape[1] != 2:
@@ -50,7 +51,8 @@ class SectionPolygon:
         self.fill_alpha = float(np.clip(fill_alpha, 0.0, 1.0))
         self.edge_color = edge_color
         self.edge_width = float(edge_width)
-        self.formation: str = formation   # Phase 5: reference to Formation.name
+        self.formation: str = formation
+        self.section_name: str = section_name  # which section these coords belong to
 
     # ------------------------------------------------------------------
     # Properties

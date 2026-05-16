@@ -1735,108 +1735,114 @@ class MainWindow(QMainWindow):
         self._tool_palette.set_active_tool("horizon_pick")
 
     def _on_generate_polygons(self) -> None:
-        """Detect closed regions via live topology and import as polygons."""
-        import traceback as _tb
-        section = self._state.active_section
-        if section is None:
-            QMessageBox.information(self, "No Section",
-                                    "Activate a section first.")
-            return
+        """Generate filled polygons from horizon/fault boundaries using Shapely directly."""
+        from shapely.geometry import LineString
+        from shapely.ops import unary_union, polygonize
         from section_tool.core.polygons import SectionPolygon
         import numpy as np
 
-        # Diagnostics (printed to terminal for debugging)
-        topo = self._state.topology
-        print(f"[Generate Polygons] section={section.name!r}  "
-              f"topology={'OK' if topo else 'None'}")
-        if topo:
-            user_lines = [k for k in topo._lines if not k.startswith("__")]
-            print(f"  topology lines={user_lines}")
-            print(f"  intersections={len(topo.intersections)}")
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.warning(self, "No Section", "Activate a section first.")
+            return
 
-        polys = []
-        topo_error = None
+        total = section.total_length()
+        lines = []
 
-        # Try topology-based generation first
-        if topo is not None and topo.section_name == section.name:
-            try:
-                polys = topo.get_all_faces()
-                print(f"  topology faces={len(polys)}")
-                for i, p in enumerate(polys):
-                    print(f"    face {i}: area={p.area:.0f}  bounds={p.bounds}")
-            except Exception as exc:
-                topo_error = exc
-                print(f"  topology.get_all_faces() FAILED: {exc}")
-                _tb.print_exc()
+        # Collect horizon lines, extended to section edges
+        for hp in self._state.project.horizon_picks:
+            idxs = hp.section_indices(section.name)
+            if len(idxs) < 2:
+                continue
+            d = hp._distances[idxs]
+            z = hp._depths[idxs]
+            order = np.argsort(d)
+            d, z = d[order], z[order]
+            coords = list(zip(d.tolist(), z.tolist()))
+            # Extend left to x=0
+            if d[0] > 0:
+                dd = d[1] - d[0]
+                slope = (z[1] - z[0]) / dd if abs(dd) > 1e-6 else 0.0
+                coords.insert(0, (0.0, float(z[0] - slope * d[0])))
+            # Extend right to x=total
+            if d[-1] < total:
+                dd = d[-1] - d[-2]
+                slope = (z[-1] - z[-2]) / dd if abs(dd) > 1e-6 else 0.0
+                coords.append((float(total), float(z[-1] + slope * (total - d[-1]))))
+            lines.append(LineString(coords))
 
-        # Fallback to standalone polygon_detection if topology produced nothing
-        if not polys:
-            if topo_error is not None:
-                print("  Falling back to polygon_detection module")
-            from section_tool.core.polygon_detection import detect_polygons
-            try:
-                polys = detect_polygons(
-                    self._state.project.horizon_picks,
-                    self._state.project.fault_picks,
-                    self._state.project.reference_lines,
-                    section,
-                    section_name=section.name,
-                )
-                print(f"  fallback found {len(polys)} polygons")
-            except Exception as exc:
-                print(f"  fallback FAILED: {exc}")
-                _tb.print_exc()
-                QMessageBox.critical(self, "Detection Error",
-                                     f"Polygon detection failed:\n{exc}")
-                return
+        # Collect fault lines (no extension — faults cut through)
+        for fp in self._state.project.fault_picks:
+            idxs = fp.section_indices(section.name)
+            if len(idxs) < 2:
+                continue
+            d = fp._distances[idxs]
+            z = fp._depths[idxs]
+            order = np.argsort(d)
+            lines.append(LineString(list(zip(d[order].tolist(), z[order].tolist()))))
 
-        if not polys:
-            detail = ""
-            if topo is not None:
-                user_lines = [k for k in topo._lines if not k.startswith("__")]
-                detail = (f"\n\nTopology has {len(user_lines)} line(s). "
-                          "Ensure each horizon has at least 2 picks on this section "
-                          "and extends across the full width.")
+        if not lines:
             QMessageBox.information(self, "No Polygons Found",
-                                    "No closed regions were detected." + detail)
+                                    "No horizons or faults found on this section.\n"
+                                    "Pick at least one horizon spanning the full width.")
+            return
+
+        # Section boundary rectangle
+        max_d = self._section_view._compute_max_depth(section)
+        boundary = LineString([(0,0),(total,0),(total,max_d),(0,max_d),(0,0)])
+        lines.append(boundary)
+
+        try:
+            merged = unary_union(lines)
+            faces = list(polygonize(merged))
+        except Exception as exc:
+            QMessageBox.critical(self, "Generation Error",
+                                 f"Polygon generation failed:\n{exc}")
+            return
+
+        # Filter slivers
+        min_area = total * max_d * 0.001
+        faces = [f for f in faces if f.area >= min_area]
+
+        if not faces:
+            QMessageBox.information(self, "No Polygons Found",
+                                    "No closed regions detected.\n"
+                                    "Ensure horizons extend across the full section width.")
             return
 
         reply = QMessageBox.question(
             self, "Import Polygons",
-            f"{len(polys)} closed region(s) detected.\nImport all as polygons?",
+            f"{len(faces)} region(s) detected. Import as polygons?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-        _POLY_COLORS = [
-            "#4878d0", "#ee854a", "#6acc64", "#d65f5f", "#956cb4",
-            "#8c613c", "#dc7ec0", "#797979", "#d5bb67", "#82c6e2",
-        ]
+
+        _COLORS = ["#4878d0","#ee854a","#6acc64","#d65f5f","#956cb4",
+                   "#8c613c","#dc7ec0","#797979","#d5bb67","#82c6e2"]
         existing = len(self._state.project.polygons)
-        added_polys = []
-        for i, shp in enumerate(polys):
-            try:
-                coords = list(shp.exterior.coords)
-            except AttributeError:
-                continue
+        added = []
+        for i, face in enumerate(faces):
+            coords = list(face.exterior.coords)
             if coords[0] == coords[-1]:
                 coords = coords[:-1]
             if len(coords) < 3:
                 continue
-            color = _POLY_COLORS[(existing + i) % len(_POLY_COLORS)]
-            added_polys.append(SectionPolygon(
+            added.append(SectionPolygon(
                 vertices=np.array(coords),
                 name=f"Region {existing + i + 1}",
-                fill_color=color,
+                fill_color=_COLORS[i % len(_COLORS)],
                 fill_alpha=0.45,
+                section_name=section.name,
             ))
+
         self._state.blockSignals(True)
         try:
-            for poly in added_polys:
+            for poly in added:
                 self._state.add_polygon(poly)
         finally:
             self._state.blockSignals(False)
-            if added_polys:
+            if added:
                 self._state.project_changed.emit()
 
     def _on_edit_strat_column(self) -> None:

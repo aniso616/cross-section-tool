@@ -792,6 +792,13 @@ class SectionView(QWidget):
 
         self._ax_limits_set = True
 
+        # Safety: Y axis must always be inverted (depth=0 at top, increases downward)
+        yl = self._ax.get_ylim()
+        if yl[0] < yl[1]:                    # wrong orientation — fix it
+            self._ax.set_ylim(yl[1], yl[0])
+            if self._saved_ylim is not None:
+                self._saved_ylim = (self._saved_ylim[1], self._saved_ylim[0])
+
         self._render_overlays(section)
 
         _t_draw = time.perf_counter()
@@ -1448,6 +1455,10 @@ class SectionView(QWidget):
     def _render_polygons(self, section: Section) -> None:
         from matplotlib.patches import Polygon as MplPolygon
         for poly in self._state.project.polygons:
+            # Only render polygons that belong to this section (or have no section tag)
+            poly_sec = getattr(poly, "section_name", "")
+            if poly_sec and poly_sec != section.name:
+                continue
             verts = poly.vertices
             if len(verts) < 3:
                 continue
