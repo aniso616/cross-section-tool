@@ -41,17 +41,18 @@ def _val_label(text: str) -> QLabel:
         lbl = QLabel(str(text))
         lbl.setStyleSheet("color: #222222; font-size: 9pt;")
         lbl.setWordWrap(True)
-        lbl.setMaximumWidth(200)
+    lbl.setMinimumWidth(80)
     return lbl
 
 
 def _form() -> QFormLayout:
     """Standard QFormLayout with consistent spacing."""
     f = QFormLayout()
+    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+    f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     f.setVerticalSpacing(6)
     f.setHorizontalSpacing(8)
-    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
     f.setContentsMargins(4, 4, 4, 4)
     return f
 

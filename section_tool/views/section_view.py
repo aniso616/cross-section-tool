@@ -117,13 +117,9 @@ class SectionView(QWidget):
         self._pending_xlim: tuple | None = None
         self._pending_ylim: tuple | None = None
         self._user_has_zoomed: bool = False
-        # ---- persistent render artists ----
-        # Seismic imshow artists: created ONCE on full-setup, never destroyed on pan/zoom
+        # Artist tracking (populated each render, cleared by ax.clear())
         self._seismic_artists: list = []
-        # All other (overlay) artists: removed and re-added every frame
         self._overlay_artists: list = []
-        # True → next render does ax.clear() + recreates seismic artists
-        self._needs_full_setup: bool = True
         # ---- image overlays [(path, section_name, (d0,d1), (z0,z1))] ----
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
@@ -350,6 +346,15 @@ class SectionView(QWidget):
             "color: #333333; background: #ffffff; border: 1px solid #999999;")
         self._seismic_vel_spin.valueChanged.connect(self._on_seismic_velocity_changed)
         sl.addWidget(self._seismic_vel_spin)
+        from PySide6.QtWidgets import QCheckBox
+        self._fast_display_cb = QCheckBox("Fast display")
+        self._fast_display_cb.setChecked(False)
+        self._fast_display_cb.setToolTip(
+            "Downsample seismic to screen resolution before rendering.\n"
+            "Enable for fast panning; disable for full-detail viewing."
+        )
+        self._fast_display_cb.setStyleSheet("color: #555555; font-size: 8pt;")
+        sl.addWidget(self._fast_display_cb)
         sl.addStretch()
         self._seismic_row.hide()   # shown when seismic refs are present
 
@@ -371,7 +376,7 @@ class SectionView(QWidget):
         self._pick_banner_label = QLabel("Picking: —")
         _bl.addWidget(self._pick_banner_label)
         _bl.addStretch()
-        _end_btn = QPushButton("⏹ End Picking")
+        _end_btn = QPushButton("�?� End Picking")
         _end_btn.setToolTip("Finish this pick session  (Right-click or Escape)")
         _end_btn.clicked.connect(self._end_pick_sequence)
         _bl.addWidget(_end_btn)
@@ -448,7 +453,6 @@ class SectionView(QWidget):
 
     def set_display_mode(self, mode: Literal["variable_density", "wiggle"]) -> None:
         self._display_mode = mode
-        self._needs_full_setup = True
         self.render()
 
     def render_to_figure(
@@ -549,7 +553,7 @@ class SectionView(QWidget):
                     kind = "Horizon" if cat == "Horizons" else "Fault"
                     name = picks[idx].name or f"{kind} {idx + 1}"
                     self._pick_banner_label.setText(
-                        f"━  Picking: {name}  ({kind})  ━"
+                        f"�?  Picking: {name}  ({kind})  �?"
                     )
             self._pick_banner.show()
         else:
@@ -662,8 +666,7 @@ class SectionView(QWidget):
         )
 
     def _invalidate_seismic_cache(self) -> None:
-        """Mark that the seismic artist must be rebuilt on the next render."""
-        self._needs_full_setup = True
+        self._seismic_proj_cache.clear()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -739,7 +742,6 @@ class SectionView(QWidget):
         has_seis = bool(self._state.project.seismic_refs
                         or self._state.get_seismic_for_section(section.name)[0] is not None)
         self._seismic_row.setVisible(has_seis)
-
         self._full_render(section)
 
         if self._show_fps:
@@ -747,48 +749,32 @@ class SectionView(QWidget):
             self.frame_time_ms.emit(ms)
 
     def _full_render(self, section) -> None:
-        """Persistent-artist render pipeline.
+        """Simple, correct render. No caching tricks — ax.clear() every frame."""
+        self._seismic_artists.clear()
+        self._overlay_artists.clear()
+        self._ax.clear()
+        self._setup_axes(section)
+        self._render_image_overlays(section)
+        self._setup_seismic_artists(section)
 
-        Full-setup path (seismic changes / section changes):
-            ax.clear() → setup axes → create seismic imshow artists → overlays
+        # Apply pending zoom limits AFTER seismic setup (imshow must not override them)
+        if self._pending_xlim is not None:
+            self._ax.set_xlim(self._pending_xlim)
+            self._ax.set_ylim(self._pending_ylim)
+            self._pending_xlim = None
+            self._pending_ylim = None
+        self._ax_limits_set = True
 
-        Fast path (picks / wells / zoom / pan):
-            remove overlay artists individually → apply limits → overlays
-            The seismic imshow artists are NEVER touched — Matplotlib clips them
-            to the current axis limits automatically.
-        """
-        if self._needs_full_setup:
-            # Seismic artists are gone after ax.clear — reset tracking
-            self._seismic_artists.clear()
-            self._overlay_artists.clear()
-            self._ax.clear()
-            self._setup_axes(section)
-            self._render_image_overlays(section)
-            self._setup_seismic_artists(section)   # creates persistent imshow(s)
-            # Apply pending limits AFTER seismic setup (imshow must not override them)
-            if self._pending_xlim is not None:
-                self._ax.set_xlim(self._pending_xlim)
-                self._ax.set_ylim(self._pending_ylim)
-                self._pending_xlim = None
-                self._pending_ylim = None
-            self._ax_limits_set = True
-            self._needs_full_setup = False
-        else:
-            # Fast path: only remove overlay artists, seismic artists untouched
-            for art in self._overlay_artists:
-                try: art.remove()
-                except Exception: pass
-            self._overlay_artists.clear()
-            if self._pending_xlim is not None:
-                self._ax.set_xlim(self._pending_xlim)
-                self._ax.set_ylim(self._pending_ylim)
-                self._pending_xlim = None
-                self._pending_ylim = None
-                self._ax_limits_set = True
-
-        # Overlays — always re-rendered, appending to _overlay_artists
         self._render_overlays(section)
+
+        _t_draw = time.perf_counter()
         self._canvas.draw_idle()
+        _draw_ms = (time.perf_counter() - _t_draw) * 1000.0
+        if _draw_ms > 30:
+            ex_data, _ = self._state.get_seismic_for_section(section.name)
+            shape_str = str(ex_data.shape) if ex_data is not None else "n/a"
+            print(f"DRAW TIME: {_draw_ms:.0f}ms  seismic={'yes' if ex_data is not None else 'no'}"
+                  f"  data_shape={shape_str}")
 
     def _render_overlays(self, section) -> None:
         """Render all lightweight overlay layers, tracking artists for next-frame removal."""
@@ -1312,13 +1298,25 @@ class SectionView(QWidget):
             except Exception:
                 pass
 
-    def _setup_seismic_artists(self, section: Section) -> None:
-        """Create persistent seismic imshow artist(s). Called ONCE per full setup.
+    def _display_seismic_data(self, data: np.ndarray) -> np.ndarray:
+        """Optionally downsample seismic data to screen resolution for fast display."""
+        if not getattr(self, "_fast_display_cb", None) or not self._fast_display_cb.isChecked():
+            return data
+        try:
+            bbox = self._ax.get_window_extent()
+            target_w = max(1, int(bbox.width))
+            target_h = max(1, int(bbox.height))
+            h, w = data.shape[:2]
+            step_x = max(1, w // target_w)
+            step_y = max(1, h // target_h)
+            if step_x > 1 or step_y > 1:
+                return data[::step_y, ::step_x]
+        except Exception:
+            pass
+        return data
 
-        The created AxesImage objects are stored in ``_seismic_artists`` and are
-        NEVER removed on overlay-only renders — Matplotlib clips them to the
-        current axis limits automatically, making zoom/pan instant.
-        """
+    def _setup_seismic_artists(self, section: Section) -> None:
+        """Create seismic imshow artist(s) — called on every full render."""
         sds      = getattr(section, "seismic_display", None)
         clip_pct = sds.clip_percentile   if sds else 99.0
         gain     = sds.gain              if sds else 1.0
@@ -1329,6 +1327,7 @@ class SectionView(QWidget):
         cmap_name = _SEGY_CMAP.get(cmap_key, "seismic")
 
         def _imshow(img_data, dist0, dist1, y_top, y_bot):
+            img_data = self._display_seismic_data(img_data)
             vmax = float(np.percentile(np.abs(img_data), clip_pct) or 1.0) * gain
             art = self._ax.imshow(
                 img_data,
@@ -2052,7 +2051,7 @@ class SectionView(QWidget):
             self._pending_ylim = (y_range, 0.0)   # inverted: deep at top of tuple
             self._pending_xlim = None              # keep current xlim
             self._user_has_zoomed = False          # reset so default limits apply
-        self._needs_full_setup = False
+
         if self._ve_lock_btn.isChecked():
             for i, sec in enumerate(self._state.project.sections):
                 if abs(getattr(sec, "vertical_exaggeration", 1.0) - value) > 0.001:
@@ -2078,7 +2077,6 @@ class SectionView(QWidget):
             sds.stretch_mode = mode
             section.seismic_display = sds
         self._ax_limits_set = False
-        self._needs_full_setup = True   # seismic Y extent changed → rebuild artist
         self.request_render()
 
     def _on_seismic_velocity_changed(self, value: float) -> None:
@@ -2089,7 +2087,6 @@ class SectionView(QWidget):
             sds.constant_velocity = value
             section.seismic_display = sds
         self._ax_limits_set = False
-        self._needs_full_setup = True   # velocity changes imshow extent → rebuild
         self.request_render()
 
     # ------------------------------------------------------------------
@@ -2436,25 +2433,34 @@ class SectionView(QWidget):
             self._object_drag_press_pt = None
 
     def _on_sv_resize(self, _event) -> None:
-        self._needs_full_setup = True   # canvas size changed → full axis/seismic reset
         self.request_render()
 
     def _on_scroll_sv(self, event) -> None:
         if event.inaxes is not self._ax:
             return
-        factor = 0.85 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 0.85
-        cx = event.xdata if event.xdata is not None else sum(self._ax.get_xlim()) / 2
-        cy = event.ydata if event.ydata is not None else sum(self._ax.get_ylim()) / 2
-        xl, yl = self._ax.get_xlim(), self._ax.get_ylim()
-        new_xl = tuple(cx + (x - cx) * factor for x in xl)
-        new_yl = tuple(cy + (y - cy) * factor for y in yl)
+        if event.xdata is None or event.ydata is None:
+            return
 
-        # Apply limits immediately — no ax.clear() needed, seismic clips automatically
-        self._ax.set_xlim(new_xl)
-        self._ax.set_ylim(new_yl)
+        factor = 1.3 if (getattr(event, "step", 0) > 0 or event.button == "up") else 1.0 / 1.3
+
+        xlim = self._ax.get_xlim()
+        ylim = self._ax.get_ylim()
+        xdata, ydata = event.xdata, event.ydata
+
+        x_range = xlim[1] - xlim[0]
+        y_range = ylim[0] - ylim[1]   # positive (y inverted: ylim[0] > ylim[1])
+
+        new_x_range = x_range / factor
+        new_y_range = y_range / factor
+
+        x_frac = (xdata - xlim[0]) / x_range if x_range != 0 else 0.5
+        y_frac = (ylim[0] - ydata) / y_range if y_range != 0 else 0.5
+
+        self._pending_xlim = (xdata - new_x_range * x_frac,
+                              xdata + new_x_range * (1 - x_frac))
+        self._pending_ylim = (ydata + new_y_range * y_frac,
+                              ydata - new_y_range * (1 - y_frac))
         self._user_has_zoomed = True
-        # Fast path: only overlay artists need updating, not the seismic imshow
-        self._needs_full_setup = False
         self.request_render()   # debounced — fires 50 ms after last scroll event
 
     def _on_sv_key(self, event) -> None:
@@ -2535,13 +2541,13 @@ class SectionView(QWidget):
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
         self._seismic_proj_cache.clear()
-        self._needs_full_setup = True
+
         self.request_render()
 
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
         """Force full setup (clear + new seismic artist) when section changes."""
         self._seismic_proj_cache.clear()
-        self._needs_full_setup = True
+
         self._user_has_zoomed = False
         self._pending_xlim = None
         self._pending_ylim = None
