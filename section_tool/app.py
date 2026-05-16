@@ -1734,6 +1734,56 @@ class MainWindow(QMainWindow):
         # Always switch to horizon_pick after adding (natural next step)
         self._tool_palette.set_active_tool("horizon_pick")
 
+    @staticmethod
+    def _formation_for_face(face, horizon_lines_info: list) -> tuple[str, str]:
+        """Return (formation_name, fill_color_hex) for a Shapely polygon face.
+
+        Uses the centroid depth to find which two horizons bracket it (depth-sorted).
+        All polygons between the same pair of horizons share the same name+color,
+        so fault-split blocks within one stratigraphic unit stay visually consistent.
+        """
+        from shapely.geometry import LineString as _LS
+        cx, cy = face.centroid.x, face.centroid.y
+
+        # Interpolate each horizon's depth at the centroid's x position
+        hz_depths: list[tuple[float, str, str]] = []  # (depth, name, color)
+        for h_name, h_line, h_color, h_form_above, h_form_below in horizon_lines_info:
+            try:
+                vert = _LS([(cx, -1e9), (cx, 1e9)])
+                inter = h_line.intersection(vert)
+                if inter.is_empty:
+                    continue
+                if inter.geom_type == "Point":
+                    hz_depths.append((inter.y, h_name, h_color))
+                elif inter.geom_type == "MultiPoint":
+                    pt = min(inter.geoms, key=lambda p: abs(p.y - cy))
+                    hz_depths.append((pt.y, h_name, h_color))
+            except Exception:
+                continue
+
+        hz_depths.sort(key=lambda t: t[0])  # shallowest first
+
+        above_name, above_color = "Surface", "#87CEEB"
+        below_name, below_color = "Base", "#8B7765"
+
+        for depth, h_name, h_color in hz_depths:
+            if depth > cy:
+                below_name, below_color = h_name, h_color
+                break
+            above_name, above_color = h_name, h_color
+
+        if above_name == "Surface":
+            form_name = f"Above {below_name}"
+            fill_color = below_color
+        elif below_name == "Base":
+            form_name = f"Below {above_name}"
+            fill_color = above_color
+        else:
+            form_name = f"{above_name} – {below_name}"
+            fill_color = above_color   # convention: color by upper contact
+
+        return form_name, fill_color
+
     def _on_generate_polygons(self) -> None:
         """Generate filled polygons from horizon/fault boundaries using Shapely directly."""
         from shapely.geometry import LineString
@@ -1748,6 +1798,7 @@ class MainWindow(QMainWindow):
 
         total = section.total_length()
         lines = []
+        horizon_lines_info = []  # (name, LineString, color, form_above, form_below)
 
         # Collect horizon lines, extended to section edges
         for hp in self._state.project.horizon_picks:
@@ -1759,19 +1810,23 @@ class MainWindow(QMainWindow):
             order = np.argsort(d)
             d, z = d[order], z[order]
             coords = list(zip(d.tolist(), z.tolist()))
-            # Extend left to x=0
             if d[0] > 0:
                 dd = d[1] - d[0]
                 slope = (z[1] - z[0]) / dd if abs(dd) > 1e-6 else 0.0
                 coords.insert(0, (0.0, float(z[0] - slope * d[0])))
-            # Extend right to x=total
             if d[-1] < total:
                 dd = d[-1] - d[-2]
                 slope = (z[-1] - z[-2]) / dd if abs(dd) > 1e-6 else 0.0
                 coords.append((float(total), float(z[-1] + slope * (total - d[-1]))))
-            lines.append(LineString(coords))
+            ls = LineString(coords)
+            lines.append(ls)
+            horizon_lines_info.append((
+                hp.name, ls, hp.color,
+                getattr(hp, "formation_above", ""),
+                getattr(hp, "formation_below", ""),
+            ))
 
-        # Collect fault lines (no extension — faults cut through)
+        # Collect fault lines (no extension)
         for fp in self._state.project.fault_picks:
             idxs = fp.section_indices(section.name)
             if len(idxs) < 2:
@@ -1787,7 +1842,6 @@ class MainWindow(QMainWindow):
                                     "Pick at least one horizon spanning the full width.")
             return
 
-        # Section boundary rectangle
         max_d = self._section_view._compute_max_depth(section)
         boundary = LineString([(0,0),(total,0),(total,max_d),(0,max_d),(0,0)])
         lines.append(boundary)
@@ -1800,7 +1854,6 @@ class MainWindow(QMainWindow):
                                  f"Polygon generation failed:\n{exc}")
             return
 
-        # Filter slivers
         min_area = total * max_d * 0.001
         faces = [f for f in faces if f.area >= min_area]
 
@@ -1818,9 +1871,12 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        _COLORS = ["#4878d0","#ee854a","#6acc64","#d65f5f","#956cb4",
-                   "#8c613c","#dc7ec0","#797979","#d5bb67","#82c6e2"]
+        # Formation counter for fallback numbering when no horizons bound a face
+        _FALLBACK = ["#4878d0","#ee854a","#6acc64","#d65f5f","#956cb4",
+                     "#8c613c","#dc7ec0","#797979","#d5bb67","#82c6e2"]
         existing = len(self._state.project.polygons)
+        # Track formation→color for consistency across fault-split blocks
+        form_color_map: dict[str, str] = {}
         added = []
         for i, face in enumerate(faces):
             coords = list(face.exterior.coords)
@@ -1828,10 +1884,38 @@ class MainWindow(QMainWindow):
                 coords = coords[:-1]
             if len(coords) < 3:
                 continue
+
+            form_name, fill_color = self._formation_for_face(face, horizon_lines_info)
+
+            # Check if the strat catalog has a formation with this name — use its color
+            try:
+                strat_col = self._state.project.strat_column
+                fm = strat_col.get_formation(form_name)
+                if fm is None:
+                    # Try formation_above/formation_below labels on bounding horizons
+                    pass
+                if fm is not None:
+                    r, g, b = fm.color
+                    fill_color = "#{:02x}{:02x}{:02x}".format(int(r), int(g), int(b))
+            except Exception:
+                pass
+
+            # Keep color consistent for same formation across fault blocks
+            if form_name in form_color_map:
+                fill_color = form_color_map[form_name]
+            else:
+                form_color_map[form_name] = fill_color
+
+            # Ordinal suffix if multiple blocks of the same formation
+            count_so_far = sum(
+                1 for p in added if p.name == form_name or p.name.startswith(form_name + " (")
+            )
+            poly_name = form_name if count_so_far == 0 else f"{form_name} ({count_so_far + 1})"
+
             added.append(SectionPolygon(
                 vertices=np.array(coords),
-                name=f"Region {existing + i + 1}",
-                fill_color=_COLORS[i % len(_COLORS)],
+                name=poly_name,
+                fill_color=fill_color,
                 fill_alpha=0.45,
                 section_name=section.name,
             ))

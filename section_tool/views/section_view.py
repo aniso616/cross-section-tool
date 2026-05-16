@@ -846,6 +846,16 @@ class SectionView(QWidget):
         # Y axis — depth down, inverted
         max_d = self._compute_max_depth(section)
         y_range = max_d / max(ve, 0.01)
+        # Ensure all wells are visible even at high VE (well depth may exceed y_range)
+        for well in self._state.project.wells:
+            well_max = float(well.deviation.max_tvd)
+            for log_name in well.log_names:
+                try:
+                    _, hi = well.get_log(log_name).depth_range()
+                    well_max = max(well_max, float(hi))
+                except Exception:
+                    pass
+            y_range = max(y_range, well_max * 1.05)
         self._ax.set_ylim(y_range, 0.0)   # inverted: 0 at top
         # Prevent imshow / other artists from autoscaling Y away from this range
         self._ax.set_autoscaley_on(False)
