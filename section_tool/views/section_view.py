@@ -113,9 +113,13 @@ class SectionView(QWidget):
         # ---- seismic projection cache (expensive per-section computation) ----
         # key: (section_name, ref_path) → (distances, data, perps)
         self._seismic_proj_cache: dict[tuple, tuple] = {}
-        # Pending zoom limits applied at the start of the next render
+        # Pending limits: one-shot override for the next render (from scroll/VE)
         self._pending_xlim: tuple | None = None
         self._pending_ylim: tuple | None = None
+        # Saved limits: persist across renders so rubber-band / pick renders
+        # don't reset the zoom the user set via scroll/pan.
+        self._saved_xlim: tuple | None = None
+        self._saved_ylim: tuple | None = None
         self._user_has_zoomed: bool = False
         # Artist tracking (populated each render, cleared by ax.clear())
         self._seismic_artists: list = []
@@ -694,6 +698,11 @@ class SectionView(QWidget):
         _t0 = time.perf_counter()
         section = self._state.active_section
 
+        # Save main-axis limits BEFORE strat_ax.clear() resets the shared y-axis.
+        # _strat_ax.clear() → set_ylim(0,1) propagates to _ax via sharey, clobbering zoom.
+        _saved_xl = self._ax.get_xlim()
+        _saved_yl = self._ax.get_ylim()
+
         # Strat axis: always clear and re-render (cheap, separate axis)
         self._strat_ax.clear()
         self._strat_ax.tick_params(
@@ -702,8 +711,13 @@ class SectionView(QWidget):
             self._strat_ax.spines[sp].set_visible(False)
         self._strat_ax.set_facecolor("white")
 
+        # Restore _ax limits immediately (strat_ax.clear reset the shared y-axis)
+        if self._ax_limits_set:
+            self._ax.set_xlim(_saved_xl)
+            self._ax.set_ylim(_saved_yl)
+            self._ax.set_autoscaley_on(False)
+
         if section is None:
-            # Clear everything and show placeholder
             self._seismic_artists.clear()
             self._overlay_artists.clear()
             self._ax.clear()
@@ -712,6 +726,8 @@ class SectionView(QWidget):
             self._ve_spin.setEnabled(False)
             self._depth_units_combo.setEnabled(False)
             self._ax_limits_set = False
+            self._saved_xlim = None
+            self._saved_ylim = None
             self._canvas.draw_idle()
             return
 
@@ -753,18 +769,27 @@ class SectionView(QWidget):
         self._seismic_artists.clear()
         self._overlay_artists.clear()
         self._ax.clear()
-        self._setup_axes(section)
+        self._setup_axes(section)   # sets default xlim/ylim
         self._render_image_overlays(section)
         self._setup_seismic_artists(section)
 
-        # Apply pending limits AFTER seismic setup — each applied independently
-        # so that VE change (ylim only) and scroll zoom (both) both work correctly.
+        # Apply zoom limits AFTER seismic setup.
+        # Priority: pending (new scroll/VE command) > saved (persisted from last zoom)
+        # > defaults from _setup_axes (first render, section change).
         if self._pending_xlim is not None:
             self._ax.set_xlim(self._pending_xlim)
+            self._saved_xlim = self._pending_xlim   # persist for future renders
             self._pending_xlim = None
+        elif self._saved_xlim is not None:
+            self._ax.set_xlim(self._saved_xlim)     # restore user's zoom
+
         if self._pending_ylim is not None:
             self._ax.set_ylim(self._pending_ylim)
+            self._saved_ylim = self._pending_ylim   # persist
             self._pending_ylim = None
+        elif self._saved_ylim is not None:
+            self._ax.set_ylim(self._saved_ylim)     # restore user's zoom
+
         self._ax_limits_set = True
 
         self._render_overlays(section)
@@ -2076,9 +2101,12 @@ class SectionView(QWidget):
         if section is not None:
             max_d = self._compute_max_depth(section)
             y_range = max_d / value
-            self._pending_ylim = (y_range, 0.0)   # inverted: deep at top of tuple
-            self._pending_xlim = None              # keep current xlim
-            self._user_has_zoomed = False          # reset so default limits apply
+            new_ylim = (y_range, 0.0)
+            self._pending_ylim = new_ylim
+            self._saved_ylim   = new_ylim   # persist so rubber-band renders keep it
+            self._saved_xlim   = None       # let xlim reset to full section width on VE change
+            self._pending_xlim = None
+            self._user_has_zoomed = False   # full section width on VE change
 
         if self._ve_lock_btn.isChecked():
             for i, sec in enumerate(self._state.project.sections):
@@ -2331,10 +2359,15 @@ class SectionView(QWidget):
             try:
                 d0 = self._sv_pan_inv.transform(self._sv_pan_anchor)
                 d1 = self._sv_pan_inv.transform([event.x, event.y])
-                self._ax.set_xlim(self._sv_pan_xlim0[0] + d0[0] - d1[0],
-                                  self._sv_pan_xlim0[1] + d0[0] - d1[0])
-                self._ax.set_ylim(self._sv_pan_ylim0[0] + d0[1] - d1[1],
-                                  self._sv_pan_ylim0[1] + d0[1] - d1[1])
+                new_xl = (self._sv_pan_xlim0[0] + d0[0] - d1[0],
+                          self._sv_pan_xlim0[1] + d0[0] - d1[0])
+                new_yl = (self._sv_pan_ylim0[0] + d0[1] - d1[1],
+                          self._sv_pan_ylim0[1] + d0[1] - d1[1])
+                self._ax.set_xlim(new_xl)
+                self._ax.set_ylim(new_yl)
+                self._saved_xlim = new_xl   # persist pan position
+                self._saved_ylim = new_yl
+                self._user_has_zoomed = True
             except Exception:
                 pass
             self._canvas.draw_idle()
@@ -2484,10 +2517,14 @@ class SectionView(QWidget):
         x_frac = (xdata - xlim[0]) / x_range if x_range != 0 else 0.5
         y_frac = (ylim[0] - ydata) / y_range if y_range != 0 else 0.5
 
-        self._pending_xlim = (xdata - new_x_range * x_frac,
-                              xdata + new_x_range * (1 - x_frac))
-        self._pending_ylim = (ydata + new_y_range * y_frac,
-                              ydata - new_y_range * (1 - y_frac))
+        new_xlim = (xdata - new_x_range * x_frac,
+                    xdata + new_x_range * (1 - x_frac))
+        new_ylim = (ydata + new_y_range * y_frac,
+                    ydata - new_y_range * (1 - y_frac))
+        self._pending_xlim = new_xlim
+        self._pending_ylim = new_ylim
+        self._saved_xlim   = new_xlim   # persist immediately so rubber-band renders don't reset
+        self._saved_ylim   = new_ylim
         self._user_has_zoomed = True
         self.request_render()   # debounced — fires 50 ms after last scroll event
 
@@ -2573,12 +2610,13 @@ class SectionView(QWidget):
         self.request_render()
 
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
-        """Force full setup (clear + new seismic artist) when section changes."""
+        """Reset zoom state when section changes — new section gets default limits."""
         self._seismic_proj_cache.clear()
-
         self._user_has_zoomed = False
         self._pending_xlim = None
         self._pending_ylim = None
+        self._saved_xlim   = None   # clear persisted zoom — new section, fresh view
+        self._saved_ylim   = None
         self._ax_limits_set = False
 
     # ------------------------------------------------------------------
