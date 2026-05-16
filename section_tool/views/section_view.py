@@ -55,10 +55,15 @@ _SNAP_TOOLS = frozenset({
 _SEGY_CMAP = {
     "seismic_red_blue": "seismic",
     "grey":             "gray",
+    "gray_r":           "gray_r",   # reversed grayscale — industry default
+    "RdBu_r":           "RdBu_r",
+    "RdYlBu_r":         "RdYlBu_r",
+    "bone":             "bone",
     "viridis":          "viridis",
     "inferno":          "inferno",
     "jet":              "jet",
 }
+_DEFAULT_CMAP = "gray_r"
 
 # Max perpendicular distance for well projection onto section
 _WELL_MAX_PERP = 2000.0   # metres
@@ -300,7 +305,8 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig = Figure(figsize=(10, 6), facecolor="white")
+        from section_tool.style import CANVAS_BG
+        self._fig = Figure(figsize=(10, 6), facecolor=CANVAS_BG)
         # Phase 4: reserve left column for stratigraphic column, share Y axis
         self._gs = GridSpec(
             1, 2,
@@ -311,7 +317,7 @@ class SectionView(QWidget):
             wspace=0.02,
         )
         self._strat_ax = self._fig.add_subplot(self._gs[0, 0])
-        self._strat_ax.set_facecolor("white")
+        self._strat_ax.set_facecolor(CANVAS_BG)
         self._strat_ax.tick_params(
             left=False, bottom=False, labelbottom=False, labelleft=False
         )
@@ -320,7 +326,7 @@ class SectionView(QWidget):
         self._strat_ax.spines["bottom"].set_visible(False)
 
         self._ax = self._fig.add_subplot(self._gs[0, 1], sharey=self._strat_ax)
-        self._ax.set_facecolor("white")
+        self._ax.set_facecolor(CANVAS_BG)
         self._canvas = FigureCanvasQTAgg(self._fig)
 
         # Hidden toolbar — kept for zoom stack; NOT in the layout.
@@ -550,6 +556,25 @@ class SectionView(QWidget):
         else:
             self._header.show()
 
+    def _apply_dark_theme(self) -> None:
+        """Apply dark axis styling — call after every ax.clear()."""
+        from section_tool.style import (
+            CANVAS_BG, CANVAS_TEXT, CANVAS_BORDER, CANVAS_TICK
+        )
+        self._ax.set_facecolor(CANVAS_BG)
+        self._ax.tick_params(colors=CANVAS_TEXT, which="both")
+        self._ax.xaxis.label.set_color(CANVAS_TEXT)
+        self._ax.yaxis.label.set_color(CANVAS_TEXT)
+        self._ax.title.set_color(CANVAS_TEXT)
+        for spine in self._ax.spines.values():
+            spine.set_color(CANVAS_BORDER)
+
+    def _apply_dark_theme_strat(self) -> None:
+        """Apply dark axis styling to the stratigraphic column axis."""
+        from section_tool.style import CANVAS_BG, CANVAS_BORDER
+        self._strat_ax.set_facecolor(CANVAS_BG)
+        self._strat_ax.spines["left"].set_color(CANVAS_BORDER)
+
     def _surface_elev_at(self, x_m: float) -> float:
         """Return ground-surface elevation (m) at distance x_m along section."""
         section = self._state.active_section
@@ -774,7 +799,7 @@ class SectionView(QWidget):
             sds.clip_percentile   if sds else 99.0,
             sds.gain              if sds else 1.0,
             sds.opacity           if sds else 1.0,
-            sds.colormap          if sds else "seismic_red_blue",
+            sds.colormap          if sds else _DEFAULT_CMAP,
             sds.show_wiggle       if sds else False,
             sds.stretch_mode      if sds else "linear",
             sds.constant_velocity if sds else 2000.0,
@@ -821,7 +846,7 @@ class SectionView(QWidget):
             left=False, bottom=False, labelbottom=False, labelleft=False)
         for sp in ("top", "right", "bottom"):
             self._strat_ax.spines[sp].set_visible(False)
-        self._strat_ax.set_facecolor("white")
+        self._apply_dark_theme_strat()
 
         # Restore _ax limits immediately (strat_ax.clear reset the shared y-axis)
         if self._ax_limits_set:
@@ -833,6 +858,10 @@ class SectionView(QWidget):
             self._seismic_artists.clear()
             self._overlay_artists.clear()
             self._ax.clear()
+            self._apply_dark_theme()
+            # Sensible default axis when nothing is loaded
+            self._ax.set_xlim(0, 10000)
+            self._ax.set_ylim(5000, 0)   # inverted: 0 at top
             self._section_name_label.setText("— no section —")
             self._seismic_row.hide()
             self._ve_spin.setEnabled(False)
@@ -869,7 +898,8 @@ class SectionView(QWidget):
 
         has_seis = bool(self._state.project.seismic_refs
                         or self._state.get_seismic_for_section(section.name)[0] is not None)
-        self._seismic_row.setVisible(has_seis)
+        if not self._game_mode:
+            self._seismic_row.setVisible(has_seis)
         self._full_render(section)
 
         if self._show_fps:
@@ -881,6 +911,7 @@ class SectionView(QWidget):
         self._seismic_artists.clear()
         self._overlay_artists.clear()
         self._ax.clear()
+        self._apply_dark_theme()
         self._setup_axes(section)   # sets default xlim/ylim
         self._render_image_overlays(section)
         self._setup_seismic_artists(section)
@@ -999,9 +1030,10 @@ class SectionView(QWidget):
         else:
             ylabel = f"Depth ({units})"
 
-        self._ax.set_xlabel(xlabel, fontsize=8)
-        self._ax.set_ylabel(ylabel, fontsize=8)
-        self._ax.tick_params(labelsize=7)
+        from section_tool.style import CANVAS_TEXT
+        self._ax.set_xlabel(xlabel, fontsize=8, color=CANVAS_TEXT)
+        self._ax.set_ylabel(ylabel, fontsize=8, color=CANVAS_TEXT)
+        self._ax.tick_params(labelsize=7, colors=CANVAS_TEXT)
 
         # Dual-unit secondary axes (m + ft)
         if units == "m+ft":
@@ -1492,10 +1524,10 @@ class SectionView(QWidget):
         clip_pct = sds.clip_percentile   if sds else 99.0
         gain     = sds.gain              if sds else 1.0
         opacity  = sds.opacity           if sds else 1.0
-        cmap_key = sds.colormap          if sds else "seismic_red_blue"
+        cmap_key = sds.colormap          if sds else _DEFAULT_CMAP
         stretch  = sds.stretch_mode      if sds else "linear"
         v_ms     = sds.constant_velocity if sds else 2000.0
-        cmap_name = _SEGY_CMAP.get(cmap_key, "seismic")
+        cmap_name = _SEGY_CMAP.get(cmap_key, _DEFAULT_CMAP)
 
         def _imshow(img_data, dist0, dist1, y_top, y_bot):
             img_data = self._display_seismic_data(img_data)

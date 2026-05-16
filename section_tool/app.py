@@ -2415,12 +2415,7 @@ class MainWindow(QMainWindow):
 # ---------------------------------------------------------------------------
 
 class _CanvasMouseFilter(QObject):
-    """Event filter installed on FigureCanvasQTAgg.
-
-    Handles Qt-level mouse events the matplotlib backend doesn't expose cleanly:
-    - Updates smart cursor on every move
-    - Shows the styled right-click context menu
-    """
+    """Event filter: updates smart cursor on mouse move.  Never consumes events."""
 
     def __init__(self, window: "SectionMainWindow", parent=None):
         super().__init__(parent)
@@ -2428,17 +2423,9 @@ class _CanvasMouseFilter(QObject):
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
-        t = event.type()
-        if t == QEvent.Type.MouseMove:
+        if event.type() == QEvent.Type.MouseMove:
             self._win._update_smart_cursor(event.pos())
-        elif t == QEvent.Type.MouseButtonPress:
-            from PySide6.QtCore import Qt as _Qt
-            if event.button() == _Qt.MouseButton.RightButton:
-                menu = self._win._build_context_menu()
-                if menu:
-                    menu.exec(event.globalPosition().toPoint())
-                return True
-        return False
+        return False  # never consume — let canvas handle everything
 
 
 class SectionMainWindow(MainWindow):
@@ -2503,22 +2490,22 @@ class SectionMainWindow(MainWindow):
     # ------------------------------------------------------------------
 
     def _convert_to_game_ui(self) -> None:
-        # 1. Strip chrome
-        self.menuBar().setVisible(False)
-        self.statusBar().setVisible(False)
+        # 1. Remove all toolbars; keep menu bar.  Detach from parent so no hidden
+        #    toolbar can surface via QSettings restoreState.
         for tb in list(self.findChildren(QToolBar)):
             tb.setVisible(False)
             self.removeToolBar(tb)
+            tb.setParent(None)  # fully detach from window hierarchy
 
-        # 2. Hide all dock widgets
-        for dock in (self._map_dock, self._section_dock, self._view3d_dock,
-                     self._project_panel, self._properties_panel):
-            dock.setVisible(False)
+        # 2. Hide section dock (section view moves to central canvas_stack).
+        #    Keep map, project, and properties docks visible.
+        self._section_dock.setVisible(False)
+        self._view3d_dock.setVisible(False)
 
-        # 3. Put section view into game mode (hide header rows, suppress banner)
+        # 3. Section view: hide header rows, suppress pick banner.
         self._section_view.set_game_mode(True)
 
-        # 4. Build root widget with stacked layout
+        # 4. Build new central widget: canvas_stack behind transparent HUD.
         root = QWidget(self)
         root.setStyleSheet("background: #111113;")
         self.setCentralWidget(root)
@@ -2527,91 +2514,110 @@ class SectionMainWindow(MainWindow):
 
         from section_tool.hud.hud_layer import HUDLayer
         self.hud = HUDLayer(root)
+        # HUDLayer.WA_TransparentForMouseEvents is True — events fall through
+        # to canvas_stack so scroll zoom and matplotlib clicks work.
 
         stacked = QStackedLayout(root)
         stacked.setStackingMode(QStackedLayout.StackingMode.StackAll)
         stacked.addWidget(self.canvas_stack)
         stacked.addWidget(self.hud)
 
-        # 5. Reparent views into canvas_stack
-        from section_tool.modes import Mode, MINIMAP_SOURCES
-        for view in (self._section_view, self._map_view, self._viewer_3d):
+        # 5. Reparent section view and 3D view into canvas_stack.
+        #    Map view stays in _map_dock.
+        from section_tool.modes import Mode
+        for view in (self._section_view, self._viewer_3d):
             view.setParent(self.canvas_stack)
             self.canvas_stack.addWidget(view)
             view.show()
 
-        self._canvases = {
-            Mode.SECTION: self._section_view,
-            Mode.MAP:     self._map_view,
-            Mode.THREE_D: self._viewer_3d,
-        }
         self.current_mode = Mode.SECTION
         self.canvas_stack.setCurrentWidget(self._section_view)
         self.hud.reconfigure_for_mode(Mode.SECTION)
 
-        # 6. WASD navigator for the section view
+        # 6. Command palette: child of root (NOT of HUDLayer) so it can receive
+        #    mouse events even though HUDLayer is transparent.
+        from section_tool.hud.command_palette import CommandPalette
+        self._cmd_palette = CommandPalette(root)
+        self._cmd_palette.hide()
+        self.hud.command_palette = self._cmd_palette  # expose as hud.command_palette
+
+        # 7. WASD navigator for the section view.
         from section_tool.navigation.wasd_navigator import WASDNavigator
         self._wasd_nav = WASDNavigator(
             self._section_view.canvas,
             self._section_view.view_state,
         )
 
-        # 7. Tool manager + key filter
+        # 8. Tool manager + key filter.
         from section_tool.interaction.tool_manager import ToolManager, ToolKeyFilter
         self._tool_mgr = ToolManager()
         self._tool_key_filter = ToolKeyFilter(self._tool_mgr, self)
         self._tool_key_filter.palette_invoke_requested.connect(
-            self.hud.command_palette.invoke
+            self._cmd_palette.invoke
         )
         self._tool_mgr.tool_changed.connect(self._on_game_tool_changed)
         self._tool_mgr.tool_changed.connect(self.hud.tool_indicator.set_tool)
 
-        # Install filters — navigator AFTER key_filter (LIFO: navigator runs first)
+        # Install on canvas — navigator AFTER key_filter (LIFO: navigator runs first).
         self._section_view.canvas.installEventFilter(self._tool_key_filter)
         self._section_view.canvas.installEventFilter(self._wasd_nav)
 
-        # 8. Smart cursor (scene=None → stub, always returns no-hit)
+        # 9. Smart cursor (scene=None → stub, cursor shape from tool state only).
         from section_tool.interaction.smart_cursor import SmartCursor
         self._smart_cursor = SmartCursor(self._section_view.canvas, scene=None)
         self._tool_mgr.tool_changed.connect(self._smart_cursor.set_active_tool)
-
-        # Mouse filter for smart cursor + right-click menu
         self._mouse_filter = _CanvasMouseFilter(self, self)
         self._section_view.canvas.installEventFilter(self._mouse_filter)
 
-        # 9. Coord readout from section view motion
+        # 10. Coord readout from section view motion.
         self._section_view.coords_updated.connect(self._on_section_coords)
 
-        # 10. Command palette → actions
-        self.hud.command_palette.command_selected.connect(self._on_command)
+        # 11. Command palette actions.
+        self._cmd_palette.command_selected.connect(self._on_command)
 
-        # 11. Mode shortcuts
+        # 12. Ctrl+K application shortcut for command palette.
+        _ck = QShortcut(QKeySequence("Ctrl+K"), self)
+        _ck.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        _ck.activated.connect(self._cmd_palette.invoke)
+
+        # 13. Mode / view shortcuts (1 = section, 2 = toggle map, 3 = 3D).
         QShortcut(QKeySequence("1"), self,
                   lambda: self.set_mode(Mode.SECTION))
         QShortcut(QKeySequence("2"), self,
-                  lambda: self.set_mode(Mode.MAP))
+                  self._toggle_map_dock)
         QShortcut(QKeySequence("3"), self,
                   lambda: self.set_mode(Mode.THREE_D))
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
 
-        # 12. Maximize
+        # 14. Minimap: refresh on a slow timer (avoid recursive repaint from draw_event).
+        _mm_timer = QTimer(self)
+        _mm_timer.setInterval(3000)   # every 3 s is plenty for a thumbnail
+        _mm_timer.timeout.connect(self._refresh_minimap)
+        _mm_timer.start()
+
+        # 15. Show maximized.
         self.showMaximized()
 
     # ------------------------------------------------------------------
-    # Mode switching
+    # Mode / view switching
     # ------------------------------------------------------------------
 
     def set_mode(self, mode) -> None:
-        from section_tool.modes import Mode, MINIMAP_SOURCES
+        from section_tool.modes import Mode
         self.current_mode = mode
-        self.canvas_stack.setCurrentWidget(self._canvases[mode])
-        self.hud.reconfigure_for_mode(mode)
-        self._refresh_minimap()
+        if mode == Mode.SECTION:
+            self.canvas_stack.setCurrentWidget(self._section_view)
+            self.hud.reconfigure_for_mode(Mode.SECTION)
+            self._refresh_minimap()
+        elif mode == Mode.THREE_D:
+            self.canvas_stack.setCurrentWidget(self._viewer_3d)
+            self.hud.reconfigure_for_mode(Mode.THREE_D)
+
+    def _toggle_map_dock(self) -> None:
+        self._map_dock.setVisible(not self._map_dock.isVisible())
 
     def _refresh_minimap(self) -> None:
-        from section_tool.modes import MINIMAP_SOURCES
-        source = self._canvases[MINIMAP_SOURCES[self.current_mode]]
-        pixmap = source.grab().scaled(
+        pixmap = self._map_view.canvas.grab().scaled(
             192, 152,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,

@@ -105,8 +105,10 @@ class MapView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        self._fig    = Figure(figsize=(8, 6), tight_layout=True)
+        from section_tool.style import CANVAS_BG
+        self._fig    = Figure(figsize=(8, 6), facecolor=CANVAS_BG, tight_layout=True)
         self._ax     = self._fig.add_subplot(111)
+        self._ax.set_facecolor(CANVAS_BG)
         self._canvas = FigureCanvasQTAgg(self._fig)
 
         # Create toolbar (for its zoom-stack internals) but keep it hidden.
@@ -206,10 +208,23 @@ class MapView(QWidget):
         finally:
             self._is_rendering = False
 
+    def _apply_dark_theme(self) -> None:
+        """Apply dark axis styling — call after every ax.clear()."""
+        from section_tool.style import (
+            CANVAS_BG, CANVAS_TEXT, CANVAS_BORDER
+        )
+        self._ax.set_facecolor(CANVAS_BG)
+        self._ax.tick_params(colors=CANVAS_TEXT, which="both")
+        self._ax.xaxis.label.set_color(CANVAS_TEXT)
+        self._ax.yaxis.label.set_color(CANVAS_TEXT)
+        for spine in self._ax.spines.values():
+            spine.set_color(CANVAS_BORDER)
+
     def _render_impl(self) -> None:
         """Internal render body — called only from render() with re-entry guard held."""
 
         self._ax.clear()
+        self._apply_dark_theme()
 
         self._render_seismic_coverage()
         self._render_surfaces()

@@ -6,7 +6,8 @@ from PySide6.QtWidgets import QWidget
 class DepthScale(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Opaque, not translucent — we paint our own solid dark background.
+        self.setStyleSheet("background-color: #16161C;")
         self._z_min = 0.0
         self._z_max = 5000.0
 
@@ -18,18 +19,18 @@ class DepthScale(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(18, 18, 24, 170))
-        p.setPen(QColor(140, 140, 155))
-        p.setFont(QFont("Courier New", 8))
-        h = max(self.height(), 1)
+        p.fillRect(self.rect(), QColor(22, 22, 28))
         span = self._z_max - self._z_min
         if span <= 0:
             return
+        p.setPen(QColor(140, 140, 158))
+        p.setFont(QFont("Courier New", 7))
+        h = max(self.height(), 1)
         n = 6
         for i in range(n + 1):
             frac = i / n
             depth = self._z_min + frac * span
             y = int(frac * h)
             label = f"{depth:,.0f}"
-            p.drawText(2, min(y + 10, h - 2), label)
-            p.drawLine(self.width() - 5, y, self.width() - 1, y)
+            p.drawText(2, min(y + 9, h - 2), label)
+            p.drawLine(self.width() - 4, y, self.width() - 1, y)

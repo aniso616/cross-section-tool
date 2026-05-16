@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass
 class SeismicDisplaySettings:
-    colormap:           str   = "seismic_red_blue"
+    colormap:           str   = "gray_r"
     gain:               float = 1.0
     clip_percentile:    float = 99.0
     opacity:            float = 1.0
@@ -31,7 +31,7 @@ class SeismicDisplaySettings:
     @classmethod
     def from_dict(cls, d: dict) -> "SeismicDisplaySettings":
         return cls(
-            colormap=d.get("colormap", "seismic_red_blue"),
+            colormap=d.get("colormap", "gray_r"),
             gain=d.get("gain", 1.0),
             clip_percentile=d.get("clip_percentile", 99.0),
             opacity=d.get("opacity", 1.0),

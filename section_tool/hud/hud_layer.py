@@ -3,29 +3,34 @@ from PySide6.QtWidgets import QWidget
 
 
 class HUDLayer(QWidget):
+    """Transparent display-only overlay (tool pill, coord readout, minimap, scales).
+
+    Set WA_TransparentForMouseEvents so all mouse/wheel events fall through to
+    the canvas below.  The command palette lives outside this widget (as a
+    sibling of the canvas) so it can still receive mouse events when shown.
+    """
+
     def __init__(self, parent):
         super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
+        self.command_palette = None  # wired externally by SectionMainWindow
         self._init_children()
 
     def _init_children(self):
-        from section_tool.hud.depth_scale     import DepthScale
-        from section_tool.hud.strat_column    import StratColumn
-        from section_tool.hud.minimap         import Minimap
-        from section_tool.hud.coord_readout   import CoordReadout
-        from section_tool.hud.tool_indicator  import ToolIndicator
-        from section_tool.hud.command_palette import CommandPalette
+        from section_tool.hud.depth_scale    import DepthScale
+        from section_tool.hud.strat_column   import StratColumn
+        from section_tool.hud.minimap        import Minimap
+        from section_tool.hud.coord_readout  import CoordReadout
+        from section_tool.hud.tool_indicator import ToolIndicator
 
-        self.depth_scale     = DepthScale(self)
-        self.strat_column    = StratColumn(self)
-        self.minimap         = Minimap(self)
-        self.coord_readout   = CoordReadout(self)
-        self.tool_indicator  = ToolIndicator(self)
-        self.command_palette = CommandPalette(self)
-        self.command_palette.hide()
+        self.depth_scale   = DepthScale(self)
+        self.strat_column  = StratColumn(self)
+        self.minimap       = Minimap(self)
+        self.coord_readout = CoordReadout(self)
+        self.tool_indicator = ToolIndicator(self)
 
     def resizeEvent(self, event):
         self._layout_children()
@@ -62,4 +67,4 @@ class HUDLayer(QWidget):
             Mode.MAP:     "Section",
             Mode.THREE_D: "Section / Map",
         }
-        self.minimap.set_label(labels[mode])
+        self.minimap.set_label(labels.get(mode, "Map"))

@@ -2,6 +2,23 @@
 BG_APP          = "#111113"
 BG_CANVAS       = "#141418"
 
+# Matplotlib canvas dark theme
+CANVAS_BG       = "#1A1A1E"     # axes face
+CANVAS_GRID     = "#2E2E38"     # grid lines
+CANVAS_TEXT     = "#B8B8C0"     # axis labels, tick labels
+CANVAS_TICK     = "#666674"     # tick marks
+CANVAS_BORDER   = "#3A3A48"     # spines
+
+# Seismic colormaps available in UI
+SEISMIC_COLORMAPS = {
+    "Grayscale":       "gray_r",
+    "Red-Blue":        "seismic",
+    "Red-White-Blue":  "RdBu_r",
+    "Variable Density":"RdYlBu_r",
+    "Black-White":     "gray",
+    "Bone":            "bone",
+}
+
 # HUD
 HUD_SURFACE     = "rgba(18, 18, 24, 210)"
 HUD_BORDER      = "rgba(70, 70, 98, 170)"
