@@ -623,6 +623,7 @@ class MainWindow(QMainWindow):
         tb: QToolBar = self.addToolBar("Main")
         tb.setObjectName("MainToolBar")
         tb.setMovable(False)
+        tb.setFloatable(False)
         tb.setIconSize(QSize(18, 18))
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         tb.setStyleSheet(
@@ -1509,21 +1510,25 @@ class MainWindow(QMainWindow):
         self._state.set_active_section(sec)
 
     def _get_smart_center(self) -> tuple[float, float]:
-        """Best center point for new objects: map view center → wells → seismic → origin."""
-        cx, cy = self._map_view.map_center
-        # If view is at default/near-origin area, look for real data
-        if abs(cx) < 1000 and abs(cy) < 1000:
-            wells = [w for w in self._state.project.wells if w.x != 0 or w.y != 0]
-            if wells:
-                return (float(np.mean([w.x for w in wells])),
-                        float(np.mean([w.y for w in wells])))
-            refs = self._state.project.seismic_refs
-            if refs:
-                ref = refs[0]
-                if ref.extent_x_max != ref.extent_x_min:
-                    return ((ref.extent_x_min + ref.extent_x_max) / 2,
-                            (ref.extent_y_min + ref.extent_y_max) / 2)
-        return cx, cy
+        """Best center point: existing data → map view center → origin."""
+        import numpy as _np
+        # First priority: any existing data in the project
+        xs, ys = [], []
+        for w in self._state.project.wells:
+            if w.x != 0 or w.y != 0:
+                xs.append(w.x); ys.append(w.y)
+        for ref in self._state.project.seismic_refs:
+            if ref.extent_x_max != ref.extent_x_min:
+                xs += [ref.extent_x_min, ref.extent_x_max]
+                ys += [ref.extent_y_min, ref.extent_y_max]
+        for sec in self._state.project.sections:
+            for node in sec.nodes:
+                if node[0] != 0 or node[1] != 0:
+                    xs.append(float(node[0])); ys.append(float(node[1]))
+        if xs:
+            return float(_np.mean(xs)), float(_np.mean(ys))
+        # Fallback: map view center
+        return self._map_view.map_center
 
     def _on_new_section(self) -> None:
         """Add a simple 10-km east–west section centred on current map view."""
@@ -1814,9 +1819,17 @@ class MainWindow(QMainWindow):
                 coords = coords[:-1]
             if len(coords) < 3:
                 continue
-            added_polys.append(SectionPolygon(
+            # Assign distinct colors cycling through a geological palette
+        _POLY_COLORS = [
+            "#4878d0", "#ee854a", "#6acc64", "#d65f5f", "#956cb4",
+            "#8c613c", "#dc7ec0", "#797979", "#d5bb67", "#82c6e2",
+        ]
+        color = _POLY_COLORS[(existing + i) % len(_POLY_COLORS)]
+        added_polys.append(SectionPolygon(
                 vertices=np.array(coords),
                 name=f"Region {existing + i + 1}",
+                fill_color=color,
+                fill_alpha=0.45,
             ))
         self._state.blockSignals(True)
         try:

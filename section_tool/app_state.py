@@ -339,16 +339,24 @@ class AppState(QObject):
         _wells    = data.get("wells", [])
         _horizons = data.get("horizons", [])
         _seismic  = data.get("seismic", [])
+        print(f"[LOAD] project: {folder_path}")
         print(f"[LOAD] {len(_sections)} sections:")
         for s in _sections:
-            print(f"  Section '{s['name']}': nodes_json={s['nodes_json'][:60]}...")
+            import json as _j2
+            try:
+                nodes = _j2.loads(s['nodes_json']) if isinstance(s['nodes_json'], str) else s['nodes_json']
+                print(f"  Section '{s['name']}': nodes={nodes[:2]}...")
+            except Exception:
+                print(f"  Section '{s['name']}': nodes_json={str(s['nodes_json'])[:60]}")
         print(f"[LOAD] {len(_wells)} wells:")
         for w in _wells:
             print(f"  Well '{w['name']}': x={w.get('x')}, y={w.get('y')}, "
-                  f"tops={len(w.get('tops', []))}, logs={len(w.get('logs', []))}")
+                  f"td={w.get('td')}, tops={len(w.get('tops', []))}, logs={len(w.get('logs', []))}")
         print(f"[LOAD] {len(_horizons)} horizons, "
               f"{sum(len(h.get('picks',[])) for h in _horizons)} picks")
         print(f"[LOAD] {len(_seismic)} seismic refs")
+        for s in _seismic:
+            print(f"  Seismic '{s.get('name')}': path={s.get('path')}")
 
         proj = Project(
             name=meta.get("name", ""),

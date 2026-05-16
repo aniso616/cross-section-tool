@@ -92,6 +92,7 @@ class PropertiesPanel(QDockWidget):
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
+        self.setMinimumWidth(220)
 
         # Scrollable inner area
         scroll = QScrollArea()

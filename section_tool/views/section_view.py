@@ -757,11 +757,13 @@ class SectionView(QWidget):
         self._render_image_overlays(section)
         self._setup_seismic_artists(section)
 
-        # Apply pending zoom limits AFTER seismic setup (imshow must not override them)
+        # Apply pending limits AFTER seismic setup — each applied independently
+        # so that VE change (ylim only) and scroll zoom (both) both work correctly.
         if self._pending_xlim is not None:
             self._ax.set_xlim(self._pending_xlim)
-            self._ax.set_ylim(self._pending_ylim)
             self._pending_xlim = None
+        if self._pending_ylim is not None:
+            self._ax.set_ylim(self._pending_ylim)
             self._pending_ylim = None
         self._ax_limits_set = True
 
@@ -816,17 +818,28 @@ class SectionView(QWidget):
         # Prevent imshow / other artists from autoscaling Y away from this range
         self._ax.set_autoscaley_on(False)
 
-        # Labels
+        # Labels — check seismic domain to set Y label correctly
         units = section.depth_units
-        if section.depth_domain == "twt":
+        xlabel = "Distance (m)"
+        sds = getattr(section, "seismic_display", None)
+        stretch = sds.stretch_mode if sds else "linear"
+        _, ex_meta = self._state.get_seismic_for_section(section.name)
+        seismic_is_twt = (
+            (ex_meta is not None and ex_meta.get("domain") == "twt")
+            or any(
+                getattr(self._seismic_cache.get(ref.path), "domain", "") == "twt"
+                for ref in self._state.project.seismic_refs
+            )
+        )
+        if section.depth_domain == "twt" or (seismic_is_twt and stretch == "native_twt"):
             ylabel = "TWT (ms)"
-            xlabel = "Distance (m)"
+        elif seismic_is_twt and stretch == "linear":
+            ylabel = f"Depth ({units})  [TWT→depth]"
         elif units == "m+ft":
             ylabel = "Depth (m)"
             xlabel = "Distance (m)"
         else:
             ylabel = f"Depth ({units})"
-            xlabel = f"Distance ({units})"
 
         self._ax.set_xlabel(xlabel, fontsize=8)
         self._ax.set_ylabel(ylabel, fontsize=8)
@@ -1569,6 +1582,21 @@ class SectionView(QWidget):
                 continue
 
             distances, tvds = well.section_track(section)
+            # Extend track to max log depth when deviation ends above it
+            max_log_depth = float(well.deviation.max_tvd)
+            for log_name in well.log_names:
+                try:
+                    _, hi = well.get_log(log_name).depth_range()
+                    max_log_depth = max(max_log_depth, float(hi))
+                except Exception:
+                    pass
+            if len(tvds) > 0 and max_log_depth > float(tvds[-1]) + 1.0:
+                last_d = float(distances[-1])
+                ext_d = np.array([last_d, last_d])
+                ext_z = np.array([float(tvds[-1]), max_log_depth])
+                self._overlay_artists.extend(
+                    self._ax.plot(ext_d, ext_z, color="black", linewidth=1.0,
+                                  linestyle="--", zorder=9))
             self._overlay_artists.extend(
                 self._ax.plot(distances, tvds, color="black", linewidth=2.0,
                               solid_capstyle="round", zorder=9))

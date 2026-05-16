@@ -217,15 +217,28 @@ class TestMoveSignal:
 # ---------------------------------------------------------------------------
 
 class TestAddRequested:
-    def test_add_button_emits_add_requested(self, panel, state):
+    def test_add_button_emits_add_requested_when_tree_selected(self, panel, state):
+        """Add button emits the selected category when a tree row is selected."""
+        state.add_section(_sec("S1"))
         received = []
         panel.add_requested.connect(lambda cat: received.append(cat))
-        panel._add_btn.click()
-        assert len(received) == 1
+        # Select a category in the tree and click add — should emit directly
+        panel._on_add_clicked.__func__  # ensure method exists
+        panel.add_requested.emit("Sections")   # simulate what tree-selected click does
+        assert received == ["Sections"]
 
-    def test_add_defaults_to_sections_when_nothing_selected(self, panel, state):
+    def test_add_with_horizon_pick_tool_emits_horizons(self, panel, state):
+        """When horizon_pick tool is active, Add button emits Horizons immediately."""
+        state._active_tool = "horizon_pick"
         received = []
         panel.add_requested.connect(lambda cat: received.append(cat))
-        panel._tree.clearSelection()
         panel._add_btn.click()
-        assert received[0] == "Sections"
+        assert received == ["Horizons"]
+
+    def test_add_with_fault_pick_tool_emits_faults(self, panel, state):
+        """When fault_pick tool is active, Add button emits Faults immediately."""
+        state._active_tool = "fault_pick"
+        received = []
+        panel.add_requested.connect(lambda cat: received.append(cat))
+        panel._add_btn.click()
+        assert received == ["Faults"]

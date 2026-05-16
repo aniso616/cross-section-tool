@@ -518,7 +518,6 @@ class ProjectPanel(QDockWidget):
 
     def _on_add_clicked(self) -> None:
         """Context-sensitive add: active pick tool > tree selection > popup menu."""
-        # Priority 1: active pick tool determines what to add
         tool = self._state.active_tool
         if tool == "horizon_pick":
             self.add_requested.emit("Horizons")
@@ -530,14 +529,20 @@ class ProjectPanel(QDockWidget):
             self.add_requested.emit("Polygons")
             return
 
-        # Priority 2: selected category in the tree
         cat = self._selected_category()
         if cat in ("Sections", "Horizons", "Faults", "Polygons", "Reference Lines"):
             self.add_requested.emit(cat)
             return
 
-        # Fallback: default to Sections
-        self.add_requested.emit("Sections")
+        # Fallback: popup menu — never silently default to Sections
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.addAction("Add Section",       lambda: self.add_requested.emit("Sections"))
+        menu.addAction("Add Horizon",       lambda: self.add_requested.emit("Horizons"))
+        menu.addAction("Add Fault",         lambda: self.add_requested.emit("Faults"))
+        menu.addAction("Add Polygon",       lambda: self.add_requested.emit("Polygons"))
+        menu.addAction("Add Reference Line",lambda: self.add_requested.emit("Reference Lines"))
+        menu.popup(self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft()))
 
     # ------------------------------------------------------------------
     # Public helpers
