@@ -89,6 +89,7 @@ class MapView(QWidget):
 
         # ---- last right-click map position ----
         self._rclick_xy: tuple[float, float] | None = None
+        self._show_grid: bool = False
 
         # ---- render throttle and re-entry guard ----
         self._is_rendering = False
@@ -165,6 +166,10 @@ class MapView(QWidget):
     @property
     def axes(self):
         return self._ax
+
+    def set_grid_visible(self, visible: bool) -> None:
+        self._show_grid = visible
+        self.render()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -291,34 +296,38 @@ class MapView(QWidget):
         self._ax.set_ylim(ymn - ypad, ymx + ypad)
 
     def _render_graticule(self) -> None:
+        _LABEL_COLOR = "#606870"
         xmin, xmax = self._ax.get_xlim()
         ymin, ymax = self._ax.get_ylim()
         span_x = xmax - xmin
         span_y = ymax - ymin
         if span_x <= 0 or span_y <= 0:
-            self._ax.set_xlabel("Easting (m)")
-            self._ax.set_ylabel("Northing (m)")
+            self._ax.set_xlabel("Easting (m)", color=_LABEL_COLOR)
+            self._ax.set_ylabel("Northing (m)", color=_LABEL_COLOR)
             return
 
         x_interval = _nice_interval(span_x / 5)
         y_interval = _nice_interval(span_y / 5)
         xs = np.arange(math.floor(xmin / x_interval) * x_interval, xmax + x_interval, x_interval)
         ys = np.arange(math.floor(ymin / y_interval) * y_interval, ymax + y_interval, y_interval)
-        grid_kw = dict(color="#cccccc", linewidth=0.5, linestyle="--", zorder=0)
-        if len(xs) <= 500:
-            for x in xs:
-                self._ax.axvline(x, **grid_kw)
-        if len(ys) <= 500:
-            for y in ys:
-                self._ax.axhline(y, **grid_kw)
 
-        self._ax.set_xlabel("Easting (m)")
-        self._ax.set_ylabel("Northing (m)")
+        if self._show_grid:
+            grid_kw = dict(color="#252832", linewidth=0.6, linestyle="--", zorder=0)
+            if len(xs) <= 500:
+                for x in xs:
+                    self._ax.axvline(x, **grid_kw)
+            if len(ys) <= 500:
+                for y in ys:
+                    self._ax.axhline(y, **grid_kw)
+
+        self._ax.set_xlabel("Easting (m)", color=_LABEL_COLOR)
+        self._ax.set_ylabel("Northing (m)", color=_LABEL_COLOR)
         from matplotlib.ticker import MultipleLocator, FuncFormatter
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
         self._ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        self._ax.tick_params(colors=_LABEL_COLOR, which="both", labelsize=8)
         self._render_scale_bar(xmin, xmax, ymin, ymax)
 
     def _render_scale_bar(self, xmin, xmax, ymin, ymax) -> None:

@@ -2653,7 +2653,7 @@ class SectionMainWindow(MainWindow):
         self.h_splitter.addWidget(self._project_panel)
 
         # Center: vertical [section tile | map tile]
-        self.v_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.v_splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.v_splitter.setHandleWidth(3)
         self.v_splitter.setStyleSheet(_splitter_style)
 
@@ -2675,10 +2675,11 @@ class SectionMainWindow(MainWindow):
 
     def _apply_default_proportions(self) -> None:
         """Set default panel proportions after the window has real geometry."""
-        w = self.width()
-        h = self.height()
-        self.h_splitter.setSizes([220, max(w - 480, 400), 260])
-        self.v_splitter.setSizes([int(h * 0.62), int(h * 0.38)])
+        w        = self.width()
+        center_w = max(w - 480, 400)
+        self.h_splitter.setSizes([220, center_w, 260])
+        # Section | Map side by side — section gets 60%, map gets 40%
+        self.v_splitter.setSizes([int(center_w * 0.60), int(center_w * 0.40)])
 
     # ------------------------------------------------------------------
     # Tiled toolbar action stubs
@@ -2719,6 +2720,10 @@ class SectionMainWindow(MainWindow):
     # ------------------------------------------------------------------
     # Tool routing
     # ------------------------------------------------------------------
+
+    def _set_grid(self, visible: bool) -> None:
+        self._section_view.set_grid_visible(visible)
+        self._map_view.set_grid_visible(visible)
 
     def _on_game_tool_changed(self, tool) -> None:
         """Map new ToolManager ID → existing AppState tool and activate it."""
@@ -2897,8 +2902,10 @@ class SectionMainWindow(MainWindow):
             "view_fit":      self._zoom_to_fit,
             "export_image":  self._on_export_section_image,
             "export_svg":    self._on_export_section_image,
-            "project_open":  self._on_open,
-            "project_save":  self._on_save,
+            "project_open":   self._on_open,
+            "project_save":   self._on_save,
+            "view_grid_on":   lambda: self._set_grid(True),
+            "view_grid_off":  lambda: self._set_grid(False),
         }
         action = dispatch.get(command_id)
         if action:

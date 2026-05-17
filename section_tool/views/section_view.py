@@ -227,6 +227,7 @@ class SectionView(QWidget):
         # ---- FPS tracking ----
         self._show_fps: bool = False
         self._strat_col_visible: bool = True  # kept for API compat; not used internally
+        self._show_grid: bool = False
         # ---- display toggles ----
         self._show_sea_level: bool = True
         # ---- topography per section: {section_name: (distances, elevations)} ----
@@ -741,6 +742,10 @@ class SectionView(QWidget):
             ds = ref.load(progress_callback=progress_callback)
             self._seismic_cache[ref.path] = ds
 
+    def set_grid_visible(self, visible: bool) -> None:
+        self._show_grid = visible
+        self.request_render()
+
     def set_strat_column_visible(self, visible: bool) -> None:
         self._strat_col_visible = visible
         # Formation strip is now a HUD widget; visibility is controlled externally.
@@ -936,8 +941,8 @@ class SectionView(QWidget):
 
     def _render_overlays(self, section) -> None:
         """Render all lightweight overlay layers, tracking artists for next-frame removal."""
-        # Strat column is now a HUD QWidget; _render_strat_column removed.
-        self._render_grid(section)
+        if self._show_grid:
+            self._render_grid(section)
         self._render_topography(section)
         self._render_sea_level(section)
         self._render_section_ends(section)
@@ -1131,7 +1136,7 @@ class SectionView(QWidget):
         for y in ys[:200]:
             segments.append([(xl[0], y), (xl[1], y)])
         if segments:
-            lc = LineCollection(segments, colors="#e0e0e0", linewidths=0.5,
+            lc = LineCollection(segments, colors="#252832", linewidths=0.6,
                                 linestyles="--", zorder=2)
             self._overlay_artists.append(lc)
             self._ax.add_collection(lc)

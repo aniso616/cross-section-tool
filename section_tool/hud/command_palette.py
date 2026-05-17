@@ -88,8 +88,10 @@ class CommandPalette(QWidget):
             ("view_fit",       "Fit View to Data",       "Ctrl+0"),
             ("export_image",   "Export Section Image…",  ""),
             ("export_svg",     "Export as SVG…",         ""),
-            ("project_open",   "Open Project…",          "Ctrl+O"),
-            ("project_save",   "Save Project",           "Ctrl+S"),
+            ("project_open",    "Open Project…",          "Ctrl+O"),
+            ("project_save",    "Save Project",           "Ctrl+S"),
+            ("view_grid_on",    "Show Grid Lines",        ""),
+            ("view_grid_off",   "Hide Grid Lines",        ""),
         ]:
             self.register_command(*args)
 
