@@ -182,24 +182,28 @@ class TestAxesState:
         assert "Dip Line" in view._section_name_label.text()
 
     def test_xlabel_set(self, view, state):
+        # Axis labels are now shown by the HUD scale bar (not matplotlib axes).
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
         view.render()
-        assert "Distance" in view.axes.get_xlabel()
+        # xlabel is empty — all label rendering moved to HUD widgets.
+        assert view.axes.get_xlabel() == ""
 
     def test_ylabel_twt(self, view, state):
+        # Y-axis label rendered by HUD depth ruler, not matplotlib.
         sec = Section([(0, 0), (1000, 0)], depth_domain="twt")
         state.add_section(sec)
         state.set_active_section(sec)
         view.render()
-        assert "time" in view.axes.get_ylabel().lower() or "ms" in view.axes.get_ylabel().lower()
+        assert view.axes.get_ylabel() == ""
 
     def test_ylabel_depth(self, view, state):
+        # Y-axis label rendered by HUD depth ruler, not matplotlib.
         sec = Section([(0, 0), (1000, 0)], depth_domain="depth", depth_units="m")
         state.add_section(sec)
         state.set_active_section(sec)
         view.render()
-        assert "depth" in view.axes.get_ylabel().lower() or "m" in view.axes.get_ylabel()
+        assert view.axes.get_ylabel() == ""
 
     def test_xlim_matches_section_length(self, view, state):
         state.add_section(_east_section(length=2500.0))

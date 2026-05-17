@@ -3,58 +3,72 @@ from PySide6.QtWidgets import QWidget
 
 
 class HUDLayer(QWidget):
-    """Transparent display-only overlay: tool pill, coord readout, depth scale.
+    """Transparent overlay: depth ruler, formation strip, scale bar, map inset,
+    tool indicator, nav readout.
 
-    WA_TransparentForMouseEvents is True so mouse/wheel events fall through to
-    the canvas below.  The minimap is now a MinimapOverlay child of the section
-    view (game-HUD style); this layer no longer carries it.
-    The command palette lives outside this widget (sibling of canvas_stack).
+    WA_TransparentForMouseEvents passes all mouse/wheel events to the canvas.
+    The command palette is a sibling of this widget (child of root), not here.
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, state=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
-        self.command_palette = None  # wired externally by SectionMainWindow
+        self.command_palette = None   # wired externally by SectionMainWindow
+        self._state = state
         self._init_children()
 
     def _init_children(self):
-        from section_tool.hud.depth_scale    import DepthScale
-        from section_tool.hud.strat_column   import StratColumn
-        from section_tool.hud.coord_readout  import CoordReadout
-        from section_tool.hud.tool_indicator import ToolIndicator
+        from section_tool.hud.depth_ruler     import DepthRuler
+        from section_tool.hud.formation_strip import FormationStrip
+        from section_tool.hud.scale_bar       import ScaleBar
+        from section_tool.hud.map_inset       import MapInset
+        from section_tool.hud.nav_readout     import NavReadout
+        from section_tool.hud.tool_indicator  import ToolIndicator
 
-        self.depth_scale    = DepthScale(self)
-        self.strat_column   = StratColumn(self)
-        self.coord_readout  = CoordReadout(self)
-        self.tool_indicator = ToolIndicator(self)
+        self.depth_ruler      = DepthRuler(self)
+        self.formation_strip  = FormationStrip(self)
+        self.scale_bar        = ScaleBar(self)
+        self.map_inset        = MapInset(self, self._state) if self._state else None
+        self.nav_readout      = NavReadout(self)
+        self.tool_indicator   = ToolIndicator(self)
 
     def resizeEvent(self, event):
         self._layout_children()
         super().resizeEvent(event)
 
     def _layout_children(self):
-        w, h    = self.width(), self.height()
-        SCALE   = 44   # left depth scale width
-        STRAT   = 64   # right strat column width
-        COORD_H = 22
-        IND_W   = 128
-        IND_H   = 28
-        M       = 12
+        w, h  = self.width(), self.height()
+        DR_W  = 52    # depth ruler
+        FS_W  = 60    # formation strip
+        MI_W  = 200   # map inset
+        MI_H  = 160
+        SB_H  = 26    # scale bar
+        NR_H  = 20    # nav readout
+        M     = 10
 
-        self.depth_scale.setGeometry(0, 0, SCALE, h)
-        self.strat_column.setGeometry(w - STRAT, 0, STRAT, h)
-        self.coord_readout.setGeometry(
-            SCALE + M,
-            h - COORD_H - M,
-            w - SCALE - STRAT - M * 2,
-            COORD_H,
+        self.depth_ruler.setGeometry(0, 0, DR_W, h - SB_H)
+        self.formation_strip.setGeometry(w - FS_W, 0, FS_W, h - SB_H)
+        self.scale_bar.setGeometry(DR_W, h - SB_H, w - DR_W - FS_W, SB_H)
+        if self.map_inset:
+            self.map_inset.setGeometry(
+                DR_W + M, h - MI_H - SB_H - M, MI_W, MI_H
+            )
+        self.nav_readout.setGeometry(
+            DR_W + MI_W + M * 2,
+            h - NR_H - SB_H - M,
+            w - DR_W - FS_W - MI_W - M * 3,
+            NR_H,
         )
-        self.tool_indicator.setGeometry(SCALE + M, M, IND_W, IND_H)
+        self.tool_indicator.setGeometry(DR_W + M, M, 200, 34)
 
     def reconfigure_for_mode(self, mode):
         from section_tool.modes import Mode
-        self.depth_scale.setVisible(mode == Mode.SECTION)
-        self.strat_column.setVisible(mode == Mode.SECTION)
+        is_section = mode == Mode.SECTION
+        self.depth_ruler.setVisible(is_section)
+        self.formation_strip.setVisible(is_section)
+        self.scale_bar.setVisible(is_section)
+        if self.map_inset:
+            self.map_inset.setVisible(True)  # always shown

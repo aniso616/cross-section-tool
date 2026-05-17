@@ -122,6 +122,7 @@ class SectionViewState:
         self._sv._saved_ylim   = new_yl
         self._sv._user_has_zoomed = True
         self._sv._canvas.draw_idle()
+        self._sv.request_hud_update()
 
     def zoom(self, factor: float, center_x_m: float, center_z_m: float) -> None:
         xl = self._sv._ax.get_xlim()
@@ -144,6 +145,7 @@ class SectionViewState:
         self._sv._saved_ylim   = new_yl
         self._sv._user_has_zoomed = True
         self._sv._canvas.draw_idle()
+        self._sv.request_hud_update()
 
     def pixel_to_world(self, canvas_pos) -> tuple[float, float]:
         """Convert QPoint canvas position to (x_m, depth_m)."""
@@ -192,11 +194,17 @@ class SectionView(QWidget):
     node_selected        = Signal(str, int, int)   # Phase 3: (cat, obj_idx, pt_idx)
     frame_time_ms        = Signal(float)  # Phase 6: FPS display
     coords_updated       = Signal(float, float)    # game HUD coord readout
+    view_changed         = Signal()                # after any pan/zoom/render
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._game_mode: bool = False
+        # Debounced view-change signal for HUD updates (pan/zoom via WASD)
+        self._hud_timer = QTimer(self)
+        self._hud_timer.setSingleShot(True)
+        self._hud_timer.setInterval(80)
+        self._hud_timer.timeout.connect(self.view_changed.emit)
 
         # ---- seismic cache (loaded datasets) ----
         self._seismic_cache: dict[str, SeismicDataset] = {}
@@ -218,7 +226,7 @@ class SectionView(QWidget):
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
         self._show_fps: bool = False
-        self._strat_col_visible: bool = True
+        self._strat_col_visible: bool = True  # kept for API compat; not used internally
         # ---- display toggles ----
         self._show_sea_level: bool = True
         # ---- topography per section: {section_name: (distances, elevations)} ----
@@ -305,28 +313,12 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        from section_tool.style import CANVAS_BG
-        self._fig = Figure(figsize=(10, 6), facecolor=CANVAS_BG)
-        # Phase 4: reserve left column for stratigraphic column, share Y axis
-        self._gs = GridSpec(
-            1, 2,
-            figure=self._fig,
-            width_ratios=[1, 8],
-            left=0.01, right=0.97,
-            top=0.97, bottom=0.09,
-            wspace=0.02,
-        )
-        self._strat_ax = self._fig.add_subplot(self._gs[0, 0])
-        self._strat_ax.set_facecolor(CANVAS_BG)
-        self._strat_ax.tick_params(
-            left=False, bottom=False, labelbottom=False, labelleft=False
-        )
-        self._strat_ax.spines["top"].set_visible(False)
-        self._strat_ax.spines["right"].set_visible(False)
-        self._strat_ax.spines["bottom"].set_visible(False)
-
-        self._ax = self._fig.add_subplot(self._gs[0, 1], sharey=self._strat_ax)
-        self._ax.set_facecolor(CANVAS_BG)
+        from section_tool.style import BG_CANVAS
+        self._fig = Figure(figsize=(10, 6), facecolor=BG_CANVAS)
+        # Single axis — strat column is now a HUD QWidget, not a matplotlib subplot
+        self._fig.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
+        self._ax = self._fig.add_subplot(111)
+        self._configure_axes(self._ax)
         self._canvas = FigureCanvasQTAgg(self._fig)
 
         # Hidden toolbar — kept for zoom stack; NOT in the layout.
@@ -546,6 +538,26 @@ class SectionView(QWidget):
     def view_state(self) -> "SectionViewState":
         return SectionViewState(self)
 
+    def request_hud_update(self) -> None:
+        """Debounced trigger for HUD view-state refresh (pan/zoom without full render)."""
+        if not self._hud_timer.isActive():
+            self._hud_timer.start()
+
+    @staticmethod
+    def _configure_axes(ax) -> None:
+        """Strip all matplotlib chrome from an axes object."""
+        from section_tool.style import BG_CANVAS
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.xaxis.set_visible(False)
+        ax.yaxis.set_visible(False)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_facecolor(BG_CANVAS)
+        ax.figure.patch.set_facecolor(BG_CANVAS)
+
     def set_game_mode(self, enabled: bool) -> None:
         """Switch to game UI mode: hide all chrome, suppress pick banner."""
         self._game_mode = enabled
@@ -555,25 +567,6 @@ class SectionView(QWidget):
             self._pick_banner.hide()
         else:
             self._header.show()
-
-    def _apply_dark_theme(self) -> None:
-        """Apply dark axis styling — call after every ax.clear()."""
-        from section_tool.style import (
-            CANVAS_BG, CANVAS_TEXT, CANVAS_BORDER, CANVAS_TICK
-        )
-        self._ax.set_facecolor(CANVAS_BG)
-        self._ax.tick_params(colors=CANVAS_TEXT, which="both")
-        self._ax.xaxis.label.set_color(CANVAS_TEXT)
-        self._ax.yaxis.label.set_color(CANVAS_TEXT)
-        self._ax.title.set_color(CANVAS_TEXT)
-        for spine in self._ax.spines.values():
-            spine.set_color(CANVAS_BORDER)
-
-    def _apply_dark_theme_strat(self) -> None:
-        """Apply dark axis styling to the stratigraphic column axis."""
-        from section_tool.style import CANVAS_BG, CANVAS_BORDER
-        self._strat_ax.set_facecolor(CANVAS_BG)
-        self._strat_ax.spines["left"].set_color(CANVAS_BORDER)
 
     def _surface_elev_at(self, x_m: float) -> float:
         """Return ground-surface elevation (m) at distance x_m along section."""
@@ -750,7 +743,7 @@ class SectionView(QWidget):
 
     def set_strat_column_visible(self, visible: bool) -> None:
         self._strat_col_visible = visible
-        self._strat_ax.set_visible(visible)
+        # Formation strip is now a HUD widget; visibility is controlled externally.
         self.render()
 
     def set_sea_level_visible(self, visible: bool) -> None:
@@ -835,31 +828,11 @@ class SectionView(QWidget):
         _t0 = time.perf_counter()
         section = self._state.active_section
 
-        # Save main-axis limits BEFORE strat_ax.clear() resets the shared y-axis.
-        # _strat_ax.clear() → set_ylim(0,1) propagates to _ax via sharey, clobbering zoom.
-        _saved_xl = self._ax.get_xlim()
-        _saved_yl = self._ax.get_ylim()
-
-        # Strat axis: always clear and re-render (cheap, separate axis)
-        self._strat_ax.clear()
-        self._strat_ax.tick_params(
-            left=False, bottom=False, labelbottom=False, labelleft=False)
-        for sp in ("top", "right", "bottom"):
-            self._strat_ax.spines[sp].set_visible(False)
-        self._apply_dark_theme_strat()
-
-        # Restore _ax limits immediately (strat_ax.clear reset the shared y-axis)
-        if self._ax_limits_set:
-            self._ax.set_xlim(_saved_xl)
-            self._ax.set_ylim(_saved_yl)
-            self._ax.set_autoscaley_on(False)
-
         if section is None:
             self._seismic_artists.clear()
             self._overlay_artists.clear()
             self._ax.clear()
-            self._apply_dark_theme()
-            # Sensible default axis when nothing is loaded
+            self._configure_axes(self._ax)
             self._ax.set_xlim(0, 10000)
             self._ax.set_ylim(5000, 0)   # inverted: 0 at top
             self._section_name_label.setText("— no section —")
@@ -911,7 +884,7 @@ class SectionView(QWidget):
         self._seismic_artists.clear()
         self._overlay_artists.clear()
         self._ax.clear()
-        self._apply_dark_theme()
+        self._configure_axes(self._ax)
         self._setup_axes(section)   # sets default xlim/ylim
         self._render_image_overlays(section)
         self._setup_seismic_artists(section)
@@ -951,6 +924,7 @@ class SectionView(QWidget):
             if self._saved_ylim is not None:
                 self._saved_ylim = (self._saved_ylim[1], self._saved_ylim[0])
 
+        self.view_changed.emit()
         _t_draw = time.perf_counter()
         self._canvas.draw_idle()
         _draw_ms = (time.perf_counter() - _t_draw) * 1000.0
@@ -962,8 +936,7 @@ class SectionView(QWidget):
 
     def _render_overlays(self, section) -> None:
         """Render all lightweight overlay layers, tracking artists for next-frame removal."""
-        if self._strat_col_visible:
-            self._render_strat_column(section)
+        # Strat column is now a HUD QWidget; _render_strat_column removed.
         self._render_grid(section)
         self._render_topography(section)
         self._render_sea_level(section)
@@ -1037,10 +1010,8 @@ class SectionView(QWidget):
         else:
             ylabel = f"Depth ({units})"
 
-        from section_tool.style import CANVAS_TEXT
-        self._ax.set_xlabel(xlabel, fontsize=8, color=CANVAS_TEXT)
-        self._ax.set_ylabel(ylabel, fontsize=8, color=CANVAS_TEXT)
-        self._ax.tick_params(labelsize=7, colors=CANVAS_TEXT)
+        # Labels and ticks are provided by HUD depth_ruler and scale_bar.
+        # Nothing to set on the matplotlib axes here.
 
         # Dual-unit secondary axes (m + ft)
         if units == "m+ft":
@@ -1864,102 +1835,8 @@ class SectionView(QWidget):
                                    where=(norm >= 0.5),
                                    color="#888888", alpha=0.4, zorder=9))
 
-    def _render_strat_column(self, section: Section) -> None:
-        """Phase 4: render the left-side stratigraphic column sharing the Y axis."""
-        self._strat_ax.set_xlim(0, 1)
-        self._strat_ax.set_facecolor("white")
-
-        # Gather horizons with picks on this section, sorted by depth
-        horizon_picks = self._state.project.horizon_picks
-        strat_col = self._state.project.strat_column
-
-        section_horizons: list[tuple[float, object]] = []
-        for hp in horizon_picks:
-            sec_idxs = hp.section_indices(section.name)
-            if len(sec_idxs) > 0:
-                depths = hp._depths[sec_idxs]
-                median_d = float(np.median(depths))
-                section_horizons.append((median_d, hp))
-        section_horizons.sort(key=lambda x: x[0])
-
-        if not section_horizons:
-            self._strat_ax.text(
-                0.5, 0.5, "No\npicks", fontsize=6, ha="center", va="center",
-                color="#aaa", transform=self._strat_ax.transAxes,
-            )
-            return
-
-        # Draw formation bodies between consecutive horizon pairs
-        yl = self._ax.get_ylim()
-        y_top = min(yl)
-        y_bot = max(yl)
-
-        # Body above the shallowest horizon
-        top_d, top_hp = section_horizons[0]
-        fm_above_name = getattr(top_hp, "formation_above", "")
-        if fm_above_name:
-            fm = strat_col.get_formation(fm_above_name)
-            color = _fm_color(fm, top_hp.color)
-            self._draw_strat_body(y_top, top_d, fm_above_name, color, strat_col)
-
-        for i in range(len(section_horizons) - 1):
-            d_top_val, hp_top = section_horizons[i]
-            d_bot_val, _hp_bot = section_horizons[i + 1]
-            fm_name = getattr(hp_top, "formation_below", "")
-            if not fm_name:
-                fm_name = getattr(_hp_bot, "formation_above", "")
-            fm = strat_col.get_formation(fm_name) if fm_name else None
-            color = _fm_color(fm, hp_top.color)
-            self._draw_strat_body(d_top_val, d_bot_val, fm_name or f"Unit {i+1}",
-                                  color, strat_col)
-
-        # Body below the deepest horizon
-        bot_d, bot_hp = section_horizons[-1]
-        fm_below_name = getattr(bot_hp, "formation_below", "")
-        if fm_below_name:
-            fm = strat_col.get_formation(fm_below_name)
-            color = _fm_color(fm, bot_hp.color)
-            self._draw_strat_body(bot_d, y_bot, fm_below_name, color, strat_col)
-
-        # Draw horizon tick lines
-        for d_val, hp in section_horizons:
-            self._strat_ax.axhline(d_val, color=hp.color, lw=0.8, zorder=3)
-
-        # Title
-        self._strat_ax.set_title("Strat", fontsize=6, pad=2)
-        self._strat_ax.yaxis.set_visible(False)
-
-    def _draw_strat_body(self, top: float, bot: float, name: str,
-                         color: str, strat_col) -> None:
-        """Render one formation body rectangle in the strat column."""
-        if abs(bot - top) < 1e-6:
-            return
-        self._strat_ax.fill_betweenx([top, bot], 0, 1,
-                                      color=color, alpha=0.75, zorder=2)
-        # Text if there's screen space
-        try:
-            y0_s = self._strat_ax.transData.transform([0, top])[1]
-            y1_s = self._strat_ax.transData.transform([0, bot])[1]
-            height_px = abs(y1_s - y0_s)
-        except Exception:
-            height_px = 20.0
-        if height_px >= 14:
-            try:
-                from matplotlib.colors import to_rgb as _tr
-                r, g, b = _tr(color)
-                lum = r * 0.299 + g * 0.587 + b * 0.114
-                tc = "black" if lum > 0.55 else "white"
-            except Exception:
-                tc = "black"
-            fontsize = max(5, min(8, 5 + height_px / 30))
-            mid = (top + bot) * 0.5
-            # Shorten name if needed
-            disp = name if len(name) <= 10 else name[:9] + "…"
-            self._strat_ax.text(
-                0.5, mid, disp, fontsize=fontsize, color=tc,
-                ha="center", va="center", clip_on=True,
-                rotation=90 if height_px < 60 else 0, zorder=3,
-            )
+    # _render_strat_column and _draw_strat_body removed.
+    # Formation strip is now handled by HUDLayer.formation_strip (QWidget).
 
     # ------------------------------------------------------------------
     # Pick-node interaction helpers
@@ -2331,10 +2208,6 @@ class SectionView(QWidget):
         self._on_sv_press(event)
 
     def _on_sv_press(self, event) -> None:
-        # Strat column click: select formation as pick target and return
-        if event.inaxes is self._strat_ax and event.button == 1:
-            self._on_strat_col_click(event)
-            return
         if event.inaxes is not self._ax:
             return
         try:

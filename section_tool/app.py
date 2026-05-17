@@ -2515,7 +2515,7 @@ class SectionMainWindow(MainWindow):
         self.canvas_stack = QStackedWidget(root)
 
         from section_tool.hud.hud_layer import HUDLayer
-        self.hud = HUDLayer(root)
+        self.hud = HUDLayer(root, state=self._state)
         # HUDLayer.WA_TransparentForMouseEvents is True — events fall through
         # to canvas_stack so scroll zoom and matplotlib clicks work.
 
@@ -2571,8 +2571,7 @@ class SectionMainWindow(MainWindow):
         self._mouse_filter = _CanvasMouseFilter(self, self)
         self._section_view.canvas.installEventFilter(self._mouse_filter)
 
-        # 10. Coord readout from section view motion.
-        self._section_view.coords_updated.connect(self._on_section_coords)
+        # 10. Coord readout wired in step 14 (after HUD is built).
 
         # 11. Command palette actions.
         self._cmd_palette.command_selected.connect(self._on_command)
@@ -2591,23 +2590,23 @@ class SectionMainWindow(MainWindow):
                   lambda: self.set_mode(Mode.THREE_D))
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
 
-        # 14. Minimap overlay on the section canvas.
-        from section_tool.views.minimap_overlay import MinimapOverlay
-        self._minimap_overlay = MinimapOverlay(self._section_view, self._state)
-        # Wire to AppState signals so the minimap re-renders on data changes.
-        for sig in (
-            self._state.project_changed,
-            self._state.section_added, self._state.section_removed,
-            self._state.section_modified,
-            self._state.well_added, self._state.well_removed,
-            self._state.active_section_changed,
-            self._state.seismic_ref_added, self._state.seismic_ref_removed,
-        ):
-            sig.connect(self._minimap_overlay.schedule_update)
-        self._minimap_overlay.schedule_update()
+        # 14. Wire HUD to section view signals.
+        self._section_view.view_changed.connect(self._on_hud_update)
+        self._section_view.coords_updated.connect(self._on_section_coords)
+        # Map inset schedule updates when project data changes.
+        if self.hud.map_inset:
+            for sig in (
+                self._state.project_changed,
+                self._state.section_added, self._state.section_removed,
+                self._state.section_modified,
+                self._state.well_added, self._state.well_removed,
+                self._state.active_section_changed,
+                self._state.seismic_ref_added, self._state.seismic_ref_removed,
+            ):
+                sig.connect(self.hud.map_inset.schedule_update)
+            self.hud.map_inset.schedule_update()
 
-        # 15. Old minimap timer no longer needed (was HUD thumbnail).
-        # 16. Show maximized.
+        # 15. Show maximized.
         self.showMaximized()
 
     # ------------------------------------------------------------------
@@ -2650,9 +2649,80 @@ class SectionMainWindow(MainWindow):
     # HUD feeds
     # ------------------------------------------------------------------
 
+    def _on_hud_update(self) -> None:
+        """Refresh all HUD elements from current section view extent."""
+        vs = self._section_view.view_state
+        x_min, x_max = vs.x_min, vs.x_max
+        z_min, z_max = vs.z_min, vs.z_max
+        self.hud.depth_ruler.set_view_range(z_min, z_max)
+        self.hud.scale_bar.set_range(x_min, x_max)
+        bands = self._compute_formation_bands(z_min, z_max)
+        self.hud.formation_strip.set_stratigraphy(bands, z_min, z_max)
+
+    def _compute_formation_bands(self, z_min: float, z_max: float) -> list:
+        """Build FormationBand list from horizon picks on the active section."""
+        from section_tool.hud.formation_strip import FormationBand
+        section = self._state.active_section
+        if section is None:
+            return []
+        horizon_picks = self._state.project.horizon_picks
+        strat_col = self._state.project.strat_column
+        import numpy as np
+        section_horizons: list[tuple[float, object]] = []
+        for hp in horizon_picks:
+            idxs = hp.section_indices(section.name)
+            if len(idxs) > 0:
+                depths = hp._depths[idxs]
+                section_horizons.append((float(np.median(depths)), hp))
+        section_horizons.sort(key=lambda t: t[0])
+        if not section_horizons:
+            return []
+        bands = []
+        def _color(fm, fallback_hex):
+            if fm and hasattr(fm, "color"):
+                try:
+                    from matplotlib.colors import to_rgb
+                    r, g, b = to_rgb(fallback_hex)
+                    r2, g2, b2 = fm.color[0]/255, fm.color[1]/255, fm.color[2]/255
+                    return (int(r2*255), int(g2*255), int(b2*255))
+                except Exception:
+                    pass
+            try:
+                from matplotlib.colors import to_rgb
+                r, g, b = to_rgb(fallback_hex)
+                return (int(r*255), int(g*255), int(b*255))
+            except Exception:
+                return (120, 130, 140)
+        # Band above shallowest horizon
+        top_d, top_hp = section_horizons[0]
+        fm_name = getattr(top_hp, "formation_above", "")
+        if fm_name:
+            fm = strat_col.get_formation(fm_name)
+            bands.append(FormationBand(z_min, top_d, fm_name,
+                                       _color(fm, top_hp.color)))
+        for i in range(len(section_horizons) - 1):
+            d_top, hp_top = section_horizons[i]
+            d_bot, hp_bot = section_horizons[i + 1]
+            nm = getattr(hp_top, "formation_below", "") or \
+                 getattr(hp_bot, "formation_above", "")
+            fm = strat_col.get_formation(nm) if nm else None
+            bands.append(FormationBand(d_top, d_bot, nm or f"Unit {i+1}",
+                                       _color(fm, hp_top.color)))
+        # Band below deepest horizon
+        bot_d, bot_hp = section_horizons[-1]
+        fm_name = getattr(bot_hp, "formation_below", "")
+        if fm_name:
+            fm = strat_col.get_formation(fm_name)
+            bands.append(FormationBand(bot_d, z_max, fm_name,
+                                       _color(fm, bot_hp.color)))
+        return bands
+
     def _on_section_coords(self, x_m: float, depth_m: float) -> None:
         elev_m = self._section_view._surface_elev_at(x_m) - depth_m
-        self.hud.coord_readout.update_coords(x_m, depth_m, elev_m)
+        if hasattr(self.hud, "nav_readout"):
+            self.hud.nav_readout.update_coords(x_m, depth_m, elev_m)
+        self.hud.depth_ruler.set_cursor_depth(depth_m)
+        self.hud.formation_strip.set_cursor_depth(depth_m)
 
     def _update_smart_cursor(self, canvas_pos) -> None:
         self._smart_cursor.update(canvas_pos, self._section_view.view_state)
