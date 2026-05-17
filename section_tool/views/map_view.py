@@ -245,6 +245,7 @@ class MapView(QWidget):
         """Internal render body — called only from render() with re-entry guard held."""
 
         self._ax.clear()
+        self._crosshair_artists = []   # reset after clear
         self._configure_axes(self._ax)
 
         self._render_seismic_coverage()

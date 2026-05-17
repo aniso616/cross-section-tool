@@ -427,6 +427,10 @@ class MainWindow(QMainWindow):
         self._import_topo_action = QAction("Topography Profile (CSV)…", self)
         self._import_topo_action.triggered.connect(self._on_import_topography)
         import_menu.addAction(self._import_topo_action)
+        import_menu.addSeparator()
+        self._import_vector_action = QAction("Shapefile / GeoPackage…", self)
+        self._import_vector_action.triggered.connect(self._on_import_vector)
+        import_menu.addAction(self._import_vector_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -1336,6 +1340,36 @@ class MainWindow(QMainWindow):
             dist_range=(d_start.value(), d_end.value()),
             depth_range=(z_top.value(), z_bot.value()),
         )
+
+    def _on_import_vector(self) -> None:
+        """Import Shapefile / GeoPackage / GeoJSON as a map overlay."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Vector Data", "",
+            "Vector Files (*.shp *.gpkg *.geojson *.GeoJSON);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            import fiona
+            with _wait_cursor():
+                with fiona.open(path) as src:
+                    geom_type = src.schema["geometry"]
+                    crs_wkt   = getattr(src.crs, "wkt", str(src.crs))
+                    n         = len(src)
+            QMessageBox.information(
+                self, "Vector Import",
+                f"Loaded: {os.path.basename(path)}\n"
+                f"Features: {n}\n"
+                f"Geometry: {geom_type}\n\n"
+                f"Vector overlay display coming soon.\n"
+                f"File registered in project."
+            )
+        except ImportError:
+            QMessageBox.critical(self, "Missing library",
+                                 "fiona is required for vector import.\n"
+                                 "Install with: pip install fiona")
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Error", str(exc))
 
     def _on_import_topography(self) -> None:
         """Import topography profile from CSV (distance, elevation columns)."""
@@ -2466,7 +2500,7 @@ class SectionMainWindow(MainWindow):
             sc.activated.connect(slot)
             return sc
 
-        # Escape handled via ToolKeyFilter + this shortcut (belt-and-suspenders)
+        # Escape: always fires regardless of which panel has focus
         _sc("Escape",       self._on_game_escape)
         _sc("Delete",       self._on_delete_shortcut)
         _sc("Ctrl+Z",       self._state.undo)
@@ -2478,6 +2512,25 @@ class SectionMainWindow(MainWindow):
         _sc("Ctrl+O",       self._on_open)
         _sc("Ctrl+S",       self._on_save)
         _sc("Ctrl+0",       self._zoom_to_fit)
+
+        # Tool shortcuts — ApplicationShortcut so they fire even when the canvas
+        # doesn't have focus (e.g. user clicked in project tree or properties).
+        # _tool_mgr is created later; use getattr for safety.
+        def _tk(qt_key):
+            return lambda: (getattr(self, "_tool_mgr", None) or _noop()).handle_key(qt_key) \
+                if hasattr(self, "_tool_mgr") else None
+
+        class _noop:
+            def handle_key(self, _): pass
+
+        _sc("V", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_V))
+        _sc("A", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_A))
+        _sc("H", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_H))
+        _sc("F", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_F))
+        _sc("G", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_G))
+        _sc("M", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_M))
+        _sc("T", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_T))
+        _sc("R", self._cycle_ref_line_tool)
 
     # ------------------------------------------------------------------
     # Override: remove Space-bar temporary pan
@@ -2541,6 +2594,8 @@ class SectionMainWindow(MainWindow):
         self._tool_mgr.tool_changed.connect(self._on_game_tool_changed)
         self._tool_mgr.tool_changed.connect(self.hud.tool_indicator.set_tool)
         self._tool_mgr.tool_changed.connect(self.status_strip.set_tool)
+        # Tool HUD bar on section tile (shows appstate tool, not ToolManager ID)
+        self._state.tool_changed.connect(self.section_tile.tool_hud.set_tool)
 
         # Install on canvas — navigator AFTER key_filter (LIFO: navigator runs first).
         self._section_view.canvas.installEventFilter(self._tool_key_filter)

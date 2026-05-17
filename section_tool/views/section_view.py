@@ -999,6 +999,7 @@ class SectionView(QWidget):
 
     def _render_overlays(self, section) -> None:
         """Render all lightweight overlay layers, tracking artists for next-frame removal."""
+        self._render_strat_column_chaser(section)
         if self._show_grid:
             self._render_grid(section)
         self._render_topography(section)
@@ -1930,8 +1931,65 @@ class SectionView(QWidget):
                                    where=(norm >= 0.5),
                                    color="#888888", alpha=0.4, zorder=9))
 
-    # _render_strat_column and _draw_strat_body removed.
-    # Formation strip is now handled by HUDLayer.formation_strip (QWidget).
+    # Formation strip HUD widget replaces the old matplotlib _strat_ax.
+    # A thin matplotlib-based chaser column is rendered INSIDE the axes at the left edge.
+
+    def _render_strat_column_chaser(self, section: Section) -> None:
+        """Render a thin strat column at the left edge of the section axes."""
+        from matplotlib.patches import Rectangle as _Rect
+        polygons = [p for p in self._state.project.polygons
+                    if not p.section_name or p.section_name == section.name]
+        if not polygons:
+            return
+
+        # Compute depth range per formation from polygon vertices
+        fm_depths: dict[str, tuple[float, float]] = {}
+        fm_color:  dict[str, str] = {}
+        for poly in polygons:
+            name = poly.formation or poly.name or ""
+            base = name.rsplit(" (", 1)[0]
+            verts = poly._vertices  # (N, 2) of (distance, depth)
+            if len(verts) == 0:
+                continue
+            depths = verts[:, 1]
+            d_top, d_bot = float(depths.min()), float(depths.max())
+            if base in fm_depths:
+                old_top, old_bot = fm_depths[base]
+                fm_depths[base] = (min(old_top, d_top), max(old_bot, d_bot))
+            else:
+                fm_depths[base] = (d_top, d_bot)
+                fm_color[base]  = poly.fill_color
+
+        if not fm_depths:
+            return
+
+        xl   = self._ax.get_xlim()
+        col_w = (xl[1] - xl[0]) * 0.025   # 2.5% of visible width
+        col_l = xl[0]                       # flush with left edge
+
+        for name, (d_top, d_bot) in sorted(fm_depths.items(), key=lambda t: t[1][0]):
+            hex_col = fm_color.get(name, "#777777")
+            rect = _Rect(
+                (col_l, d_top), col_w, d_bot - d_top,
+                facecolor=hex_col, alpha=0.80,
+                edgecolor="#444444", linewidth=0.4,
+                zorder=15, clip_on=True,
+            )
+            self._ax.add_patch(rect)
+            self._overlay_artists.append(rect)
+
+            # Label if tall enough relative to visible range
+            yl   = self._ax.get_ylim()
+            vis  = abs(yl[0] - yl[1])
+            if abs(d_bot - d_top) > vis * 0.06:
+                short = name[:10]
+                lbl = self._ax.text(
+                    col_l + col_w / 2, (d_top + d_bot) / 2, short,
+                    ha="center", va="center",
+                    fontsize=5, color="white", fontweight="bold",
+                    rotation=90, zorder=16, clip_on=True,
+                )
+                self._overlay_artists.append(lbl)
 
     # ------------------------------------------------------------------
     # Pick-node interaction helpers

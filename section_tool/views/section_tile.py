@@ -2,7 +2,73 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QStackedLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QStackedLayout, QWidget
+
+
+class ToolHUD(QWidget):
+    """Small semi-transparent bar at top-centre of section canvas — active tool + hint."""
+
+    _HINTS = {
+        "select":       "Click to select  ·  Double-click for node editing",
+        "node_edit":    "Click node to select  ·  Drag to move  ·  Del to remove",
+        "horizon_pick": "Click to place pick  ·  Right-click or Esc to end",
+        "fault_pick":   "Click to place pick  ·  Right-click or Esc to end",
+        "polygon":      "Click vertices  ·  Right-click to close",
+        "measure":      "Click two points to measure",
+        "pan":          "Drag to pan  ·  Scroll to zoom",
+        "new_section":  "Click endpoints  ·  Double-click or Enter to finish",
+    }
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedHeight(28)
+        self.setStyleSheet("""
+            QWidget {
+                background: rgba(20, 20, 28, 195);
+                border-radius: 4px;
+            }
+            QLabel { background: transparent; }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 2, 10, 2)
+        layout.setSpacing(10)
+
+        self._tool_lbl = QLabel("● Select")
+        self._tool_lbl.setStyleSheet(
+            "color: #4A9EFF; font-weight: bold; font-size: 9pt;")
+        layout.addWidget(self._tool_lbl)
+
+        self._hint_lbl = QLabel("V – Select   A – Nodes   H – Horizon   F – Fault   G – Polygon   M – Measure")
+        self._hint_lbl.setStyleSheet("color: #707880; font-size: 8pt;")
+        layout.addWidget(self._hint_lbl)
+        self.show()
+
+    def set_tool(self, tool_id: str | None) -> None:
+        _names = {
+            "select":       "● Select",
+            "node_edit":    "● Nodes",
+            "horizon_pick": "● Horizon Pick",
+            "fault_pick":   "● Fault Pick",
+            "polygon":      "● Polygon",
+            "measure":      "● Measure",
+            "pan":          "● Pan",
+            "new_section":  "● Draw Section",
+            "h_ref":        "● H-Ref",
+            "v_ref":        "● V-Ref",
+        }
+        tool = tool_id or "select"
+        self._tool_lbl.setText(_names.get(tool, f"● {tool}"))
+        self._hint_lbl.setText(self._HINTS.get(tool, ""))
+        self.adjustSize()
+        self._reposition()
+
+    def _reposition(self) -> None:
+        parent = self.parent()
+        if parent:
+            pw = parent.width()
+            self.setFixedWidth(min(600, pw - 40))
+            self.move((pw - self.width()) // 2, 8)
 
 
 class SectionTile(QWidget):
@@ -37,3 +103,11 @@ class SectionTile(QWidget):
         self.command_palette = CommandPalette(self)
         self.hud.command_palette = self.command_palette  # API compat
         self.command_palette.hide()
+
+        # Tool HUD bar — top-centre, shows active tool + hint
+        self.tool_hud = ToolHUD(self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "tool_hud"):
+            self.tool_hud._reposition()

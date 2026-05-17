@@ -215,3 +215,6 @@ class MapInset(QWidget):
 
         self._mpl.draw_idle()
         self.update()
+        # Re-draw crosshair on top after full re-render clears it
+        if self._crosshair_x is not None:
+            self.update_crosshair(self._crosshair_x, self._crosshair_y)
