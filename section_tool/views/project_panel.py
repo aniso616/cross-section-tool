@@ -395,6 +395,22 @@ class ProjectPanel(QDockWidget):
                     self._row_widgets[(cat, idx)] = row
 
                 cat_item.setExpanded(True)
+
+            # Vector layers section
+            vector_layers = self._state.get_vector_layers() if hasattr(self._state, "get_vector_layers") else []
+            if vector_layers:
+                layers_item = QTreeWidgetItem(["Layers"])
+                layers_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                font = QFont(); font.setBold(True); font.setPointSize(9)
+                layers_item.setFont(0, font)
+                self._tree.addTopLevelItem(layers_item)
+                for lyr in vector_layers:
+                    child = QTreeWidgetItem([lyr.get("name", "Layer")])
+                    child.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                                   | Qt.ItemFlag.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.CheckState.Checked)
+                    layers_item.addChild(child)
+                layers_item.setExpanded(True)
         finally:
             self._tree.blockSignals(False)
             self._tree.setUpdatesEnabled(True)

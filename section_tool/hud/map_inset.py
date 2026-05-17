@@ -170,6 +170,44 @@ class MapInset(QWidget):
         active  = self._state.active_section
         any_data = False
 
+        # Vector overlays (shapefiles etc.) — drawn first, behind everything
+        for lyr in self._state.get_vector_layers():
+            col      = lyr.get("color", "#FFAA00")
+            features = lyr.get("features", [])
+            for feat in features:
+                geom   = feat.get("geometry") or {}
+                gtype  = geom.get("type", "")
+                coords = geom.get("coordinates", [])
+                try:
+                    if gtype in ("LineString", "3D LineString"):
+                        xs = [c[0] for c in coords]; ys = [c[1] for c in coords]
+                        self._ax.plot(xs, ys, color=col, lw=0.6, alpha=0.6, zorder=1)
+                    elif gtype in ("MultiLineString", "3D MultiLineString"):
+                        for ln in coords:
+                            xs = [c[0] for c in ln]; ys = [c[1] for c in ln]
+                            self._ax.plot(xs, ys, color=col, lw=0.6, alpha=0.6, zorder=1)
+                    elif gtype in ("Polygon", "3D Polygon"):
+                        ring = coords[0]
+                        xs = [c[0] for c in ring]; ys = [c[1] for c in ring]
+                        self._ax.fill(xs, ys, color=col, alpha=0.08, zorder=0)
+                        self._ax.plot(xs, ys, color=col, lw=0.5, alpha=0.6, zorder=1)
+                    elif gtype in ("MultiPolygon", "3D MultiPolygon"):
+                        for poly in coords:
+                            ring = poly[0]
+                            xs = [c[0] for c in ring]; ys = [c[1] for c in ring]
+                            self._ax.fill(xs, ys, color=col, alpha=0.08, zorder=0)
+                            self._ax.plot(xs, ys, color=col, lw=0.5, alpha=0.6, zorder=1)
+                    elif gtype in ("Point", "3D Point"):
+                        self._ax.plot(coords[0], coords[1], "o",
+                                      color=col, ms=2, zorder=2)
+                    elif gtype in ("MultiPoint", "3D MultiPoint"):
+                        for pt in coords:
+                            self._ax.plot(pt[0], pt[1], "o",
+                                          color=col, ms=2, zorder=2)
+                except (IndexError, TypeError):
+                    continue
+            any_data = True
+
         # Seismic extents
         for ref in proj.seismic_refs:
             xmn, xmx = ref.extent_x_min, ref.extent_x_max

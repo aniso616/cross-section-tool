@@ -172,6 +172,58 @@ class MapView(QWidget):
         self._show_grid = visible
         self.render()
 
+    def _render_vector_layers(self) -> None:
+        """Render imported vector layers (shapefiles, geopackages, GeoJSON)."""
+        layers = self._state.get_vector_layers()
+        for lyr in layers:
+            color    = lyr.get("color", "#FFAA00")
+            features = lyr.get("features", [])
+            for feat in features:
+                geom   = feat.get("geometry") or {}
+                gtype  = geom.get("type", "")
+                coords = geom.get("coordinates", [])
+                try:
+                    if gtype in ("LineString", "3D LineString"):
+                        xs = [c[0] for c in coords]
+                        ys = [c[1] for c in coords]
+                        self._ax.plot(xs, ys, color=color, lw=0.9,
+                                      alpha=0.75, zorder=4)
+
+                    elif gtype in ("MultiLineString", "3D MultiLineString"):
+                        for line in coords:
+                            xs = [c[0] for c in line]
+                            ys = [c[1] for c in line]
+                            self._ax.plot(xs, ys, color=color, lw=0.9,
+                                          alpha=0.75, zorder=4)
+
+                    elif gtype in ("Polygon", "3D Polygon"):
+                        ring = coords[0]
+                        xs = [c[0] for c in ring]
+                        ys = [c[1] for c in ring]
+                        self._ax.fill(xs, ys, color=color, alpha=0.12, zorder=3)
+                        self._ax.plot(xs, ys, color=color, lw=0.7,
+                                      alpha=0.75, zorder=4)
+
+                    elif gtype in ("MultiPolygon", "3D MultiPolygon"):
+                        for polygon in coords:
+                            ring = polygon[0]
+                            xs = [c[0] for c in ring]
+                            ys = [c[1] for c in ring]
+                            self._ax.fill(xs, ys, color=color, alpha=0.12, zorder=3)
+                            self._ax.plot(xs, ys, color=color, lw=0.7,
+                                          alpha=0.75, zorder=4)
+
+                    elif gtype in ("Point", "3D Point"):
+                        self._ax.plot(coords[0], coords[1], "o",
+                                      color=color, ms=3, zorder=5)
+
+                    elif gtype in ("MultiPoint", "3D MultiPoint"):
+                        for pt in coords:
+                            self._ax.plot(pt[0], pt[1], "o",
+                                          color=color, ms=3, zorder=5)
+                except (IndexError, TypeError):
+                    continue
+
     def show_cursor_crosshair(self, map_x: float, map_y: float) -> None:
         """Show a crosshair at geographic position without a full re-render."""
         for a in getattr(self, "_crosshair_artists", []):
@@ -248,6 +300,7 @@ class MapView(QWidget):
         self._crosshair_artists = []   # reset after clear
         self._configure_axes(self._ax)
 
+        self._render_vector_layers()
         self._render_seismic_coverage()
         self._render_surfaces()
         self._render_sections()

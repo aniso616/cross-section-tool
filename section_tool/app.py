@@ -1354,16 +1354,14 @@ class MainWindow(QMainWindow):
             with _wait_cursor():
                 with fiona.open(path) as src:
                     geom_type = src.schema["geometry"]
-                    crs_wkt   = getattr(src.crs, "wkt", str(src.crs))
-                    n         = len(src)
-            QMessageBox.information(
-                self, "Vector Import",
-                f"Loaded: {os.path.basename(path)}\n"
-                f"Features: {n}\n"
-                f"Geometry: {geom_type}\n\n"
-                f"Vector overlay display coming soon.\n"
-                f"File registered in project."
-            )
+                    crs       = src.crs
+                    features  = [dict(f) for f in src]
+            self._state.add_vector_layer(path, features, crs, geom_type)
+            n = len(features)
+            if hasattr(self, "status_strip"):
+                self.status_strip.set_hint(
+                    f"Loaded {n} features from {os.path.basename(path)}"
+                )
         except ImportError:
             QMessageBox.critical(self, "Missing library",
                                  "fiona is required for vector import.\n"

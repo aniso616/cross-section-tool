@@ -136,6 +136,7 @@ class AppState(QObject):
         self._topology: SectionTopology | None = None
         # Extracted seismic per section: {section_name: (data, meta)}
         self._section_seismic: dict[str, tuple[np.ndarray, dict]] = {}
+        self._vector_layers: list[dict] = []
         # SQLite project manager (None when working with legacy HDF5 projects)
         from section_tool.io.project_manager import ProjectManager
         self._pm: ProjectManager = ProjectManager()
@@ -207,6 +208,28 @@ class AppState(QObject):
         """Register extracted seismic for a section and emit seismic_extracted."""
         self._section_seismic[section_name] = (data, meta)
         self.seismic_extracted.emit(section_name)
+
+    # ------------------------------------------------------------------
+    # Vector layers (shapefiles, geopackages, GeoJSON)
+    # ------------------------------------------------------------------
+
+    def add_vector_layer(self, filepath: str, features: list,
+                         crs, geom_type: str) -> None:
+        import os
+        name = os.path.splitext(os.path.basename(filepath))[0]
+        self._vector_layers.append({
+            "name":     name,
+            "filepath": filepath,
+            "features": features,
+            "crs":      str(crs),
+            "geom_type": geom_type,
+            "color":    "#FFAA00",
+            "visible":  True,
+        })
+        self.project_changed.emit()
+
+    def get_vector_layers(self) -> list[dict]:
+        return [lyr for lyr in self._vector_layers if lyr.get("visible", True)]
 
     # ------------------------------------------------------------------
 
