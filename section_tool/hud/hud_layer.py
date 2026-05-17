@@ -10,30 +10,36 @@ class HUDLayer(QWidget):
     The command palette is a sibling of this widget (child of root), not here.
     """
 
-    def __init__(self, parent, state=None):
+    def __init__(self, parent, state=None, show_minimap: bool = True):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
-        self.command_palette = None   # wired externally by SectionMainWindow
+        self.command_palette = None   # wired externally
         self._state = state
+        self._show_minimap = show_minimap
         self._init_children()
 
     def _init_children(self):
         from section_tool.hud.depth_ruler     import DepthRuler
         from section_tool.hud.formation_strip import FormationStrip
         from section_tool.hud.scale_bar       import ScaleBar
-        from section_tool.hud.map_inset       import MapInset
         from section_tool.hud.nav_readout     import NavReadout
         from section_tool.hud.tool_indicator  import ToolIndicator
 
         self.depth_ruler      = DepthRuler(self)
         self.formation_strip  = FormationStrip(self)
         self.scale_bar        = ScaleBar(self)
-        self.map_inset        = MapInset(self, self._state) if self._state else None
         self.nav_readout      = NavReadout(self)
         self.tool_indicator   = ToolIndicator(self)
+
+        # Map inset only in full-screen game-UI mode; tiled layout uses a full map tile
+        if self._show_minimap and self._state:
+            from section_tool.hud.map_inset import MapInset
+            self.map_inset = MapInset(self, self._state)
+        else:
+            self.map_inset = None
 
     def resizeEvent(self, event):
         self._layout_children()
@@ -43,7 +49,7 @@ class HUDLayer(QWidget):
         w, h  = self.width(), self.height()
         DR_W  = 52    # depth ruler
         FS_W  = 60    # formation strip
-        MI_W  = 200   # map inset
+        MI_W  = 200   # map inset (only in minimap mode)
         MI_H  = 160
         SB_H  = 26    # scale bar
         NR_H  = 20    # nav readout
@@ -56,12 +62,12 @@ class HUDLayer(QWidget):
             self.map_inset.setGeometry(
                 DR_W + M, h - MI_H - SB_H - M, MI_W, MI_H
             )
-        self.nav_readout.setGeometry(
-            DR_W + MI_W + M * 2,
-            h - NR_H - SB_H - M,
-            w - DR_W - FS_W - MI_W - M * 3,
-            NR_H,
-        )
+            nr_x = DR_W + MI_W + M * 2
+            nr_w = w - DR_W - FS_W - MI_W - M * 3
+        else:
+            nr_x = DR_W + M
+            nr_w = w - DR_W - FS_W - M * 2
+        self.nav_readout.setGeometry(nr_x, h - NR_H - SB_H - M, nr_w, NR_H)
         self.tool_indicator.setGeometry(DR_W + M, M, 200, 34)
 
     def reconfigure_for_mode(self, mode):

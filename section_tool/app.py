@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import QSize as _QSize   # toolbar icon size
 
 # ---------------------------------------------------------------------------
 # Geological colour palettes — auto-assigned on new horizon/fault (Phase 3)
@@ -2490,58 +2491,31 @@ class SectionMainWindow(MainWindow):
     # ------------------------------------------------------------------
 
     def _convert_to_game_ui(self) -> None:
-        # 1. Remove all toolbars; keep menu bar.  Detach from parent so no hidden
-        #    toolbar can surface via QSettings restoreState.
+        # 1. Remove all inherited toolbars — replaced by a single new one.
         for tb in list(self.findChildren(QToolBar)):
             tb.setVisible(False)
             self.removeToolBar(tb)
-            tb.setParent(None)  # fully detach from window hierarchy
+            tb.setParent(None)
 
-        # 2. Hide section dock (section view moves to central canvas_stack).
-        #    Hide map dock by default — map is shown as minimap overlay instead.
-        #    Project and Properties panels stay visible on the sides.
-        self._section_dock.setVisible(False)
-        self._view3d_dock.setVisible(False)
-        self._map_dock.setVisible(False)
+        # 2. Remove all dock widgets from dock areas — panels move to splitter.
+        for dock in (self._section_dock, self._view3d_dock, self._map_dock,
+                     self._project_panel, self._properties_panel):
+            self.removeDockWidget(dock)
+            dock.setVisible(False)
 
         # 3. Section view: hide header rows, suppress pick banner.
         self._section_view.set_game_mode(True)
 
-        # 4. Build new central widget: canvas_stack behind transparent HUD.
-        root = QWidget(self)
-        root.setStyleSheet("background: #111113;")
-        self.setCentralWidget(root)
+        # 4. Build tiled toolbar (replaces old icon toolbar).
+        self._build_tiled_toolbar()
 
-        self.canvas_stack = QStackedWidget(root)
+        # 5. Build splitter layout.
+        self._build_tiled_layout()
 
-        from section_tool.hud.hud_layer import HUDLayer
-        self.hud = HUDLayer(root, state=self._state)
-        # HUDLayer.WA_TransparentForMouseEvents is True — events fall through
-        # to canvas_stack so scroll zoom and matplotlib clicks work.
-
-        stacked = QStackedLayout(root)
-        stacked.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        stacked.addWidget(self.canvas_stack)
-        stacked.addWidget(self.hud)
-
-        # 5. Reparent section view and 3D view into canvas_stack.
-        #    Map view stays in _map_dock.
-        from section_tool.modes import Mode
-        for view in (self._section_view, self._viewer_3d):
-            view.setParent(self.canvas_stack)
-            self.canvas_stack.addWidget(view)
-            view.show()
-
-        self.current_mode = Mode.SECTION
-        self.canvas_stack.setCurrentWidget(self._section_view)
-        self.hud.reconfigure_for_mode(Mode.SECTION)
-
-        # 6. Command palette: child of root (NOT of HUDLayer) so it can receive
-        #    mouse events even though HUDLayer is transparent.
-        from section_tool.hud.command_palette import CommandPalette
-        self._cmd_palette = CommandPalette(root)
-        self._cmd_palette.hide()
-        self.hud.command_palette = self._cmd_palette  # expose as hud.command_palette
+        # 6. Status strip at bottom.
+        from section_tool.views.status_strip import StatusStrip
+        self.status_strip = StatusStrip(self)
+        self.setStatusBar(self.status_strip)
 
         # 7. WASD navigator for the section view.
         from section_tool.navigation.wasd_navigator import WASDNavigator
@@ -2555,76 +2529,182 @@ class SectionMainWindow(MainWindow):
         self._tool_mgr = ToolManager()
         self._tool_key_filter = ToolKeyFilter(self._tool_mgr, self)
         self._tool_key_filter.palette_invoke_requested.connect(
-            self._cmd_palette.invoke
+            self.section_tile.command_palette.invoke
         )
         self._tool_mgr.tool_changed.connect(self._on_game_tool_changed)
         self._tool_mgr.tool_changed.connect(self.hud.tool_indicator.set_tool)
+        self._tool_mgr.tool_changed.connect(self.status_strip.set_tool)
 
         # Install on canvas — navigator AFTER key_filter (LIFO: navigator runs first).
         self._section_view.canvas.installEventFilter(self._tool_key_filter)
         self._section_view.canvas.installEventFilter(self._wasd_nav)
 
-        # 9. Smart cursor (scene=None → stub, cursor shape from tool state only).
+        # 9. Smart cursor (scene=None → stub).
         from section_tool.interaction.smart_cursor import SmartCursor
         self._smart_cursor = SmartCursor(self._section_view.canvas, scene=None)
         self._tool_mgr.tool_changed.connect(self._smart_cursor.set_active_tool)
         self._mouse_filter = _CanvasMouseFilter(self, self)
         self._section_view.canvas.installEventFilter(self._mouse_filter)
 
-        # 10. Coord readout wired in step 14 (after HUD is built).
-
-        # 11. Command palette actions.
+        # 10. Command palette actions.
+        self._cmd_palette = self.section_tile.command_palette  # alias
         self._cmd_palette.command_selected.connect(self._on_command)
-
-        # 12. Ctrl+K application shortcut for command palette.
         _ck = QShortcut(QKeySequence("Ctrl+K"), self)
         _ck.setContext(Qt.ShortcutContext.ApplicationShortcut)
         _ck.activated.connect(self._cmd_palette.invoke)
 
-        # 13. Mode / view shortcuts (1 = section, 2 = toggle map, 3 = 3D).
-        QShortcut(QKeySequence("1"), self,
-                  lambda: self.set_mode(Mode.SECTION))
-        QShortcut(QKeySequence("2"), self,
-                  self._toggle_map_dock)
-        QShortcut(QKeySequence("3"), self,
-                  lambda: self.set_mode(Mode.THREE_D))
-        QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
-
-        # 14. Wire HUD to section view signals.
+        # 11. Wire HUD and status strip to section view signals.
         self._section_view.view_changed.connect(self._on_hud_update)
         self._section_view.coords_updated.connect(self._on_section_coords)
-        # Map inset schedule updates when project data changes.
-        if self.hud.map_inset:
-            for sig in (
-                self._state.project_changed,
-                self._state.section_added, self._state.section_removed,
-                self._state.section_modified,
-                self._state.well_added, self._state.well_removed,
-                self._state.active_section_changed,
-                self._state.seismic_ref_added, self._state.seismic_ref_removed,
-            ):
-                sig.connect(self.hud.map_inset.schedule_update)
-            self.hud.map_inset.schedule_update()
 
-        # 15. Show maximized.
+        # 12. Wire project and properties panels.
+        self._project_panel.pick_target_selected.connect(
+            self._on_pick_target_selected)
+        self.status_strip.set_hint(
+            "Draw a section line on the map below to get started")
+
+        # 13. F11 fullscreen toggle.
+        QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
+
+        # 14. Show maximized; apply proportions after event loop starts.
         self.showMaximized()
+        QTimer.singleShot(80, self._apply_default_proportions)
+
+    def _build_tiled_toolbar(self) -> None:
+        """Single-row action toolbar for the tiled layout."""
+        tb = QToolBar("Main", self)
+        tb.setObjectName("TiledMainToolBar")
+        tb.setMovable(False)
+        tb.setFloatable(False)
+        tb.setIconSize(_QSize(16, 16))
+        tb.setStyleSheet("""
+            QToolBar {
+                background: #1a1c20;
+                border-bottom: 1px solid #2a2d33;
+                spacing: 2px;
+                padding: 0px 6px;
+            }
+            QToolButton {
+                color: #b0b8c0;
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+            QToolButton:hover {
+                background: #252830;
+                border-color: #3a3f48;
+                color: #d0d8e0;
+            }
+            QToolButton:pressed { background: #2e3340; }
+            QToolBar::separator {
+                width: 1px;
+                background: #2a2d33;
+                margin: 6px 4px;
+            }
+        """)
+
+        for label, slot in [
+            ("New Section",    self._on_new_section_tiled),
+            ("Add Well",       self._on_add_well_tiled),
+            ("Import Data",    self._on_import_data_tiled),
+            ("Import Seismic", self._on_import_seismic_tiled),
+        ]:
+            a = QAction(label, self)
+            a.triggered.connect(slot)
+            tb.addAction(a)
+
+        tb.addSeparator()
+
+        for label, slot in [
+            ("Open…",  self._on_open),
+            ("Save",   self._on_save),
+        ]:
+            a = QAction(label, self)
+            a.triggered.connect(slot)
+            tb.addAction(a)
+
+        self.addToolBar(tb)
+        self.tiled_toolbar = tb
+
+    def _build_tiled_layout(self) -> None:
+        """Build three-column splitter: [project] | [section/map] | [properties]."""
+        from section_tool.views.section_tile import SectionTile
+        from section_tool.views.map_tile     import MapTile
+
+        _splitter_style = """
+            QSplitter::handle          { background: #2a2d33; }
+            QSplitter::handle:hover    { background: #3a4050; }
+        """
+
+        # Outer: horizontal [project | center | properties]
+        self.h_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.h_splitter.setHandleWidth(3)
+        self.h_splitter.setStyleSheet(_splitter_style)
+
+        # Left: project panel (reuse existing, no title bar)
+        self._project_panel.setTitleBarWidget(QWidget(self._project_panel))
+        self._project_panel.setVisible(True)
+        self.h_splitter.addWidget(self._project_panel)
+
+        # Center: vertical [section tile | map tile]
+        self.v_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.v_splitter.setHandleWidth(3)
+        self.v_splitter.setStyleSheet(_splitter_style)
+
+        self.section_tile = SectionTile(self._section_view, self._state, self)
+        self.hud = self.section_tile.hud   # expose for existing HUD wiring code
+
+        self.map_tile = MapTile(self._map_view, self)
+
+        self.v_splitter.addWidget(self.section_tile)
+        self.v_splitter.addWidget(self.map_tile)
+        self.h_splitter.addWidget(self.v_splitter)
+
+        # Right: properties panel (reuse existing, no title bar)
+        self._properties_panel.setTitleBarWidget(QWidget(self._properties_panel))
+        self._properties_panel.setVisible(True)
+        self.h_splitter.addWidget(self._properties_panel)
+
+        self.setCentralWidget(self.h_splitter)
+
+    def _apply_default_proportions(self) -> None:
+        """Set default panel proportions after the window has real geometry."""
+        w = self.width()
+        h = self.height()
+        self.h_splitter.setSizes([220, max(w - 480, 400), 260])
+        self.v_splitter.setSizes([int(h * 0.62), int(h * 0.38)])
 
     # ------------------------------------------------------------------
-    # Mode / view switching
+    # Tiled toolbar action stubs
+    # ------------------------------------------------------------------
+
+    def _on_new_section_tiled(self) -> None:
+        if hasattr(self, "status_strip"):
+            self.status_strip.set_hint(
+                "Click on the map below to place section endpoints")
+        self._tool_palette.set_active_tool("new_section")
+
+    def _on_add_well_tiled(self) -> None:
+        self._on_import_las()
+
+    def _on_import_data_tiled(self) -> None:
+        self._on_import_las()
+
+    def _on_import_seismic_tiled(self) -> None:
+        self._on_import_segy()
+
+    # ------------------------------------------------------------------
+    # Mode / view (tiled layout has persistent panels, no mode switching)
     # ------------------------------------------------------------------
 
     def set_mode(self, mode) -> None:
-        from section_tool.modes import Mode
-        self.current_mode = mode
-        if mode == Mode.SECTION:
-            self.canvas_stack.setCurrentWidget(self._section_view)
-            self.hud.reconfigure_for_mode(Mode.SECTION)
-        elif mode == Mode.THREE_D:
-            self.canvas_stack.setCurrentWidget(self._viewer_3d)
-            self.hud.reconfigure_for_mode(Mode.THREE_D)
+        pass   # Tiled layout: all views always visible
 
     def _toggle_map_dock(self) -> None:
-        self._map_dock.setVisible(not self._map_dock.isVisible())
+        v = self.map_tile.isVisible()
+        self.map_tile.setVisible(not v)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -2719,10 +2799,13 @@ class SectionMainWindow(MainWindow):
 
     def _on_section_coords(self, x_m: float, depth_m: float) -> None:
         elev_m = self._section_view._surface_elev_at(x_m) - depth_m
-        if hasattr(self.hud, "nav_readout"):
+        if hasattr(self, "hud") and hasattr(self.hud, "nav_readout"):
             self.hud.nav_readout.update_coords(x_m, depth_m, elev_m)
-        self.hud.depth_ruler.set_cursor_depth(depth_m)
-        self.hud.formation_strip.set_cursor_depth(depth_m)
+        if hasattr(self, "hud"):
+            self.hud.depth_ruler.set_cursor_depth(depth_m)
+            self.hud.formation_strip.set_cursor_depth(depth_m)
+        if hasattr(self, "status_strip"):
+            self.status_strip.update_coords(x_m, depth_m, elev_m)
 
     def _update_smart_cursor(self, canvas_pos) -> None:
         self._smart_cursor.update(canvas_pos, self._section_view.view_state)
