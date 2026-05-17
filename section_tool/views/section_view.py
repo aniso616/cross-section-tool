@@ -1637,28 +1637,33 @@ class SectionView(QWidget):
         self, section, seis_start: float, seis_end: float,
         y_top: float, y_bot: float
     ) -> None:
-        """Fade seismic that falls outside the actual section line extent."""
+        """Dim seismic outside the section line so context is still visible.
+
+        Full seismic renders at normal opacity; out-of-section portions get a
+        50% dark overlay — enough to distinguish "in section" from "context"
+        without hiding the reflectors that tell the interpreter whether to extend
+        the section line.
+        """
         from section_tool.style import BG_CANVAS
         sec_end = section.total_length()
-        # Determine vertical extent in display orientation
         ymin, ymax = min(y_top, y_bot), max(y_top, y_bot)
-        mask_kw = dict(color=BG_CANVAS, alpha=0.75, zorder=2)
+        dim_kw = dict(color=BG_CANVAS, alpha=0.50, zorder=2)
 
-        if seis_start < 0:
+        if seis_start < 0.0:
             poly = self._ax.fill_betweenx(
-                [ymin, ymax], seis_start, 0.0, **mask_kw)
+                [ymin, ymax], seis_start, 0.0, **dim_kw)
             self._seismic_artists.append(poly)
 
         if seis_end > sec_end:
             poly = self._ax.fill_betweenx(
-                [ymin, ymax], sec_end, seis_end, **mask_kw)
+                [ymin, ymax], sec_end, seis_end, **dim_kw)
             self._seismic_artists.append(poly)
 
         # Thin boundary lines at section start/end
         for x in (0.0, sec_end):
             ln, = self._ax.plot([x, x], [ymin, ymax],
-                                color="#888888", linewidth=0.8,
-                                linestyle="-", zorder=3)
+                                color="#AAAAAA", linewidth=0.8,
+                                linestyle="-", alpha=0.6, zorder=3)
             self._seismic_artists.append(ln)
 
     def _render_wiggle(self, distances, data, samples) -> None:
