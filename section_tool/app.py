@@ -2516,6 +2516,10 @@ class SectionMainWindow(MainWindow):
         from section_tool.views.status_strip import StatusStrip
         self.status_strip = StatusStrip(self)
         self.setStatusBar(self.status_strip)
+        # Redirect old MainWindow label refs so _update_status/_on_map_status
+        # don't crash after the old status bar is replaced.
+        self._status_label = QLabel()
+        self._hint_label   = QLabel()
 
         # 7. WASD navigator for the section view.
         from section_tool.navigation.wasd_navigator import WASDNavigator
