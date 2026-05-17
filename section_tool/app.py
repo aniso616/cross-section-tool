@@ -2571,7 +2571,10 @@ class SectionMainWindow(MainWindow):
         self.status_strip.set_hint(
             "New Section → draw line on map  |  Edit section nodes → click in map panel")
 
-        # 13. F11 fullscreen toggle.
+        # 13. Panel toggle shortcuts.
+        QShortcut(QKeySequence("Ctrl+1"), self, self._toggle_map_tile)
+        QShortcut(QKeySequence("Ctrl+4"), self, self._toggle_project_panel)
+        QShortcut(QKeySequence("Ctrl+5"), self, self._toggle_properties_panel)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
 
         # 14. Show maximized; apply proportions after event loop starts.
@@ -2668,6 +2671,8 @@ class SectionMainWindow(MainWindow):
 
         self.v_splitter.addWidget(self.section_tile)
         self.v_splitter.addWidget(self.map_tile)
+        # Bidirectional cursor: map tile hover → section vertical indicator
+        self._map_view.cursor_map_pos.connect(self._on_map_cursor_pos)
         self.h_splitter.addWidget(self.v_splitter)
 
         # Right: properties panel (reuse existing, no title bar)
@@ -2712,8 +2717,16 @@ class SectionMainWindow(MainWindow):
         pass   # Tiled layout: all views always visible
 
     def _toggle_map_dock(self) -> None:
-        v = self.map_tile.isVisible()
-        self.map_tile.setVisible(not v)
+        self.map_tile.setVisible(not self.map_tile.isVisible())
+
+    def _toggle_map_tile(self) -> None:
+        self.map_tile.setVisible(not self.map_tile.isVisible())
+
+    def _toggle_project_panel(self) -> None:
+        self._project_panel.setVisible(not self._project_panel.isVisible())
+
+    def _toggle_properties_panel(self) -> None:
+        self._properties_panel.setVisible(not self._properties_panel.isVisible())
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -2803,6 +2816,8 @@ class SectionMainWindow(MainWindow):
         self.hud.scale_bar.set_range(x_min, x_max)
         bands = self._compute_formation_bands(z_min, z_max)
         self.hud.formation_strip.set_stratigraphy(bands, z_min, z_max)
+        # Also feed bands to depth ruler for the formation chaser strip
+        self.hud.depth_ruler.set_formations(bands)
 
     def _compute_formation_bands(self, z_min: float, z_max: float) -> list:
         """Build FormationBand list from horizon picks on the active section."""
@@ -2873,12 +2888,16 @@ class SectionMainWindow(MainWindow):
             self.status_strip.update_coords(x_m, depth_m, elev_m)
 
     def _on_section_cursor_map(self, map_x: float, map_y: float) -> None:
-        """Update crosshair on map inset when section cursor moves."""
+        """Section cursor → crosshair on map inset and map tile."""
         if hasattr(self, "hud") and self.hud.map_inset:
             self.hud.map_inset.update_crosshair(map_x, map_y)
-        # Also show crosshair on the full map tile
         if hasattr(self, "map_tile"):
             self._map_view.show_cursor_crosshair(map_x, map_y)
+
+    def _on_map_cursor_pos(self, map_x: float, map_y: float) -> None:
+        """Map tile cursor → vertical indicator on section canvas."""
+        if hasattr(self, "section_tile"):
+            self._section_view.show_map_cursor_on_section(map_x, map_y)
 
     def _update_smart_cursor(self, canvas_pos) -> None:
         self._smart_cursor.update(canvas_pos, self._section_view.view_state)

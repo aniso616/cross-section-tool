@@ -58,6 +58,7 @@ class MapView(QWidget):
 
     section_node_moved = Signal(int, int, float, float)
     status_message     = Signal(str)
+    cursor_map_pos     = Signal(float, float)   # map x,y on hover
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
@@ -717,6 +718,7 @@ class MapView(QWidget):
         # ---- Coordinate readout + nearest-well distance ----
         if event.xdata is not None and event.ydata is not None and not self._drag_active:
             mx, my = float(event.xdata), float(event.ydata)
+            self.cursor_map_pos.emit(mx, my)   # bidirectional crosshair
             msg = f"E: {mx:,.0f}   N: {my:,.0f}"
             wells = self._state.project.wells
             if wells:

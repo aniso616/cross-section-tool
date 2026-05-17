@@ -6,7 +6,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 from section_tool.style import BG_CANVAS, C_RULE, C_LABEL, C_DIM
 
@@ -33,6 +33,26 @@ class MapInset(QWidget):
         self._crosshair_x: float | None = None
         self._crosshair_y: float | None = None
         self._crosshair_artists: list = []
+        self._collapsed = False
+        self._expanded_h = self.H
+
+        # Collapse/expand button in top-right corner
+        self._btn = QPushButton("—", self)
+        self._btn.setFixedSize(16, 14)
+        self._btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(50,50,60,200);
+                color: #aaaaaa;
+                border: none;
+                border-radius: 2px;
+                font-size: 9px;
+                padding: 0;
+            }
+            QPushButton:hover { background: rgba(80,80,100,220); color: #dddddd; }
+        """)
+        self._btn.move(self.W - 18, 2)
+        self._btn.clicked.connect(self._toggle_collapse)
+        self._btn.raise_()
 
         # Own matplotlib figure for map content
         self._fig = Figure(figsize=(self.W / 96, self.H / 96), dpi=96)
@@ -59,31 +79,57 @@ class MapInset(QWidget):
         self._ax.xaxis.set_visible(False)
         self._ax.yaxis.set_visible(False)
 
+    def _toggle_collapse(self) -> None:
+        self._collapsed = not self._collapsed
+        if self._collapsed:
+            self._mpl.setVisible(False)
+            self.setFixedSize(self.W, 18)
+            self._btn.setText("◻")
+        else:
+            self._mpl.setVisible(True)
+            self.setFixedSize(self.W, self._expanded_h)
+            self._btn.setText("—")
+        self._btn.move(self.W - 18, 2)
+
     def schedule_update(self):
         self._dirty = True
         if not self._timer.isActive():
             self._timer.start()
 
     def update_crosshair(self, map_x: float, map_y: float) -> None:
-        """Draw a crosshair at geographic position without a full re-render."""
+        """Draw a subtle crosshair at geographic position without a full re-render."""
         self._crosshair_x = map_x
         self._crosshair_y = map_y
-        # Remove old crosshair artists
         for a in self._crosshair_artists:
             try:
                 a.remove()
             except Exception:
                 pass
         self._crosshair_artists.clear()
-        # Draw new crosshair
         try:
-            vl = self._ax.axvline(map_x, color="#FF4444", linewidth=0.8,
-                                   alpha=0.75, zorder=20)
-            hl = self._ax.axhline(map_y, color="#FF4444", linewidth=0.8,
-                                   alpha=0.75, zorder=20)
-            dot = self._ax.plot(map_x, map_y, "o", color="#FF4444",
-                                markersize=4, zorder=21)[0]
-            self._crosshair_artists = [vl, hl, dot]
+            xlim = self._ax.get_xlim()
+            ylim = self._ax.get_ylim()
+            xs = (xlim[1] - xlim[0]) * 0.025  # ±2.5% crosshair arm
+            ys = (ylim[1] - ylim[0]) * 0.025
+
+            # Solid short crosshair arms at the point
+            h_arm, = self._ax.plot(
+                [map_x - xs, map_x + xs], [map_y, map_y],
+                color="#FF6666", lw=1.5, solid_capstyle="round", zorder=21)
+            v_arm, = self._ax.plot(
+                [map_x, map_x], [map_y - ys, map_y + ys],
+                color="#FF6666", lw=1.5, solid_capstyle="round", zorder=21)
+            # Faint dashed lines extending to edges
+            h_dash, = self._ax.plot(
+                [xlim[0], xlim[1]], [map_y, map_y],
+                color="#FF6666", lw=0.5, ls="--", alpha=0.35, zorder=19)
+            v_dash, = self._ax.plot(
+                [map_x, map_x], [ylim[0], ylim[1]],
+                color="#FF6666", lw=0.5, ls="--", alpha=0.35, zorder=19)
+            # Tiny dot
+            dot, = self._ax.plot(map_x, map_y, "o",
+                                 color="#FF6666", ms=3, zorder=22)
+            self._crosshair_artists = [h_arm, v_arm, h_dash, v_dash, dot]
         except Exception:
             pass
         self._mpl.draw_idle()

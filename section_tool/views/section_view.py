@@ -766,6 +766,40 @@ class SectionView(QWidget):
             ds = ref.load(progress_callback=progress_callback)
             self._seismic_cache[ref.path] = ds
 
+    def show_map_cursor_on_section(self, map_x: float, map_y: float) -> None:
+        """Show where a map position falls on this section as a vertical line."""
+        section = self._state.active_section
+        if section is None or self._ax is None:
+            return
+        try:
+            dist_along, perp_offset = section.project_point(map_x, map_y)
+            # Only show if close to the section (within 50% of total length)
+            if abs(perp_offset) > max(section.total_length() * 0.5, 2000):
+                self._clear_map_cursor()
+                return
+            if hasattr(self, "_map_cursor_artist") and self._map_cursor_artist:
+                try:
+                    self._map_cursor_artist.remove()
+                except Exception:
+                    pass
+            yl = self._ax.get_ylim()
+            self._map_cursor_artist, = self._ax.plot(
+                [dist_along, dist_along], [min(yl), max(yl)],
+                color="#FF6666", lw=0.6, ls="--", alpha=0.5, zorder=15,
+            )
+            self._canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _clear_map_cursor(self) -> None:
+        if hasattr(self, "_map_cursor_artist") and self._map_cursor_artist:
+            try:
+                self._map_cursor_artist.remove()
+            except Exception:
+                pass
+            self._map_cursor_artist = None
+            self._canvas.draw_idle()
+
     def set_grid_visible(self, visible: bool) -> None:
         self._show_grid = visible
         self.request_render()
@@ -1564,7 +1598,11 @@ class SectionView(QWidget):
             else:
                 y_top, y_bot = float(samples[0]), float(samples[-1])
             if ex_data.shape[1] >= 2:
-                _imshow(ex_data, float(distances[0]), float(distances[-1]), y_top, y_bot)
+                dist0, dist1 = float(distances[0]), float(distances[-1])
+                _imshow(ex_data, dist0, dist1, y_top, y_bot)
+                # Mask seismic that falls outside the section line
+                self._apply_seismic_boundary_mask(section, dist0, dist1,
+                                                   y_top, y_bot)
             return
 
         # Fallback: project full SEG-Y on the fly (slow, only when no extraction)
@@ -1593,6 +1631,34 @@ class SectionView(QWidget):
                 self._render_wiggle(distances, data, ds.samples)
             else:
                 _imshow(data.T, float(distances[0]), float(distances[-1]), y_top, y_bot)
+
+    def _apply_seismic_boundary_mask(
+        self, section, seis_start: float, seis_end: float,
+        y_top: float, y_bot: float
+    ) -> None:
+        """Fade seismic that falls outside the actual section line extent."""
+        from section_tool.style import BG_CANVAS
+        sec_end = section.total_length()
+        # Determine vertical extent in display orientation
+        ymin, ymax = min(y_top, y_bot), max(y_top, y_bot)
+        mask_kw = dict(color=BG_CANVAS, alpha=0.75, zorder=2)
+
+        if seis_start < 0:
+            poly = self._ax.fill_betweenx(
+                [ymin, ymax], seis_start, 0.0, **mask_kw)
+            self._seismic_artists.append(poly)
+
+        if seis_end > sec_end:
+            poly = self._ax.fill_betweenx(
+                [ymin, ymax], sec_end, seis_end, **mask_kw)
+            self._seismic_artists.append(poly)
+
+        # Thin boundary lines at section start/end
+        for x in (0.0, sec_end):
+            ln, = self._ax.plot([x, x], [ymin, ymax],
+                                color="#888888", linewidth=0.8,
+                                linestyle="-", zorder=3)
+            self._seismic_artists.append(ln)
 
     def _render_wiggle(self, distances, data, samples) -> None:
         if len(distances) < 2:

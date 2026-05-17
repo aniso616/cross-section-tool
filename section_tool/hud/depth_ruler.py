@@ -29,11 +29,17 @@ class DepthRuler(QWidget):
         self._depth_min    = 0.0
         self._depth_max    = 5000.0
         self._cursor_depth = None
+        self._formations: list = []   # FormationBand list for color chaser
         self._font = QFont("JetBrains Mono", 9)
 
     def set_view_range(self, depth_min: float, depth_max: float):
         self._depth_min = depth_min
         self._depth_max = depth_max
+        self.update()
+
+    def set_formations(self, bands: list) -> None:
+        """Update formation color bands.  bands = list of FormationBand namedtuples."""
+        self._formations = bands
         self.update()
 
     def set_cursor_depth(self, depth_m):
@@ -53,6 +59,16 @@ class DepthRuler(QWidget):
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         h  = self.height()
         rx = self.WIDTH - 1
+        BAND_W = 8   # formation color strip width on left edge
+
+        # Formation color chaser: thin colored strip on left edge
+        for band in self._formations:
+            y1 = self._depth_to_y(band.top_m)
+            y2 = self._depth_to_y(band.base_m)
+            if y2 <= y1:
+                continue
+            r, g, b = band.color[:3]
+            p.fillRect(0, y1, BAND_W, y2 - y1, QColor(r, g, b, 200))
 
         p.setFont(self._font)
         fm = QFontMetrics(self._font)
