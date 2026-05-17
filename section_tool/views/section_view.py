@@ -1601,9 +1601,8 @@ class SectionView(QWidget):
             if ex_data.shape[1] >= 2:
                 dist0, dist1 = float(distances[0]), float(distances[-1])
                 _imshow(ex_data, dist0, dist1, y_top, y_bot)
-                # Mask seismic that falls outside the section line
-                self._apply_seismic_boundary_mask(section, dist0, dist1,
-                                                   y_top, y_bot)
+                # Dim seismic outside the section line (axes limits are set at this point)
+                self._apply_seismic_boundary_mask(section, dist0, dist1)
             return
 
         # Fallback: project full SEG-Y on the fly (slow, only when no extraction)
@@ -1631,37 +1630,44 @@ class SectionView(QWidget):
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
-                _imshow(data.T, float(distances[0]), float(distances[-1]), y_top, y_bot)
+                dist0f = float(distances[0])
+                dist1f = float(distances[-1])
+                _imshow(data.T, dist0f, dist1f, y_top, y_bot)
+                # Dim seismic outside section bounds (same as extracted path)
+                self._apply_seismic_boundary_mask(section, dist0f, dist1f)
 
     def _apply_seismic_boundary_mask(
         self, section, seis_start: float, seis_end: float,
-        y_top: float, y_bot: float
     ) -> None:
-        """Dim seismic outside the section line so context is still visible.
+        """Dim seismic outside the section line using Rectangle patches.
 
-        Full seismic renders at normal opacity; out-of-section portions get a
-        50% dark overlay — enough to distinguish "in section" from "context"
-        without hiding the reflectors that tell the interpreter whether to extend
-        the section line.
+        Uses the actual axes limits (not the seismic sample range) so the
+        overlay covers the full plot height regardless of seismic extent.
+        Rectangle patches are used instead of fill_betweenx because they
+        are guaranteed to work with inverted Y axes.
         """
-        from section_tool.style import BG_CANVAS
-        sec_end = section.total_length()
-        ymin, ymax = min(y_top, y_bot), max(y_top, y_bot)
-        dim_kw = dict(color=BG_CANVAS, alpha=0.50, zorder=2)
+        from matplotlib.patches import Rectangle as _Rect
+        sec_end  = section.total_length()
+        yl       = self._ax.get_ylim()         # inverted: yl[0] > yl[1]
+        y_bottom = max(yl)                      # deeper (larger value = bottom)
+        y_top    = min(yl)                      # shallower (smaller = top)
+        height   = y_bottom - y_top
+        dim_kw   = dict(facecolor="#1E1E1E", alpha=0.55,
+                        edgecolor="none", zorder=2)
 
         if seis_start < 0.0:
-            poly = self._ax.fill_betweenx(
-                [ymin, ymax], seis_start, 0.0, **dim_kw)
-            self._seismic_artists.append(poly)
+            rect = _Rect((seis_start, y_top), -seis_start, height, **dim_kw)
+            self._ax.add_patch(rect)
+            self._seismic_artists.append(rect)
 
         if seis_end > sec_end:
-            poly = self._ax.fill_betweenx(
-                [ymin, ymax], sec_end, seis_end, **dim_kw)
-            self._seismic_artists.append(poly)
+            rect = _Rect((sec_end, y_top), seis_end - sec_end, height, **dim_kw)
+            self._ax.add_patch(rect)
+            self._seismic_artists.append(rect)
 
-        # Thin boundary lines at section start/end
+        # Thin boundary lines at section endpoints
         for x in (0.0, sec_end):
-            ln, = self._ax.plot([x, x], [ymin, ymax],
+            ln, = self._ax.plot([x, x], [y_top, y_bottom],
                                 color="#AAAAAA", linewidth=0.8,
                                 linestyle="-", alpha=0.6, zorder=3)
             self._seismic_artists.append(ln)
