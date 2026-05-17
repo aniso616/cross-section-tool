@@ -944,6 +944,13 @@ class SectionView(QWidget):
 
         self._render_overlays(section)
 
+        # Final safety after overlays: Y axis must stay inverted (depth 0 = top)
+        _yl = self._ax.get_ylim()
+        if _yl[0] < _yl[1]:
+            self._ax.set_ylim(_yl[1], _yl[0])
+            if self._saved_ylim is not None:
+                self._saved_ylim = (self._saved_ylim[1], self._saved_ylim[0])
+
         _t_draw = time.perf_counter()
         self._canvas.draw_idle()
         _draw_ms = (time.perf_counter() - _t_draw) * 1000.0

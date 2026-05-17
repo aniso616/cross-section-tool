@@ -2498,9 +2498,11 @@ class SectionMainWindow(MainWindow):
             tb.setParent(None)  # fully detach from window hierarchy
 
         # 2. Hide section dock (section view moves to central canvas_stack).
-        #    Keep map, project, and properties docks visible.
+        #    Hide map dock by default — map is shown as minimap overlay instead.
+        #    Project and Properties panels stay visible on the sides.
         self._section_dock.setVisible(False)
         self._view3d_dock.setVisible(False)
+        self._map_dock.setVisible(False)
 
         # 3. Section view: hide header rows, suppress pick banner.
         self._section_view.set_game_mode(True)
@@ -2589,13 +2591,23 @@ class SectionMainWindow(MainWindow):
                   lambda: self.set_mode(Mode.THREE_D))
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
 
-        # 14. Minimap: refresh on a slow timer (avoid recursive repaint from draw_event).
-        _mm_timer = QTimer(self)
-        _mm_timer.setInterval(3000)   # every 3 s is plenty for a thumbnail
-        _mm_timer.timeout.connect(self._refresh_minimap)
-        _mm_timer.start()
+        # 14. Minimap overlay on the section canvas.
+        from section_tool.views.minimap_overlay import MinimapOverlay
+        self._minimap_overlay = MinimapOverlay(self._section_view, self._state)
+        # Wire to AppState signals so the minimap re-renders on data changes.
+        for sig in (
+            self._state.project_changed,
+            self._state.section_added, self._state.section_removed,
+            self._state.section_modified,
+            self._state.well_added, self._state.well_removed,
+            self._state.active_section_changed,
+            self._state.seismic_ref_added, self._state.seismic_ref_removed,
+        ):
+            sig.connect(self._minimap_overlay.schedule_update)
+        self._minimap_overlay.schedule_update()
 
-        # 15. Show maximized.
+        # 15. Old minimap timer no longer needed (was HUD thumbnail).
+        # 16. Show maximized.
         self.showMaximized()
 
     # ------------------------------------------------------------------
@@ -2608,21 +2620,12 @@ class SectionMainWindow(MainWindow):
         if mode == Mode.SECTION:
             self.canvas_stack.setCurrentWidget(self._section_view)
             self.hud.reconfigure_for_mode(Mode.SECTION)
-            self._refresh_minimap()
         elif mode == Mode.THREE_D:
             self.canvas_stack.setCurrentWidget(self._viewer_3d)
             self.hud.reconfigure_for_mode(Mode.THREE_D)
 
     def _toggle_map_dock(self) -> None:
         self._map_dock.setVisible(not self._map_dock.isVisible())
-
-    def _refresh_minimap(self) -> None:
-        pixmap = self._map_view.canvas.grab().scaled(
-            192, 152,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.hud.minimap.update_content(pixmap)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -2732,7 +2735,7 @@ class SectionMainWindow(MainWindow):
             "tool_pick":     lambda: self._tool_mgr.handle_key(Qt.Key.Key_T),
             "tool_annotate": lambda: self._tool_mgr.handle_key(Qt.Key.Key_A),
             "mode_section":  lambda: self.set_mode(Mode.SECTION),
-            "mode_map":      lambda: self.set_mode(Mode.MAP),
+            "mode_map":      self._toggle_map_dock,
             "mode_3d":       lambda: self.set_mode(Mode.THREE_D),
             "view_fit":      self._zoom_to_fit,
             "export_image":  self._on_export_section_image,
