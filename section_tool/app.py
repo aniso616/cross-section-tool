@@ -2438,10 +2438,13 @@ class SectionMainWindow(MainWindow):
 
     # Maps new ToolManager IDs → existing AppState tool IDs
     _NEW_TO_OLD: dict[str | None, str] = {
+        "select":     "select",
+        "node_edit":  "node_edit",
         "horizon":    "horizon_pick",
         "fault":      "fault_pick",
-        "pick":       "horizon_pick",   # T = pick well top; reuse horizon pick for now
-        "annotation": "select",
+        "pick":       "horizon_pick",
+        "polygon":    "polygon",
+        "measure":    "measure",
         None:         "select",
     }
 
@@ -2560,6 +2563,7 @@ class SectionMainWindow(MainWindow):
         # 11. Wire HUD and status strip to section view signals.
         self._section_view.view_changed.connect(self._on_hud_update)
         self._section_view.coords_updated.connect(self._on_section_coords)
+        self._section_view.cursor_map_pos.connect(self._on_section_cursor_map)
 
         # 12. Wire project and properties panels.
         self._project_panel.pick_target_selected.connect(
@@ -2721,6 +2725,58 @@ class SectionMainWindow(MainWindow):
     # Tool routing
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Save / Open (SQLite project folders, overrides HDF5 MainWindow logic)
+    # ------------------------------------------------------------------
+
+    def _on_save(self) -> None:
+        pm = self._state.project_manager
+        if pm.is_open and pm.project_path:
+            try:
+                self._state.save_project()
+                self._update_title()
+            except Exception as exc:
+                QMessageBox.critical(self, "Save Error", str(exc))
+        else:
+            self._on_save_as()
+
+    def _on_save_as(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Save Project To Folder", ""
+        )
+        if not folder:
+            return
+        project_name = self._state.project.name or "Untitled"
+        dest = os.path.join(folder, project_name)
+        try:
+            self._state.save_project_as(dest)
+            self._update_title()
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Error", str(exc))
+
+    def _on_open(self) -> None:
+        if not self._check_unsaved_changes():
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self, "Open Project Folder", os.path.expanduser("~")
+        )
+        if not folder:
+            return
+        db_path = os.path.join(folder, "project.sqlite")
+        if not os.path.exists(db_path):
+            QMessageBox.warning(
+                self, "Invalid Project",
+                "No project.sqlite found in this folder.\n"
+                f"({folder})"
+            )
+            return
+        if not self._open_project(folder):
+            QMessageBox.critical(self, "Open Error", f"Could not open:\n{folder}")
+        else:
+            self._update_title()
+            if hasattr(self, "status_strip"):
+                self.status_strip.set_hint("")
+
     def _set_grid(self, visible: bool) -> None:
         self._section_view.set_grid_visible(visible)
         self._map_view.set_grid_visible(visible)
@@ -2815,6 +2871,14 @@ class SectionMainWindow(MainWindow):
             self.hud.formation_strip.set_cursor_depth(depth_m)
         if hasattr(self, "status_strip"):
             self.status_strip.update_coords(x_m, depth_m, elev_m)
+
+    def _on_section_cursor_map(self, map_x: float, map_y: float) -> None:
+        """Update crosshair on map inset when section cursor moves."""
+        if hasattr(self, "hud") and self.hud.map_inset:
+            self.hud.map_inset.update_crosshair(map_x, map_y)
+        # Also show crosshair on the full map tile
+        if hasattr(self, "map_tile"):
+            self._map_view.show_cursor_crosshair(map_x, map_y)
 
     def _update_smart_cursor(self, canvas_pos) -> None:
         self._smart_cursor.update(canvas_pos, self._section_view.view_state)

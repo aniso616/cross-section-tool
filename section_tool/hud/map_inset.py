@@ -30,6 +30,9 @@ class MapInset(QWidget):
         self.setFixedSize(self.W, self.H)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._font = QFont("JetBrains Mono", 8)
+        self._crosshair_x: float | None = None
+        self._crosshair_y: float | None = None
+        self._crosshair_artists: list = []
 
         # Own matplotlib figure for map content
         self._fig = Figure(figsize=(self.W / 96, self.H / 96), dpi=96)
@@ -60,6 +63,39 @@ class MapInset(QWidget):
         self._dirty = True
         if not self._timer.isActive():
             self._timer.start()
+
+    def update_crosshair(self, map_x: float, map_y: float) -> None:
+        """Draw a crosshair at geographic position without a full re-render."""
+        self._crosshair_x = map_x
+        self._crosshair_y = map_y
+        # Remove old crosshair artists
+        for a in self._crosshair_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._crosshair_artists.clear()
+        # Draw new crosshair
+        try:
+            vl = self._ax.axvline(map_x, color="#FF4444", linewidth=0.8,
+                                   alpha=0.75, zorder=20)
+            hl = self._ax.axhline(map_y, color="#FF4444", linewidth=0.8,
+                                   alpha=0.75, zorder=20)
+            dot = self._ax.plot(map_x, map_y, "o", color="#FF4444",
+                                markersize=4, zorder=21)[0]
+            self._crosshair_artists = [vl, hl, dot]
+        except Exception:
+            pass
+        self._mpl.draw_idle()
+
+    def clear_crosshair(self) -> None:
+        for a in self._crosshair_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._crosshair_artists.clear()
+        self._mpl.draw_idle()
 
     def paintEvent(self, event):
         # Draw 1px border last (on top of matplotlib content)

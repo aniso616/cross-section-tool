@@ -171,6 +171,23 @@ class MapView(QWidget):
         self._show_grid = visible
         self.render()
 
+    def show_cursor_crosshair(self, map_x: float, map_y: float) -> None:
+        """Show a crosshair at geographic position without a full re-render."""
+        for a in getattr(self, "_crosshair_artists", []):
+            try:
+                a.remove()
+            except Exception:
+                pass
+        try:
+            vl  = self._ax.axvline(map_x, color="#FF4444", linewidth=0.8, alpha=0.7, zorder=20)
+            hl  = self._ax.axhline(map_y, color="#FF4444", linewidth=0.8, alpha=0.7, zorder=20)
+            dot = self._ax.plot(map_x, map_y, "o", color="#FF4444",
+                                markersize=5, zorder=21)[0]
+            self._crosshair_artists = [vl, hl, dot]
+        except Exception:
+            self._crosshair_artists = []
+        self._canvas.draw_idle()
+
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------

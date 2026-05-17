@@ -2,17 +2,23 @@ from PySide6.QtCore import QEvent, QObject, Qt, Signal
 
 
 TOOL_KEYS = {
+    Qt.Key.Key_V: "select",
+    Qt.Key.Key_A: "node_edit",
     Qt.Key.Key_H: "horizon",
     Qt.Key.Key_F: "fault",
     Qt.Key.Key_T: "pick",
-    Qt.Key.Key_A: "annotation",
+    Qt.Key.Key_G: "polygon",
+    Qt.Key.Key_M: "measure",
 }
 
 TOOL_LABELS = {
+    "select":     "",          # default; no indicator when in select mode
+    "node_edit":  "● Nodes",
     "horizon":    "● Horizon",
     "fault":      "● Fault",
     "pick":       "● Pick",
-    "annotation": "● Note",
+    "polygon":    "● Polygon",
+    "measure":    "● Measure",
     None:         "",
 }
 

@@ -195,11 +195,13 @@ class SectionView(QWidget):
     frame_time_ms        = Signal(float)  # Phase 6: FPS display
     coords_updated       = Signal(float, float)    # game HUD coord readout
     view_changed         = Signal()                # after any pan/zoom/render
+    cursor_map_pos       = Signal(float, float)    # map x,y as cursor moves on section
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._game_mode: bool = False
+        self._blit_background = None   # cached background for fast overlay redraw
         # Debounced view-change signal for HUD updates (pan/zoom via WASD)
         self._hud_timer = QTimer(self)
         self._hud_timer.setSingleShot(True)
@@ -538,6 +540,39 @@ class SectionView(QWidget):
     @property
     def view_state(self) -> "SectionViewState":
         return SectionViewState(self)
+
+    def _blit_overlays(self) -> None:
+        """Fast redraw for rubber-band / snap / polygon preview — no seismic re-render.
+
+        Restores the cached background (set at the end of every full render),
+        re-draws only the lightweight overlay artists, then blits.  Falls back
+        to a full render if the background cache is stale or missing.
+        """
+        if not getattr(self, "_blit_background", None):
+            self.request_render()
+            return
+        try:
+            self._canvas.restore_region(self._blit_background)
+            section = self._state.active_section
+            if section is not None:
+                # Remove previous overlay artists and redraw fresh ones
+                for a in self._overlay_artists:
+                    try:
+                        a.remove()
+                    except Exception:
+                        pass
+                self._overlay_artists.clear()
+                self._render_overlays(section)
+                for a in self._overlay_artists:
+                    try:
+                        self._ax.draw_artist(a)
+                    except Exception:
+                        pass
+            self._canvas.blit(self._ax.bbox)
+        except Exception:
+            # Blit failed (e.g. after resize) — fall back to full render
+            self._blit_background = None
+            self.request_render()
 
     def request_hud_update(self) -> None:
         """Debounced trigger for HUD view-state refresh (pan/zoom without full render)."""
@@ -931,7 +966,8 @@ class SectionView(QWidget):
 
         self.view_changed.emit()
         _t_draw = time.perf_counter()
-        self._canvas.draw_idle()
+        self._canvas.draw()                              # must use draw() not draw_idle() to cache background
+        self._blit_background = self._canvas.copy_from_bbox(self._ax.bbox)
         _draw_ms = (time.perf_counter() - _t_draw) * 1000.0
         if _draw_ms > 30:
             ex_data, _ = self._state.get_seismic_for_section(section.name)
@@ -2419,6 +2455,14 @@ class SectionView(QWidget):
             # Coordinate readout in status bar and game HUD
             self._show_section_coords(cx, cy)
             self.coords_updated.emit(cx, cy)
+            # Cross-view cursor tracking: section distance → map coordinates
+            section = self._state.active_section
+            if section is not None:
+                try:
+                    mx, my = section.section_to_map(cx)
+                    self.cursor_map_pos.emit(mx, my)
+                except Exception:
+                    pass
             # Snap hint during active picking
             if self._snap_point is not None and (self._picking_active or self._fault_picking):
                 sx, sz = self._snap_point
@@ -2532,7 +2576,7 @@ class SectionView(QWidget):
                 or self._ref_line_tool == "a_ref"
                 or self._polygon_drawing
                 or self._cst_state != "idle"):
-            self.render()
+            self._blit_overlays()
 
     def _on_sv_release(self, event) -> None:
         if event.button in (1, 2):

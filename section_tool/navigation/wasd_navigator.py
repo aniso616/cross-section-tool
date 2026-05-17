@@ -1,9 +1,20 @@
+"""Arrow-key navigator for the section canvas.
+
+Navigation keys:
+  Arrow keys          — pan  (continuous, accelerates on hold)
+  Shift + Up/Down     — zoom in / out
+  Scroll wheel        — zoom centred on cursor (handled by matplotlib)
+"""
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt
+
+_NAV_KEYS = {
+    Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
+}
 
 
 class WASDNavigator(QObject):
     """
-    Continuous pan and zoom from held WASD + Shift keys.
+    Continuous pan and zoom from held arrow keys.
     Attach with: canvas.installEventFilter(WASDNavigator(canvas, view_state))
 
     view_state must expose:
@@ -29,22 +40,27 @@ class WASDNavigator(QObject):
     def eventFilter(self, obj, event):
         t = event.type()
         if t == QEvent.Type.KeyPress and not event.isAutoRepeat():
-            self._held.add(event.key())
-            if self._nav_keys() and not self._timer.isActive():
-                self._timer.start()
-            return False  # don't consume — tool keys still reach canvas
+            key = event.key()
+            if key in _NAV_KEYS:
+                self._held.add(key)
+                if not self._timer.isActive():
+                    self._timer.start()
+                return True   # consume arrow keys so they don't scroll the view
+            return False      # all other keys pass through unchanged
 
         if t == QEvent.Type.KeyRelease and not event.isAutoRepeat():
-            self._held.discard(event.key())
-            if not self._nav_keys():
-                self._timer.stop()
+            key = event.key()
+            if key in _NAV_KEYS:
+                self._held.discard(key)
+                if not self._nav_keys():
+                    self._timer.stop()
+                return True
             return False
 
         return False
 
     def _nav_keys(self):
-        return bool(self._held & {Qt.Key.Key_W, Qt.Key.Key_A,
-                                  Qt.Key.Key_S, Qt.Key.Key_D})
+        return bool(self._held & _NAV_KEYS)
 
     def _tick(self):
         xext = self.view.x_max - self.view.x_min
@@ -53,12 +69,12 @@ class WASDNavigator(QObject):
 
         dx, dz, zf = 0.0, 0.0, 1.0
 
-        if Qt.Key.Key_A in self._held: dx = -xext * self.PAN_RATE
-        if Qt.Key.Key_D in self._held: dx = +xext * self.PAN_RATE
-        if Qt.Key.Key_W in self._held:
+        if Qt.Key.Key_Left  in self._held: dx = -xext * self.PAN_RATE
+        if Qt.Key.Key_Right in self._held: dx = +xext * self.PAN_RATE
+        if Qt.Key.Key_Up    in self._held:
             if shift: zf *= (1.0 - self.ZOOM_RATE)
             else:     dz  = -zext * self.PAN_RATE
-        if Qt.Key.Key_S in self._held:
+        if Qt.Key.Key_Down  in self._held:
             if shift: zf *= (1.0 + self.ZOOM_RATE)
             else:     dz  = +zext * self.PAN_RATE
 

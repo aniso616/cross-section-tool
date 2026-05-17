@@ -245,6 +245,19 @@ class ProjectPanel(QDockWidget):
         vbox.setContentsMargins(2, 2, 2, 2)
         vbox.setSpacing(2)
 
+        # Mode indicator pill at top
+        self._mode_label = QLabel("● Select")
+        self._mode_label.setStyleSheet("""
+            QLabel {
+                background-color: #1a3050;
+                color: #8ab4d8;
+                padding: 3px 8px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+        """)
+        vbox.addWidget(self._mode_label)
+
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(1)
@@ -274,8 +287,39 @@ class ProjectPanel(QDockWidget):
         self.setWidget(inner)
         self.setMinimumWidth(180)
 
+    _TOOL_LABELS = {
+        "select":       "● Select",
+        "node_edit":    "● Nodes",
+        "pan":          "● Pan",
+        "zoom":         "● Zoom",
+        "horizon_pick": "● Horizon Pick",
+        "fault_pick":   "● Fault Pick",
+        "polygon":      "● Polygon",
+        "measure":      "● Measure",
+        "new_section":  "● Draw Section",
+        "h_ref":        "● H Reference",
+        "v_ref":        "● V Reference",
+    }
+
+    def set_mode(self, tool_id: str) -> None:
+        label = self._TOOL_LABELS.get(tool_id, f"● {tool_id.replace('_', ' ').title()}")
+        active = tool_id not in ("select", "pan", "zoom", "")
+        color  = "#2563EB" if active else "#1a3050"
+        text_c = "#ffffff" if active else "#8ab4d8"
+        self._mode_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {color};
+                color: {text_c};
+                padding: 3px 8px;
+                font-size: 9pt;
+                font-weight: bold;
+            }}
+        """)
+        self._mode_label.setText(label)
+
     def _connect_state_signals(self) -> None:
         s = self._state
+        s.tool_changed.connect(self.set_mode)
         s.project_changed.connect(self._rebuild)
         s.section_added.connect(lambda _: self._rebuild())
         s.section_removed.connect(lambda _: self._rebuild())
