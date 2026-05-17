@@ -2565,7 +2565,7 @@ class SectionMainWindow(MainWindow):
         self._project_panel.pick_target_selected.connect(
             self._on_pick_target_selected)
         self.status_strip.set_hint(
-            "Draw a section line on the map below to get started")
+            "New Section → draw line on map  |  Edit section nodes → click in map panel")
 
         # 13. F11 fullscreen toggle.
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)

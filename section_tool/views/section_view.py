@@ -2052,12 +2052,28 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _get_or_load_seismic(self, ref: SeismicRef) -> SeismicDataset | None:
-        """Return cached SeismicDataset, or None if not yet loaded.
+        """Return cached SeismicDataset, loading on demand if not yet cached.
 
-        Never loads on the UI thread — the full amplitude data must be loaded
-        explicitly (via preload_seismic_ref or section extraction).  Loading
-        a large SEG-Y file here would block the UI for tens of seconds.
+        The first call per ref blocks the UI thread while reading the SEG-Y.
+        This is acceptable for typical 2D lines (seconds, not minutes).
+        Subsequent calls return instantly from the in-memory cache.
         """
+        if ref.path not in self._seismic_cache:
+            try:
+                from PySide6.QtWidgets import QApplication
+                from PySide6.QtCore import Qt as _Qt
+                QApplication.setOverrideCursor(_Qt.CursorShape.WaitCursor)
+                QApplication.processEvents()
+                ds = ref.load()
+                QApplication.restoreOverrideCursor()
+                if ds is not None:
+                    self._seismic_cache[ref.path] = ds
+            except Exception:
+                try:
+                    QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+                return None
         return self._seismic_cache.get(ref.path)
 
     # ------------------------------------------------------------------

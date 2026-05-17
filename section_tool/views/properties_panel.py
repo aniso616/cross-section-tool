@@ -48,11 +48,12 @@ def _val_label(text: str) -> QLabel:
 def _form() -> QFormLayout:
     """Standard QFormLayout with consistent spacing."""
     f = QFormLayout()
-    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+    # WrapLongRows prevents label/value overlap in narrow panels
+    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
     f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
     f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    f.setVerticalSpacing(6)
-    f.setHorizontalSpacing(8)
+    f.setVerticalSpacing(5)
+    f.setHorizontalSpacing(6)
     f.setContentsMargins(4, 4, 4, 4)
     return f
 
@@ -106,7 +107,7 @@ class PropertiesPanel(QDockWidget):
         scroll.setWidget(self._inner)
         self.setWidget(scroll)
         self.setMinimumHeight(180)
-        self.setMinimumWidth(220)
+        self.setMinimumWidth(250)
 
         self._rebuilding = False   # re-entry guard
         self._connect_signals()
@@ -265,7 +266,7 @@ class PropertiesPanel(QDockWidget):
         ct_combo.blockSignals(True); ct_combo.setCurrentIndex(ci); ct_combo.blockSignals(False)
         ct_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ct("Horizons", idx, ct_combo.currentData()))
-        form.addRow("Contact type:", ct_combo)
+        form.addRow("Type:", ct_combo)
 
         color_row = self._make_color_row(hp.color,
             lambda c: self._commit_pick_color("Horizons", idx, c))
@@ -275,17 +276,17 @@ class PropertiesPanel(QDockWidget):
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
         lw.blockSignals(True); lw.setValue(getattr(hp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Horizons", idx, v))
-        form.addRow("Line width:", lw)
+        form.addRow("Width:", lw)
 
         fa_ed = QLineEdit(getattr(hp, "formation_above", ""))
         fa_ed.editingFinished.connect(
             lambda: self._commit_pick_formation("Horizons", idx, "above", fa_ed.text()))
-        form.addRow("Formation above:", fa_ed)
+        form.addRow("Fm above:", fa_ed)
 
         fb_ed = QLineEdit(getattr(hp, "formation_below", ""))
         fb_ed.editingFinished.connect(
             lambda: self._commit_pick_formation("Horizons", idx, "below", fb_ed.text()))
-        form.addRow("Formation below:", fb_ed)
+        form.addRow("Fm below:", fb_ed)
 
         n_secs = len({str(s) for s in hp._section_names if s != ""}) if hp.n_picks else 0
         form.addRow("Picks:",
@@ -311,17 +312,17 @@ class PropertiesPanel(QDockWidget):
         ft_combo.blockSignals(True); ft_combo.setCurrentIndex(fi); ft_combo.blockSignals(False)
         ft_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ft("Faults", idx, ft_combo.currentData()))
-        form.addRow("Fault type:", ft_combo)
+        form.addRow("Type:", ft_combo)
 
         # Dip direction
         dd_combo = QComboBox()
-        dd_combo.addItems(["Right (hanging wall right)", "Left (hanging wall left)"])
+        dd_combo.addItems(["Right", "Left"])
         _di = 0 if getattr(fp, "dip_direction", "right") == "right" else 1
         dd_combo.blockSignals(True); dd_combo.setCurrentIndex(_di); dd_combo.blockSignals(False)
         dd_combo.currentIndexChanged.connect(
             lambda i: self._commit_pick_dd("Faults", idx,
                                             "right" if i == 0 else "left"))
-        form.addRow("Dip direction:", dd_combo)
+        form.addRow("Dip dir:", dd_combo)
 
         color_row = self._make_color_row(fp.color,
             lambda c: self._commit_pick_color("Faults", idx, c))
@@ -331,7 +332,7 @@ class PropertiesPanel(QDockWidget):
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
         lw.blockSignals(True); lw.setValue(getattr(fp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Faults", idx, v))
-        form.addRow("Line width:", lw)
+        form.addRow("Width:", lw)
 
         n_secs = len({str(s) for s in fp._section_names if s != ""}) if fp.n_picks else 0
         form.addRow("Picks:",
@@ -350,7 +351,7 @@ class PropertiesPanel(QDockWidget):
         d_ed = QLineEdit(f"{d:.2f}")
         d_ed.editingFinished.connect(
             lambda: self._commit_node_coord(cat, oi, pi, "d", d_ed.text()))
-        form.addRow("Distance (m):", d_ed)
+        form.addRow("Dist (m):", d_ed)
 
         z_ed = QLineEdit(f"{z:.2f}")
         z_ed.editingFinished.connect(
