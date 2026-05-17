@@ -201,7 +201,6 @@ class SectionView(QWidget):
         super().__init__(parent)
         self._state = state
         self._game_mode: bool = False
-        self._blit_background = None   # cached background for fast overlay redraw
         # Debounced view-change signal for HUD updates (pan/zoom via WASD)
         self._hud_timer = QTimer(self)
         self._hud_timer.setSingleShot(True)
@@ -544,35 +543,25 @@ class SectionView(QWidget):
     def _blit_overlays(self) -> None:
         """Fast redraw for rubber-band / snap / polygon preview — no seismic re-render.
 
-        Restores the cached background (set at the end of every full render),
-        re-draws only the lightweight overlay artists, then blits.  Falls back
-        to a full render if the background cache is stale or missing.
+        Removes only the dynamic overlay artists (rubber band, snap marker, etc.)
+        then re-renders overlays and calls draw_idle() — much faster than a full
+        render because the seismic imshow, horizon/fault lines, etc. are preserved.
+        Falls back to full render if no section is active.
         """
-        if not getattr(self, "_blit_background", None):
+        section = self._state.active_section
+        if section is None:
             self.request_render()
             return
-        try:
-            self._canvas.restore_region(self._blit_background)
-            section = self._state.active_section
-            if section is not None:
-                # Remove previous overlay artists and redraw fresh ones
-                for a in self._overlay_artists:
-                    try:
-                        a.remove()
-                    except Exception:
-                        pass
-                self._overlay_artists.clear()
-                self._render_overlays(section)
-                for a in self._overlay_artists:
-                    try:
-                        self._ax.draw_artist(a)
-                    except Exception:
-                        pass
-            self._canvas.blit(self._ax.bbox)
-        except Exception:
-            # Blit failed (e.g. after resize) — fall back to full render
-            self._blit_background = None
-            self.request_render()
+        # Remove only previous overlay artists (leaves seismic/horizons intact)
+        for a in self._overlay_artists:
+            try:
+                a.remove()
+            except Exception:
+                pass
+        self._overlay_artists.clear()
+        # Re-render lightweight overlays only
+        self._render_overlays(section)
+        self._canvas.draw_idle()
 
     def request_hud_update(self) -> None:
         """Debounced trigger for HUD view-state refresh (pan/zoom without full render)."""
@@ -966,8 +955,7 @@ class SectionView(QWidget):
 
         self.view_changed.emit()
         _t_draw = time.perf_counter()
-        self._canvas.draw()                              # must use draw() not draw_idle() to cache background
-        self._blit_background = self._canvas.copy_from_bbox(self._ax.bbox)
+        self._canvas.draw_idle()
         _draw_ms = (time.perf_counter() - _t_draw) * 1000.0
         if _draw_ms > 30:
             ex_data, _ = self._state.get_seismic_for_section(section.name)
