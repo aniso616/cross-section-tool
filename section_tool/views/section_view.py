@@ -1590,18 +1590,19 @@ class SectionView(QWidget):
         # Extracted seismic (preferred — already projected onto section)
         ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
         if ex_data is not None and ex_meta is not None:
-            samples   = np.asarray(ex_meta["samples"])
-            distances = np.asarray(ex_meta["distances"])
-            domain    = ex_meta.get("domain", "twt")
+            samples = np.asarray(ex_meta["samples"])
+            domain  = ex_meta.get("domain", "twt")
             if stretch == "linear" and domain == "twt":
                 scale = v_ms / 2000.0
                 y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
             else:
                 y_top, y_bot = float(samples[0]), float(samples[-1])
             if ex_data.shape[1] >= 2:
-                dist0, dist1 = float(distances[0]), float(distances[-1])
+                # Use the dedicated dist_min/dist_max keys so the imshow extent
+                # matches the ACTUAL data coverage, not section.total_length().
+                dist0 = float(ex_meta["dist_min"])
+                dist1 = float(ex_meta["dist_max"])
                 _imshow(ex_data, dist0, dist1, y_top, y_bot)
-                # Dim seismic outside the section line (axes limits are set at this point)
                 self._apply_seismic_boundary_mask(section, dist0, dist1)
             return
 
