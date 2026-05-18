@@ -1275,10 +1275,19 @@ class SectionView(QWidget):
                         self._ax.text(xl[1], rl.value, f" {label}", fontsize=6,
                                       color="#999", va="center", ha="right", zorder=1))
             elif rl.kind == "vertical":
-                self._overlay_artists.append(self._ax.axvline(rl.value, **kw))
+                if rl.map_x is not None and rl.map_y is not None:
+                    # Always reproject from map coordinates — stays correct after node moves
+                    dist, _ = section.project_point(rl.map_x, rl.map_y)
+                else:
+                    # Legacy ref line: backfill map coords from current section geometry.
+                    # Mutate in place — same object stored in project.reference_lines so
+                    # it will be written on the next natural DB save (no signal needed here).
+                    dist = rl.value
+                    rl.map_x, rl.map_y = section.section_to_map(dist)
+                self._overlay_artists.append(self._ax.axvline(dist, **kw))
                 if label:
                     self._overlay_artists.append(
-                        self._ax.text(rl.value, ylo, f" {label}", fontsize=6,
+                        self._ax.text(dist, ylo, f" {label}", fontsize=6,
                                       color="#999", va="bottom", ha="left",
                                       rotation=90, zorder=1))
             elif rl.kind == "angled":
@@ -1381,10 +1390,21 @@ class SectionView(QWidget):
             hp = preview[2]
         # Phase 1: only picks belonging to this section (+ global picks)
         sec_idxs = hp.section_indices(section.name)
-        d_sec = hp._distances[sec_idxs]
+        d_raw = hp._distances[sec_idxs]
         z_sec = hp._depths[sec_idxs]
-        if len(d_sec) == 0:
+        if len(d_raw) == 0:
             return
+        # Reproject from map coordinates when available so display stays correct
+        # after section geometry changes regardless of whether recompute was called.
+        mx = hp._map_x[sec_idxs]
+        my = hp._map_y[sec_idxs]
+        has_map = ~(np.isnan(mx) | np.isnan(my))
+        if np.any(has_map):
+            d_sec = d_raw.copy()
+            for local_i, full_i in enumerate(np.where(has_map)[0]):
+                d_sec[full_i], _ = section.project_point(float(mx[full_i]), float(my[full_i]))
+        else:
+            d_sec = d_raw
 
         lw       = getattr(hp, "line_width", 1.5)
         ct       = getattr(hp, "contact_type", "conformable") if category == "Horizons" else None
@@ -1424,8 +1444,8 @@ class SectionView(QWidget):
             self._render_line_decoration(hp, d_sec, z_sec, category, lw)
 
         if is_edit:
-            for fi_full in sec_idxs:
-                d = float(hp._distances[fi_full])
+            for local_i, fi_full in enumerate(sec_idxs):
+                d = float(d_sec[local_i])
                 z = float(hp._depths[fi_full])
                 ms, fc, ec, ew = self._pick_point_style(category, obj_idx, fi_full)
                 self._overlay_artists.extend(
