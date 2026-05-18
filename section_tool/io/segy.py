@@ -74,13 +74,14 @@ class SeismicDataset:
     def project_onto_section(self, section) -> tuple[np.ndarray, np.ndarray]:
         """Return *(distances, perp_offsets)* for each trace projected onto *section*.
 
-        Both arrays have length :attr:`n_traces`.  Uses
-        ``Section.map_to_section`` for each trace coordinate.
+        Uses unclamped projection so traces outside the section range have
+        negative distances or distances > total_length rather than piling up
+        at the endpoints (which caused smearing artifacts with 3D datasets).
         """
         if self.n_traces == 0:
             return np.array([]), np.array([])
         pairs = np.array([
-            section.map_to_section(float(x), float(y))
+            section.project_point(float(x), float(y))
             for x, y in zip(self.trace_x, self.trace_y)
         ])
         return pairs[:, 0], pairs[:, 1]
@@ -88,14 +89,19 @@ class SeismicDataset:
     def traces_sorted_by_section(
         self, section
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return *(distances, data, perp_offsets)* sorted by distance along *section*.
+        """Return *(distances, data, perp_offsets)* for traces within *section*.
 
-        Convenient for building a display-ready section image where the
-        horizontal axis is distance along the interpretation line.
+        Only traces whose projected distance falls within [0, total_length] are
+        returned.  This prevents out-of-section traces from being clamped to the
+        endpoints and smearing the edges of the rendered image.
         """
         distances, perps = self.project_onto_section(section)
+        total = section.total_length()
+        in_bounds = (distances >= 0.0) & (distances <= total)
+        distances, perps = distances[in_bounds], perps[in_bounds]
+        data = self.data[in_bounds]
         order = np.argsort(distances, kind="stable")
-        return distances[order], self.data[order], perps[order]
+        return distances[order], data[order], perps[order]
 
     def __repr__(self) -> str:
         return (

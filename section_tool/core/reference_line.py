@@ -22,6 +22,8 @@ class ReferenceLine:
         angle_deg: float = 0.0,
         anchor_x: float = 0.0,
         anchor_y: float = 0.0,
+        map_x: float | None = None,
+        map_y: float | None = None,
     ) -> None:
         self.kind: Literal["horizontal", "vertical", "angled"] = kind
         self.value: float = float(value)
@@ -32,6 +34,9 @@ class ReferenceLine:
         self.angle_deg: float = float(angle_deg)
         self.anchor_x: float = float(anchor_x)
         self.anchor_y: float = float(anchor_y)
+        # map-space source of truth for vertical reference lines
+        self.map_x: float | None = map_x
+        self.map_y: float | None = map_y
 
     def __repr__(self) -> str:
         if self.kind == "angled":

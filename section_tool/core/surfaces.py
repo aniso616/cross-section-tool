@@ -169,6 +169,8 @@ class HorizonPick:
         line_width: float = 1.5,
         line_style: str = "solid",
         section_names: list | np.ndarray | None = None,
+        map_x: list | np.ndarray | None = None,
+        map_y: list | np.ndarray | None = None,
         # Phase A: horizon / contact attributes
         contact_type: str = "conformable",
         formation_above: str = "",
@@ -202,6 +204,16 @@ class HorizonPick:
         self._distances = distances[order].copy()
         self._depths = depths[order].copy()
         self._section_names: np.ndarray = snames[order].copy()
+        n = len(distances)
+        # Map-space source of truth — NaN when not yet set (legacy picks)
+        if map_x is None:
+            self._map_x: np.ndarray = np.full(n, np.nan)
+            self._map_y: np.ndarray = np.full(n, np.nan)
+        else:
+            mx = np.asarray(map_x, dtype=float).ravel()
+            my = np.asarray(map_y, dtype=float).ravel()
+            self._map_x = mx[order].copy()
+            self._map_y = my[order].copy()
         # Phase 3: per-point metadata
         n = len(distances)
         self._confidence: np.ndarray = np.ones(n, dtype=float)
@@ -297,7 +309,9 @@ class HorizonPick:
                     section_name: str = "",
                     confidence: float = 1.0,
                     quality: str = "picked",
-                    note: str = "") -> None:
+                    note: str = "",
+                    map_x: float = float("nan"),
+                    map_y: float = float("nan")) -> None:
         """Insert a pick, maintaining ascending distance order."""
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
@@ -306,6 +320,8 @@ class HorizonPick:
         self._confidence    = np.insert(self._confidence, idx, confidence)
         self._quality       = np.insert(self._quality, idx, quality)
         self._note          = np.insert(self._note, idx, note)
+        self._map_x         = np.insert(self._map_x, idx, map_x)
+        self._map_y         = np.insert(self._map_y, idx, map_y)
 
     def delete_pick(self, index: int) -> None:
         """Delete the pick at *index*."""
@@ -314,10 +330,11 @@ class HorizonPick:
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
         for attr in ("_distances", "_depths", "_section_names",
-                     "_confidence", "_quality", "_note"):
+                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(self, attr, np.delete(getattr(self, attr), index))
 
-    def move_pick(self, index: int, distance: float, depth: float) -> None:
+    def move_pick(self, index: int, distance: float, depth: float,
+                  map_x: float = float("nan"), map_y: float = float("nan")) -> None:
         """Move the pick at *index* to (distance, depth), re-sorting as needed."""
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
@@ -326,7 +343,7 @@ class HorizonPick:
         qual = self._quality[index]
         note = self._note[index]
         for attr in ("_distances", "_depths", "_section_names",
-                     "_confidence", "_quality", "_note"):
+                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(self, attr, np.delete(getattr(self, attr), index))
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
@@ -335,10 +352,31 @@ class HorizonPick:
         self._confidence    = np.insert(self._confidence, idx, conf)
         self._quality       = np.insert(self._quality, idx, qual)
         self._note          = np.insert(self._note, idx, note)
+        self._map_x         = np.insert(self._map_x, idx, map_x)
+        self._map_y         = np.insert(self._map_y, idx, map_y)
 
     # ------------------------------------------------------------------
     # Coordinate transforms
     # ------------------------------------------------------------------
+
+    def recompute_distances(self, section) -> None:
+        """Recompute *_distances* from stored map coordinates after the section geometry changes.
+
+        Only updates picks that have valid (non-NaN) map_x/map_y.  Legacy picks
+        without map coordinates are left unchanged.
+        """
+        valid = ~(np.isnan(self._map_x) | np.isnan(self._map_y))
+        if not np.any(valid):
+            return
+        idxs = np.where(valid)[0]
+        for i in idxs:
+            dist, _ = section.project_point(float(self._map_x[i]), float(self._map_y[i]))
+            self._distances[i] = dist
+        # Re-sort after distances changed
+        order = np.argsort(self._distances, kind="stable")
+        for attr in ("_distances", "_depths", "_section_names",
+                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+            setattr(self, attr, getattr(self, attr)[order])
 
     def to_map_coords(self, section) -> list[tuple[float, float, float]]:
         """Convert picks to (x, y, z) map coordinates via *section*."""
@@ -389,6 +427,8 @@ class HorizonPick:
         obj._confidence    = np.array([], dtype=float)
         obj._quality       = np.array([], dtype=object)
         obj._note          = np.array([], dtype=object)
+        obj._map_x         = np.array([], dtype=float)
+        obj._map_y         = np.array([], dtype=float)
         obj.name       = name
         obj.z_units    = z_units
         obj.color      = color

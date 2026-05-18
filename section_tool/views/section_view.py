@@ -2189,7 +2189,9 @@ class SectionView(QWidget):
             return
         hp_before = copy.deepcopy(picks[idx])
         hp_after  = copy.deepcopy(hp_before)
-        hp_after.insert_pick(x, y, sec_name)
+        # Convert section distance → map coordinates (source of truth for future reprojection)
+        map_x, map_y = section.section_to_map(x) if section is not None else (float("nan"), float("nan"))
+        hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
 
         def _do():
             if cat == "Horizons":
@@ -2264,8 +2266,11 @@ class SectionView(QWidget):
                                name=f"H {y:.0f}")
             self._state.add_reference_line(rl)
         elif tool == "v_ref":
+            section = self._state.active_section
+            map_x, map_y = (section.section_to_map(x)
+                            if section is not None else (None, None))
             rl = ReferenceLine(kind="vertical", value=x,
-                               name=f"V {x:.0f}")
+                               name=f"V {x:.0f}", map_x=map_x, map_y=map_y)
             self._state.add_reference_line(rl)
         elif tool == "a_ref":
             if self._aref_anchor is None:
@@ -2499,7 +2504,9 @@ class SectionView(QWidget):
                         section = self._state.active_section
                         sec_name = section.name if section else ""
                         hp = copy.deepcopy(picks[oi])
-                        hp.insert_pick(x, y, sec_name)
+                        map_x, map_y = (section.section_to_map(x) if section is not None
+                                        else (float("nan"), float("nan")))
+                        hp.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
                         if cat == "Horizons":
                             self._state.update_horizon_pick(oi, hp)
                         else:

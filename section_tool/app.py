@@ -2726,6 +2726,8 @@ class SectionMainWindow(MainWindow):
         self.v_splitter.addWidget(self.map_tile)
         # Bidirectional cursor: map tile hover → section vertical indicator
         self._map_view.cursor_map_pos.connect(self._on_map_cursor_pos)
+        # Reproject picks when section geometry changes
+        self._map_view.section_node_moved.connect(self._on_section_node_moved)
         self.h_splitter.addWidget(self.v_splitter)
 
         # Right: properties panel (reuse existing, no title bar)
@@ -2951,6 +2953,15 @@ class SectionMainWindow(MainWindow):
         """Map tile cursor → vertical indicator on section canvas."""
         if hasattr(self, "section_tile"):
             self._section_view.show_map_cursor_on_section(map_x, map_y)
+
+    def _on_section_node_moved(self, sec_idx: int, node_idx: int,
+                                new_x: float, new_y: float) -> None:
+        """After a section node drag, reproject all picks to the new geometry."""
+        sections = self._state.project.sections
+        if sec_idx < len(sections):
+            sec_name = sections[sec_idx].name
+            self._state.recompute_pick_display_coords(sec_name)
+            self._section_view.render()
 
     def _update_smart_cursor(self, canvas_pos) -> None:
         self._smart_cursor.update(canvas_pos, self._section_view.view_state)

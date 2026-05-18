@@ -388,9 +388,14 @@ class AppState(QObject):
                 dists   = np.array([p["distance_along"] for p in picks], dtype=float)
                 depths  = np.array([p["depth"]          for p in picks], dtype=float)
                 snames  = np.array([p["section_name"]   for p in picks], dtype=object)
+                map_xs  = np.array([p.get("x") if p.get("x") is not None else float("nan")
+                                    for p in picks], dtype=float)
+                map_ys  = np.array([p.get("y") if p.get("y") is not None else float("nan")
+                                    for p in picks], dtype=float)
             else:
                 dists = depths = np.array([], dtype=float)
                 snames = np.array([], dtype=object)
+                map_xs = map_ys = np.array([], dtype=float)
             hp = HorizonPick(
                 dists, depths,
                 name=hrow["name"],
@@ -398,6 +403,8 @@ class AppState(QObject):
                 line_width=float(hrow.get("line_width", 1.5)),
                 line_style=hrow.get("line_style", "solid"),
                 section_names=snames,
+                map_x=map_xs,
+                map_y=map_ys,
                 contact_type=hrow.get("contact_type", "conformable"),
                 formation_above=hrow.get("formation_above", ""),
                 formation_below=hrow.get("formation_below", ""),
@@ -411,9 +418,14 @@ class AppState(QObject):
                 dists  = np.array([p["distance_along"] for p in picks], dtype=float)
                 depths = np.array([p["depth"]          for p in picks], dtype=float)
                 snames = np.array([p["section_name"]   for p in picks], dtype=object)
+                map_xs = np.array([p.get("x") if p.get("x") is not None else float("nan")
+                                   for p in picks], dtype=float)
+                map_ys = np.array([p.get("y") if p.get("y") is not None else float("nan")
+                                   for p in picks], dtype=float)
             else:
                 dists = depths = np.array([], dtype=float)
                 snames = np.array([], dtype=object)
+                map_xs = map_ys = np.array([], dtype=float)
             fp = HorizonPick(
                 dists, depths,
                 name=frow["name"],
@@ -421,6 +433,8 @@ class AppState(QObject):
                 line_width=float(frow.get("line_width", 1.5)),
                 line_style=frow.get("line_style", "solid"),
                 section_names=snames,
+                map_x=map_xs,
+                map_y=map_ys,
             )
             proj.fault_picks.append(fp)
 
@@ -496,6 +510,8 @@ class AppState(QObject):
                 name=rrow.get("name", ""),
                 color=rrow.get("color", "#999999"),
                 visible=bool(rrow.get("visible", 1)),
+                map_x=rrow.get("map_x"),
+                map_y=rrow.get("map_y"),
             )
             proj.reference_lines.append(rl)
 
@@ -564,6 +580,44 @@ class AppState(QObject):
         self.section_modified.emit(index, section)
         if self._active_section is old:
             self.set_active_section(section)
+
+    def recompute_pick_display_coords(self, section_name: str) -> None:
+        """Recompute distance_along for all picks/reference-lines on *section_name*.
+
+        Called after a section node is moved.  Picks that have map coordinates
+        stored are reprojected; picks without map coords (legacy) are untouched.
+        Saves updated picks to the database.
+        """
+        sec = next((s for s in self._project.sections if s.name == section_name), None)
+        if sec is None:
+            return
+
+        changed_h, changed_f = [], []
+        for i, hp in enumerate(self._project.horizon_picks):
+            if any(sn == section_name for sn in hp.section_names()):
+                hp.recompute_distances(sec)
+                changed_h.append(i)
+        for i, fp in enumerate(self._project.fault_picks):
+            if any(sn == section_name for sn in fp.section_names()):
+                fp.recompute_distances(sec)
+                changed_f.append(i)
+
+        # Reproject vertical reference lines
+        for rl in self._project.reference_lines:
+            if rl.kind == "vertical" and rl.map_x is not None and rl.map_y is not None:
+                new_dist, _ = sec.project_point(rl.map_x, rl.map_y)
+                rl.value = new_dist
+
+        # Persist
+        for i in changed_h:
+            hp = self._project.horizon_picks[i]
+            self._db_write(lambda h=hp: self._pm.db.upsert_horizon(h))
+        for i in changed_f:
+            fp = self._project.fault_picks[i]
+            self._db_write(lambda f=fp: self._pm.db.upsert_fault(f))
+        if self._project.reference_lines:
+            self._db_write(lambda: self._pm.db.replace_all_reference_lines(
+                self._project.reference_lines))
 
     def set_active_section(self, section: Section | None) -> None:
         """Set the actively-viewed section; emits only on change."""

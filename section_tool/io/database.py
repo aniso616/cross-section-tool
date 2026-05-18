@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS horizon_picks (
     -- elevation is positive-up (source of truth when populated);
     -- depth = -elevation for display. Populated in a future migration.
     elevation      REAL,
+    -- map-space source of truth: reproject onto section when geometry changes
+    x              REAL,
+    y              REAL,
     confidence     REAL    DEFAULT 1.0,
     quality        TEXT    DEFAULT 'picked',
     note           TEXT,
@@ -91,6 +94,9 @@ CREATE TABLE IF NOT EXISTS fault_picks (
     distance_along REAL    NOT NULL,
     depth          REAL    NOT NULL,
     elevation      REAL,
+    -- map-space source of truth: reproject onto section when geometry changes
+    x              REAL,
+    y              REAL,
     confidence     REAL    DEFAULT 1.0,
     quality        TEXT    DEFAULT 'picked',
     note           TEXT,
@@ -190,7 +196,10 @@ CREATE TABLE IF NOT EXISTS reference_lines (
     line_type    TEXT    NOT NULL DEFAULT 'horizontal',
     value        REAL,
     color        TEXT    DEFAULT '#999999',
-    visible      INTEGER DEFAULT 1
+    visible      INTEGER DEFAULT 1,
+    -- map-space source of truth for vertical lines (recompute value on section change)
+    map_x        REAL,
+    map_y        REAL
 );
 
 CREATE TABLE IF NOT EXISTS seismic (
@@ -371,8 +380,25 @@ class ProjectDatabase:
         self.conn = sqlite3.connect(self._path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
         self._seed_lithologies()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after initial schema without breaking existing DBs."""
+        migrations = [
+            ("horizon_picks",  "x",     "REAL"),
+            ("horizon_picks",  "y",     "REAL"),
+            ("fault_picks",    "x",     "REAL"),
+            ("fault_picks",    "y",     "REAL"),
+            ("reference_lines","map_x", "REAL"),
+            ("reference_lines","map_y", "REAL"),
+        ]
+        for table, col, coltype in migrations:
+            try:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+            except Exception:
+                pass  # column already exists
 
     # ------------------------------------------------------------------
     # Context manager for batched writes
@@ -518,14 +544,19 @@ class ProjectDatabase:
             idxs = pick.section_indices(sec_name)
             if len(idxs) == 0:
                 continue
-            dists = pick._distances[idxs]
+            dists  = pick._distances[idxs]
             depths = pick._depths[idxs]
-            for order, (d, z) in enumerate(zip(dists, depths)):
+            map_xs = pick._map_x[idxs]
+            map_ys = pick._map_y[idxs]
+            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
                 self.conn.execute(
                     """INSERT INTO horizon_picks
-                       (horizon_id, section_name, distance_along, depth, sort_order)
-                       VALUES(?,?,?,?,?)""",
-                    (hid, sec_name, float(d), float(z), order)
+                       (horizon_id, section_name, distance_along, depth, x, y, sort_order)
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (hid, sec_name, float(d), float(z),
+                     None if (mx != mx) else float(mx),
+                     None if (my != my) else float(my),
+                     order)
                 )
         self.conn.commit()
         return hid
@@ -593,12 +624,17 @@ class ProjectDatabase:
                 continue
             dists  = pick._distances[idxs]
             depths = pick._depths[idxs]
-            for order, (d, z) in enumerate(zip(dists, depths)):
+            map_xs = pick._map_x[idxs]
+            map_ys = pick._map_y[idxs]
+            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
                 self.conn.execute(
                     """INSERT INTO fault_picks
-                       (fault_id, section_name, distance_along, depth, sort_order)
-                       VALUES(?,?,?,?,?)""",
-                    (fid, sec_name, float(d), float(z), order)
+                       (fault_id, section_name, distance_along, depth, x, y, sort_order)
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (fid, sec_name, float(d), float(z),
+                     None if (mx != mx) else float(mx),
+                     None if (my != my) else float(my),
+                     order)
                 )
         self.conn.commit()
         return fid
@@ -825,13 +861,15 @@ class ProjectDatabase:
         self.conn.execute("DELETE FROM reference_lines")
         for rl in reference_lines:
             self.conn.execute(
-                """INSERT INTO reference_lines(name, line_type, value, color, visible)
-                   VALUES(?,?,?,?,?)""",
+                """INSERT INTO reference_lines(name, line_type, value, color, visible, map_x, map_y)
+                   VALUES(?,?,?,?,?,?,?)""",
                 (getattr(rl, "name", ""),
                  getattr(rl, "kind", "horizontal"),
                  getattr(rl, "value", 0.0),
                  getattr(rl, "color", "#999999"),
-                 int(getattr(rl, "visible", True)))
+                 int(getattr(rl, "visible", True)),
+                 getattr(rl, "map_x", None),
+                 getattr(rl, "map_y", None))
             )
         self.conn.commit()
 
