@@ -178,8 +178,13 @@ class ProjectManager:
             shutil.copy2(source_path, dest)
         return dest
 
-    def resolve_file_path(self, stored_path: str) -> str:
-        """Resolve a stored path (relative or absolute) to an absolute path."""
+    def resolve_file_path(self, stored_path: str | None) -> str | None:
+        """Resolve a stored path (relative or absolute) to an absolute path.
+
+        Returns None if *stored_path* is None or empty.
+        """
+        if not stored_path:
+            return None
         if os.path.isabs(stored_path):
             return stored_path
         return os.path.join(self.project_path, stored_path)

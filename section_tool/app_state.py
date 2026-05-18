@@ -357,29 +357,7 @@ class AppState(QObject):
         data = db.load_all()
         meta = data["meta"]
 
-        # ── Load diagnostics (printed to console to aid debugging) ────
-        _sections = data.get("sections", [])
-        _wells    = data.get("wells", [])
-        _horizons = data.get("horizons", [])
-        _seismic  = data.get("seismic", [])
-        print(f"[LOAD] project: {folder_path}")
-        print(f"[LOAD] {len(_sections)} sections:")
-        for s in _sections:
-            import json as _j2
-            try:
-                nodes = _j2.loads(s['nodes_json']) if isinstance(s['nodes_json'], str) else s['nodes_json']
-                print(f"  Section '{s['name']}': nodes={nodes[:2]}...")
-            except Exception:
-                print(f"  Section '{s['name']}': nodes_json={str(s['nodes_json'])[:60]}")
-        print(f"[LOAD] {len(_wells)} wells:")
-        for w in _wells:
-            print(f"  Well '{w['name']}': x={w.get('x')}, y={w.get('y')}, "
-                  f"td={w.get('td')}, tops={len(w.get('tops', []))}, logs={len(w.get('logs', []))}")
-        print(f"[LOAD] {len(_horizons)} horizons, "
-              f"{sum(len(h.get('picks',[])) for h in _horizons)} picks")
-        print(f"[LOAD] {len(_seismic)} seismic refs")
-        for s in _seismic:
-            print(f"  Seismic '{s.get('name')}': path={s.get('path')}")
+        # (debug prints removed)
 
         proj = Project(
             name=meta.get("name", ""),
@@ -478,8 +456,10 @@ class AppState(QObject):
         # Seismic refs
         for srow in data["seismic"]:
             from section_tool.io.project import SeismicRef
+            raw_path = srow.get("file_path") or ""
+            resolved = self._pm.resolve_file_path(raw_path) if raw_path else None
             ref = SeismicRef(
-                path=self._pm.resolve_file_path(srow["file_path"]),
+                path=resolved,
                 name=srow["name"],
                 x_field=int(srow.get("x_field", 181)),
                 y_field=int(srow.get("y_field", 185)),
