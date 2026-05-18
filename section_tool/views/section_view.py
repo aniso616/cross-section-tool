@@ -997,6 +997,52 @@ class SectionView(QWidget):
             print(f"DRAW TIME: {_draw_ms:.0f}ms  seismic={'yes' if ex_data is not None else 'no'}"
                   f"  data_shape={shape_str}")
 
+    def _render_depth_scale(self, section: Section) -> None:
+        """Draw depth tick marks and labels at the left edge of the section axes."""
+        yl = self._ax.get_ylim()
+        y_top, y_bot = min(yl), max(yl)
+        visible_range = y_bot - y_top
+        if visible_range <= 0:
+            return
+        interval = _nice_interval(visible_range / 6)
+        xl = self._ax.get_xlim()
+        x_range = xl[1] - xl[0]
+        x_pos   = xl[0] + x_range * 0.005
+        tick_len = x_range * 0.008
+        label_kw = dict(fontsize=7, color="#888888", va="center", ha="left", zorder=15)
+        y = math.ceil(y_top / interval) * interval
+        while y <= y_bot:
+            self._overlay_artists.extend(
+                self._ax.plot([x_pos, x_pos + tick_len], [y, y],
+                              color="#666666", linewidth=0.7, zorder=15))
+            self._overlay_artists.append(
+                self._ax.text(x_pos + tick_len * 1.5, y, f"{y:.0f}", **label_kw))
+            y += interval
+
+    def _render_distance_scale(self, section: Section) -> None:
+        """Draw distance tick marks along the bottom of the section axes."""
+        xl = self._ax.get_xlim()
+        x_start, x_end = xl[0], xl[1]
+        visible_range = x_end - x_start
+        if visible_range <= 0:
+            return
+        interval = _nice_interval(visible_range / 6)
+        yl = self._ax.get_ylim()
+        y_bot = max(yl)
+        y_range = abs(yl[0] - yl[1])
+        y_pos    = y_bot - y_range * 0.005
+        tick_len = y_range * 0.008
+        label_kw = dict(fontsize=7, color="#888888", va="top", ha="center", zorder=15)
+        x = math.ceil(x_start / interval) * interval
+        while x <= x_end:
+            self._overlay_artists.extend(
+                self._ax.plot([x, x], [y_pos, y_pos - tick_len],
+                              color="#666666", linewidth=0.7, zorder=15))
+            label = f"{x/1000:.1f}km" if interval >= 1000 else f"{x:.0f}m"
+            self._overlay_artists.append(
+                self._ax.text(x, y_pos - tick_len * 1.5, label, **label_kw))
+            x += interval
+
     def _render_overlays(self, section) -> None:
         """Render all lightweight overlay layers, tracking artists for next-frame removal."""
         self._render_strat_column_chaser(section)
@@ -1017,6 +1063,8 @@ class SectionView(QWidget):
         self._render_snap_indicator()
         self._render_polygon_in_progress()
         self._render_annotations(section)
+        self._render_depth_scale(section)
+        self._render_distance_scale(section)
         self._render_seismic_watermark(section)
 
     # ------------------------------------------------------------------
@@ -1895,10 +1943,10 @@ class SectionView(QWidget):
                 ext_d = np.array([last_d, last_d])
                 ext_z = np.array([float(tvds[-1]), max_log_depth])
                 self._overlay_artists.extend(
-                    self._ax.plot(ext_d, ext_z, color="black", linewidth=1.0,
+                    self._ax.plot(ext_d, ext_z, color="#AAAAAA", linewidth=1.0,
                                   linestyle="--", zorder=9))
             self._overlay_artists.extend(
-                self._ax.plot(distances, tvds, color="black", linewidth=2.0,
+                self._ax.plot(distances, tvds, color="#E8E4D0", linewidth=2.0,
                               solid_capstyle="round", zorder=9))
 
             if len(tvds) > 0:
@@ -1909,7 +1957,7 @@ class SectionView(QWidget):
                         label,
                         xy=(collar_dist, tvds[0]),
                         xytext=(4, 4), textcoords="offset points",
-                        fontsize=7, color="#4A3728", zorder=10,
+                        fontsize=7, color="#C8C4B0", zorder=10,
                         ha="left", va="bottom",
                     ))
 
@@ -1920,10 +1968,10 @@ class SectionView(QWidget):
                     continue
                 self._overlay_artists.extend(
                     self._ax.plot([td - tick_w, td + tick_w], [tz, tz],
-                                  color="#2a7d2a", linewidth=1.2, zorder=9))
+                                  color="#5CB85C", linewidth=1.2, zorder=9))
                 self._overlay_artists.append(
                     self._ax.text(td + tick_w * 1.4, tz, top_name,
-                                  fontsize=6, color="#2a7d2a", va="center", zorder=9))
+                                  fontsize=6, color="#5CB85C", va="center", zorder=9))
 
             gr_name = next(
                 (n for n in well.log_names
@@ -1953,15 +2001,15 @@ class SectionView(QWidget):
         track_w = 50.0
         xs = collar_dist + (norm - 0.5) * track_w
         self._overlay_artists.extend(
-            self._ax.plot(xs, tvd_depths, color="#8B4513", linewidth=0.6, zorder=9))
+            self._ax.plot(xs, tvd_depths, color="#C8A060", linewidth=0.6, zorder=9))
         self._overlay_artists.append(
             self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
                                    where=(norm < 0.5),
-                                   color="#f5d06e", alpha=0.6, zorder=9))
+                                   color="#FFD060", alpha=0.5, zorder=9))
         self._overlay_artists.append(
             self._ax.fill_betweenx(tvd_depths, collar_dist, xs,
                                    where=(norm >= 0.5),
-                                   color="#888888", alpha=0.4, zorder=9))
+                                   color="#B0B0B0", alpha=0.35, zorder=9))
 
     # Formation strip HUD widget replaces the old matplotlib _strat_ax.
     # A thin matplotlib-based chaser column is rendered INSIDE the axes at the left edge.
@@ -3432,6 +3480,21 @@ _LITHOLOGY_HATCH: dict[str, str] = {
 
 # ---------------------------------------------------------------------------
 # Line-decoration helpers (Phase A / B)
+# ---------------------------------------------------------------------------
+
+def _nice_interval(approx: float) -> float:
+    """Round *approx* up to a human-friendly interval (1, 2, 5, 10, 20, 50, …)."""
+    import math
+    if approx <= 0:
+        return 1.0
+    mag = 10 ** math.floor(math.log10(approx))
+    for mult in (1, 2, 5, 10):
+        candidate = mag * mult
+        if candidate >= approx:
+            return candidate
+    return mag * 10
+
+
 # ---------------------------------------------------------------------------
 
 def _wavy_coords(

@@ -50,7 +50,8 @@
       "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/ -q --tb=no 2>&1 | Select-Object -Last 5)",
       "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; $env:PYTHONPATH = \".\"; python -m pytest tests/test_well_projection.py tests/test_seismic_domain.py tests/test_auto_polygon.py tests/test_database.py tests/test_database_schema.py tests/test_las_import.py -q --tb=no 2>&1)",
       "PowerShell(\\(Get-Content \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\\\\section_tool\\\\views\\\\section_view.py\" | Measure-Object -Line\\).Lines)",
-      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; \\(Get-Content \"section_tool\\\\views\\\\section_view.py\"\\) -replace '        self\\\\._needs_full_setup = True\\\\n?', '' -replace '        self\\\\._needs_full_setup = False\\\\n?', '' | Set-Content \"section_tool\\\\views\\\\section_view.py\" -Encoding utf8)"
+      "PowerShell(cd \"C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool\"; \\(Get-Content \"section_tool\\\\views\\\\section_view.py\"\\) -replace '        self\\\\._needs_full_setup = True\\\\n?', '' -replace '        self\\\\._needs_full_setup = False\\\\n?', '' | Set-Content \"section_tool\\\\views\\\\section_view.py\" -Encoding utf8)",
+      "PowerShell(cd C:\\\\Users\\\\prkbr\\\\Projects\\\\cross-section-tool; $r = python diag_well.py; Write-Host \"EXIT: $LASTEXITCODE\"; Write-Host \"OUT: $r\")"
     ]
   }
 }
