@@ -440,12 +440,14 @@ class AppState(QObject):
 
         # Wells
         for wrow in data["wells"]:
+            _td = wrow.get("td")
             well = Well(
                 name=wrow["name"],
                 x=float(wrow["x"]),
                 y=float(wrow["y"]),
                 kb=float(wrow.get("kb_elevation", 0.0)),
                 uwi=wrow.get("uwi", ""),
+                td=float(_td) if _td is not None else None,
             )
             well.original_x = wrow.get("original_x")
             well.original_y = wrow.get("original_y")

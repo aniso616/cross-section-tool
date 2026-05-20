@@ -1930,8 +1930,9 @@ class SectionView(QWidget):
                 continue
 
             # --- Determine stick bottom ---
-            # Use the deepest log depth index (not just valid data extent) so the
-            # stick matches the full extent of acquired data regardless of GR data range.
+            # Priority: stored TD (from LAS depth index on import) > deepest log depth index.
+            # Reject suspiciously large defaults (e.g. 5000m placeholder on a 3150m well).
+            td_stored = float(well.deviation.max_tvd)
             max_log_depth = 0.0
             for log_name in well.log_names:
                 try:
@@ -1939,9 +1940,15 @@ class SectionView(QWidget):
                     max_log_depth = max(max_log_depth, float(hi))
                 except Exception:
                     pass
-            # Fall back to deviation TD if no logs available
-            well_bottom = max(max_log_depth, float(well.deviation.max_tvd)) if max_log_depth > 0 \
-                          else float(well.deviation.max_tvd)
+            # Use the smaller of td_stored and max_log_depth when td looks like
+            # the 5000m default and log data says otherwise (sanity: within 20%).
+            if (max_log_depth > 0 and td_stored > max_log_depth * 1.2
+                    and abs(td_stored - 5000.0) < 1.0):
+                well_bottom = max_log_depth
+            else:
+                well_bottom = max(td_stored, max_log_depth) if max_log_depth > 0 else td_stored
+            if well_bottom <= 0:
+                continue
 
             # 1. Well stick — drawn first (lowest zorder) so log curves render on top
             self._overlay_artists.extend(

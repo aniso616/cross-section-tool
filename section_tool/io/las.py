@@ -286,17 +286,19 @@ def _las_to_well(
     else:
         kb = float(kb)
 
-    well = Well(name=well_name, x=x, y=y, kb=kb, uwi=uwi)
-
     # --- depth index (first curve) ---
     if not las.curves:
-        return well
+        return Well(name=well_name, x=x, y=y, kb=kb, uwi=uwi)
 
     depth_mnemonic = las.curves[0].mnemonic
     depths = np.asarray(las[depth_mnemonic], dtype=float)
 
     if len(depths) == 0:
-        return well  # no data rows — return well without logs
+        return Well(name=well_name, x=x, y=y, kb=kb, uwi=uwi)
+
+    # Use last depth sample as TD — matches actual data extent, not a hardcoded default
+    las_td = float(depths[-1])
+    well = Well(name=well_name, x=x, y=y, kb=kb, uwi=uwi, td=las_td)
 
     # --- log curves ---
     for curve in las.curves[1:]:

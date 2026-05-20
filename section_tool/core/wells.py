@@ -210,6 +210,7 @@ class Well:
         kb: float = 0.0,
         deviation: DeviationSurvey | None = None,
         uwi: str = "",
+        td: float | None = None,
     ) -> None:
         self.name = name
         self.x = float(x)
@@ -220,9 +221,12 @@ class Well:
         self.original_x: float | None = None
         self.original_y: float | None = None
         self.original_crs_epsg: int | None = None
-        self.deviation: DeviationSurvey = (
-            deviation if deviation is not None else DeviationSurvey.vertical(x, y)
-        )
+        if deviation is not None:
+            self.deviation = deviation
+        elif td is not None:
+            self.deviation = DeviationSurvey.vertical(x, y, td=float(td))
+        else:
+            self.deviation = DeviationSurvey.vertical(x, y)
         self._logs: dict[str, LogCurve] = {}
         self._formation_tops: dict[str, float] = {}  # name → MD
 
