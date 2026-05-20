@@ -1929,37 +1929,44 @@ class SectionView(QWidget):
             if abs(perp) > _WELL_MAX_PERP:
                 continue
 
-            distances, tvds = well.section_track(section)
-            # Extend track to max log depth when deviation ends above it
-            max_log_depth = float(well.deviation.max_tvd)
+            # --- Determine stick bottom ---
+            # Use the deepest log depth index (not just valid data extent) so the
+            # stick matches the full extent of acquired data regardless of GR data range.
+            max_log_depth = 0.0
             for log_name in well.log_names:
                 try:
                     _, hi = well.get_log(log_name).depth_range()
                     max_log_depth = max(max_log_depth, float(hi))
                 except Exception:
                     pass
-            if len(tvds) > 0 and max_log_depth > float(tvds[-1]) + 1.0:
-                last_d = float(distances[-1])
-                ext_d = np.array([last_d, last_d])
-                ext_z = np.array([float(tvds[-1]), max_log_depth])
-                self._overlay_artists.extend(
-                    self._ax.plot(ext_d, ext_z, color="#AAAAAA", linewidth=1.0,
-                                  linestyle="--", zorder=9))
-            self._overlay_artists.extend(
-                self._ax.plot(distances, tvds, color="#E8E4D0", linewidth=2.0,
-                              solid_capstyle="round", zorder=9))
+            # Fall back to deviation TD if no logs available
+            well_bottom = max(max_log_depth, float(well.deviation.max_tvd)) if max_log_depth > 0 \
+                          else float(well.deviation.max_tvd)
 
-            if len(tvds) > 0:
-                direction = "E" if perp >= 0 else "W"
-                label = f"{well.name}  ({abs(perp):.0f}m {direction})"
-                self._overlay_artists.append(
-                    self._ax.annotate(
-                        label,
-                        xy=(collar_dist, tvds[0]),
-                        xytext=(4, 4), textcoords="offset points",
-                        fontsize=7, color="#C8C4B0", zorder=10,
-                        ha="left", va="bottom",
-                    ))
+            # 1. Well stick — drawn first (lowest zorder) so log curves render on top
+            self._overlay_artists.extend(
+                self._ax.plot([collar_dist, collar_dist], [0.0, well_bottom],
+                              color="#E8E4D0", linewidth=2.0,
+                              solid_capstyle="butt", zorder=8))
+
+            # 2. Deviated trajectory overlay (only adds value for non-vertical wells)
+            distances, tvds = well.section_track(section)
+            if len(distances) > 2 or (len(distances) == 2 and
+                                       abs(float(distances[0]) - float(distances[-1])) > 1.0):
+                self._overlay_artists.extend(
+                    self._ax.plot(distances, tvds, color="#AAAAAA", linewidth=1.0,
+                                  linestyle="--", zorder=9))
+
+            direction = "E" if perp >= 0 else "W"
+            label = f"{well.name}  ({abs(perp):.0f}m {direction})"
+            self._overlay_artists.append(
+                self._ax.annotate(
+                    label,
+                    xy=(collar_dist, 0.0),
+                    xytext=(4, 4), textcoords="offset points",
+                    fontsize=7, color="#C8C4B0", zorder=10,
+                    ha="left", va="bottom",
+                ))
 
             for top_name in well.formation_tops:
                 try:
@@ -1992,6 +1999,13 @@ class SectionView(QWidget):
         values = curve.values
         if len(tvd_depths) < 2:
             return
+        # Strip NaN depth samples so the wiggle only draws over actual valid data,
+        # not across the NaN-padded tails of the LAS depth index.
+        valid = ~np.isnan(values)
+        if valid.sum() < 2:
+            return
+        tvd_depths = tvd_depths[valid]
+        values = values[valid]
         # Normalize to [0, 1]
         vmin, vmax = float(np.nanmin(values)), float(np.nanmax(values))
         if vmax - vmin < 1.0:
