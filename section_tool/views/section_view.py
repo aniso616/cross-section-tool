@@ -2866,6 +2866,9 @@ class SectionView(QWidget):
 
     def _on_sv_key(self, event) -> None:
         if event.key == "escape":
+            if self._picking_active or self._fault_picking:
+                self._end_pick_sequence()
+                return
             if self._polygon_drawing:
                 self._polygon_vertices.clear()
                 self.set_polygon_drawing(False)

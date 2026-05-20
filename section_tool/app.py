@@ -2352,7 +2352,8 @@ class MainWindow(QMainWindow):
             self._fault_properties(idx)
 
     def _ensure_pick_target(self, tool_id: str) -> None:
-        """Phase 2: auto-select a pick target if none is set (non-blocking)."""
+        """Auto-select a pick target; auto-create one if none exist yet."""
+        from section_tool.core.surfaces import HorizonPick as _HP
         cat = "Horizons" if tool_id == "horizon_pick" else "Faults"
         cur_cat = self._state.active_pick_category
         cur_idx = self._state.active_pick_index
@@ -2363,17 +2364,18 @@ class MainWindow(QMainWindow):
             return  # already valid
 
         if picks:
-            # Auto-select the first available object
             self._state.set_active_pick_target(cat, 0)
         else:
-            # No objects yet — prompt via status bar, don't open a blocking dialog
+            # No objects yet — auto-create an empty one so picking starts immediately.
+            # Reverting to "select" here breaks the HUD/ToolManager sync in the game UI.
             kind = "horizon" if cat == "Horizons" else "fault"
-            self._status_label.setText(
-                f"No {kind}s yet.  Right-click '{cat}' in Project panel → "
-                f"Add {kind.title()}…  then activate this tool."
-            )
-            # Return to select so the user isn't stuck in pick mode with no target
-            self._tool_palette.set_active_tool("select")
+            default_color = "#2ca02c" if cat == "Horizons" else "#d62728"
+            new_pick = _HP.empty(name=f"{kind.title()} 1", color=default_color)
+            if cat == "Horizons":
+                self._state.add_horizon_pick(new_pick)
+            else:
+                self._state.add_fault_pick(new_pick)
+            self._state.set_active_pick_target(cat, 0)
 
     def _update_pick_status(self) -> None:
         """Phase 2: show picking target + existing pick count in status bar."""
@@ -2728,10 +2730,15 @@ class SectionMainWindow(MainWindow):
         self._map_view.cursor_map_pos.connect(self._on_map_cursor_pos)
         # Reproject picks when section geometry changes
         self._map_view.section_node_moved.connect(self._on_section_node_moved)
+        # Sync tool manager when pick sequence ends (e.g. right-click, Escape)
+        self._section_view.pick_ended.connect(
+            lambda: self._tool_mgr.handle_key(Qt.Key.Key_Escape)
+        )
         self.h_splitter.addWidget(self.v_splitter)
 
         # Right: properties panel (reuse existing, no title bar)
         self._properties_panel.setTitleBarWidget(QWidget(self._properties_panel))
+        self._properties_panel.setMinimumWidth(200)
         self._properties_panel.setVisible(True)
         self.h_splitter.addWidget(self._properties_panel)
 

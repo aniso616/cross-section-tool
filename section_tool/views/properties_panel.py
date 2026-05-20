@@ -48,13 +48,13 @@ def _val_label(text: str) -> QLabel:
 def _form() -> QFormLayout:
     """Standard QFormLayout with consistent spacing."""
     f = QFormLayout()
-    # WrapLongRows prevents label/value overlap in narrow panels
-    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+    # WrapAllRows: label on its own line, value below — no overlap regardless of panel width
+    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
     f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    f.setVerticalSpacing(5)
+    f.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    f.setVerticalSpacing(3)
     f.setHorizontalSpacing(6)
-    f.setContentsMargins(4, 4, 4, 4)
+    f.setContentsMargins(6, 4, 6, 4)
     return f
 
 

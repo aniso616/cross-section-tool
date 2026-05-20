@@ -287,11 +287,12 @@ class MapView(QWidget):
     def _configure_axes(ax) -> None:
         from section_tool.style import BG_CANVAS
         ax.set_facecolor(BG_CANVAS)
+        ax.figure.patch.set_facecolor(BG_CANVAS)
         for spine in ax.spines.values():
-            spine.set_color("#303038")
-        ax.tick_params(colors="#666678", which="both", labelsize=7)
-        ax.xaxis.label.set_color("#888898")
-        ax.yaxis.label.set_color("#888898")
+            spine.set_color("#444455")
+        ax.tick_params(colors="#AAAAAA", which="both", labelsize=7)
+        ax.xaxis.label.set_color("#CCCCCC")
+        ax.yaxis.label.set_color("#CCCCCC")
 
     def _render_impl(self) -> None:
         """Internal render body — called only from render() with re-entry guard held."""
