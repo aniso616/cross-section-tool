@@ -2696,7 +2696,8 @@ class SectionMainWindow(MainWindow):
 
         # Spacer pushes section info to the right
         spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        from PySide6.QtWidgets import QSizePolicy as _QSP
+        spacer.setSizePolicy(_QSP.Policy.Expanding, _QSP.Policy.Preferred)
         tb.addWidget(spacer)
 
         self._section_info_label = QLabel("")
