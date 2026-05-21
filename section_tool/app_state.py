@@ -17,6 +17,31 @@ from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
 
+def _surface_from_db_row(row: dict) -> Surface:
+    """Reconstruct a Surface from a surfaces table row dict."""
+    import zlib, json as _json
+    blob = row["points_blob"]
+    arr = np.frombuffer(zlib.decompress(blob), dtype=np.float64).reshape(-1, 3)
+    x, y, z = arr[:, 0], arr[:, 1], arr[:, 2]
+    kwargs = dict(
+        name=row.get("name", ""),
+        kind=row.get("kind", "horizon"),
+        z_units=row.get("z_units", "m"),
+        crs_epsg=int(row.get("crs_epsg", 32632)),
+        display_color=row.get("display_color", "#E87722"),
+        source_file=row.get("source_file"),
+        source_format=row.get("source_format"),
+    )
+    if row.get("is_gridded"):
+        gi = _json.loads(row["grid_info_json"])
+        gx = np.array(gi["grid_x"])
+        gy = np.array(gi["grid_y"])
+        ny, nx = gi["shape"]
+        gz = z.reshape(ny, nx)
+        return Surface.from_grid(gx, gy, gz, **kwargs)
+    return Surface(x, y, z, **kwargs)
+
+
 class AppState(QObject):
     """Central application state with Qt signals for reactive UI updates.
 
@@ -61,6 +86,9 @@ class AppState(QObject):
     section_removed = Signal(object)
     section_modified = Signal(int, object)
     active_section_changed = Signal(object)
+
+    # AOI
+    aoi_changed = Signal(object)   # emits AOI or None
 
     # Surfaces
     surface_added = Signal(object)
@@ -530,6 +558,24 @@ class AppState(QObject):
             )
             proj.annotations.append(ann)
 
+        # AOI
+        aoi_row = data.get("aoi")
+        if aoi_row:
+            from section_tool.core.aoi import AOI
+            proj.aoi = AOI(
+                name=aoi_row.get("name", "AOI"),
+                polygon_wkt=aoi_row["polygon_wkt"],
+                crs_epsg=int(aoi_row["crs_epsg"]),
+            )
+
+        # Surfaces
+        for srow in data.get("surfaces", []):
+            try:
+                surf = _surface_from_db_row(srow)
+                proj.surfaces.append(surf)
+            except Exception:
+                pass
+
         return proj
 
     def save_project(self) -> None:
@@ -694,17 +740,38 @@ class AppState(QObject):
     def add_surface(self, surface: Surface) -> None:
         self._project.surfaces.append(surface)
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_surface(surface))
         self.surface_added.emit(surface)
 
     def remove_surface(self, surface: Surface) -> None:
+        idx = self._project.surfaces.index(surface)
         self._project.surfaces.remove(surface)
         self._set_modified()
+        # Surface DB rows are identified by position; reload will rebuild order.
+        # For now remove by re-saving all surfaces (table is small).
+        def _resave_all():
+            self._pm.db.conn.execute("DELETE FROM surfaces")
+            for s in self._project.surfaces:
+                self._pm.db.upsert_surface(s)
+        self._db_write(_resave_all)
         self.surface_removed.emit(surface)
 
     def update_surface(self, index: int, surface: Surface) -> None:
         self._project.surfaces[index] = surface
         self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_surface(surface))
         self.surface_modified.emit(index, surface)
+
+    # ------------------------------------------------------------------
+    # AOI
+    # ------------------------------------------------------------------
+
+    def set_aoi(self, aoi) -> None:
+        """Set or clear the project AOI. Pass None to remove."""
+        self._project.aoi = aoi
+        self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_aoi(aoi))
+        self.aoi_changed.emit(aoi)
 
     # ------------------------------------------------------------------
     # Horizon picks

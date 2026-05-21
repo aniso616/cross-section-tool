@@ -304,6 +304,7 @@ class MapView(QWidget):
         self._render_vector_layers()
         self._render_seismic_coverage()
         self._render_surfaces()
+        self._render_aoi()
         self._render_sections()
         self._render_wells()
         self._render_new_section_preview()
@@ -436,6 +437,25 @@ class MapView(QWidget):
                       ha="center", va="bottom", fontsize=7, zorder=12,
                       bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
 
+    def _render_aoi(self) -> None:
+        """Draw the project AOI polygon outline on the map."""
+        aoi = getattr(self._state.project, "aoi", None)
+        if aoi is None:
+            return
+        try:
+            from shapely.geometry import mapping
+            poly = aoi.polygon
+            coords = list(poly.exterior.coords)
+            xs = [c[0] for c in coords]
+            ys = [c[1] for c in coords]
+            self._ax.fill(xs, ys, alpha=0.06, color="#44AAFF", zorder=1)
+            self._ax.plot(xs, ys, color="#44AAFF", linewidth=1.2,
+                          linestyle="-", alpha=0.8, zorder=3)
+            self._ax.text(xs[0], ys[0], f" {aoi.name}",
+                          fontsize=6, color="#44AAFF", va="bottom", zorder=5)
+        except Exception:
+            pass
+
     def _render_sections(self) -> None:
         active = self._state.active_section
         for i, section in enumerate(self._state.project.sections):
@@ -506,16 +526,37 @@ class MapView(QWidget):
 
     def _render_surfaces(self) -> None:
         for surf in self._state.project.surfaces:
+            color = getattr(surf, "display_color", _SURFACE_COLOR)
             xmin, xmax, ymin, ymax = surf.extent()
-            w, h = xmax - xmin, ymax - ymin
-            if w <= 0 or h <= 0:
+            if xmin == xmax or ymin == ymax:
                 continue
-            rect = Rectangle((xmin, ymin), w, h,
-                              fill=False, edgecolor=_SURFACE_COLOR,
-                              linewidth=1.5, linestyle="--", zorder=2)
+            # Try contour map using map xlim/ylim for sampling
+            try:
+                xl = self._ax.get_xlim()
+                yl = self._ax.get_ylim()
+                # Clip grid to surface extent
+                gx0 = max(xl[0], xmin); gx1 = min(xl[1], xmax)
+                gy0 = max(yl[0], ymin); gy1 = min(yl[1], ymax)
+                if gx1 > gx0 and gy1 > gy0:
+                    nx, ny = 60, 60
+                    xs_g = np.linspace(gx0, gx1, nx)
+                    ys_g = np.linspace(gy0, gy1, ny)
+                    xx, yy = np.meshgrid(xs_g, ys_g)
+                    zz = surf.sample_many(xx.ravel(), yy.ravel()).reshape(ny, nx)
+                    valid = np.isfinite(zz)
+                    if valid.sum() > 20:
+                        self._ax.contour(xx, yy, zz, levels=6,
+                                         colors=[color], linewidths=0.7,
+                                         alpha=0.7, zorder=2)
+            except Exception:
+                pass
+            # Always draw extent outline as fallback / reference
+            rect = Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                              fill=False, edgecolor=color,
+                              linewidth=0.8, linestyle="--", alpha=0.5, zorder=2)
             self._ax.add_patch(rect)
             self._ax.text(xmin, ymax, f" {surf.name}",
-                          fontsize=6, color=_SURFACE_COLOR, va="bottom", zorder=5)
+                          fontsize=6, color=color, va="bottom", zorder=5)
 
     def _render_seismic_coverage(self) -> None:
         """Draw each SEG-Y survey's spatial extent as a semi-transparent box."""

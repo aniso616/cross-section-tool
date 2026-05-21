@@ -101,6 +101,7 @@ class Project:
         self.default_depth_max = float(default_depth_max)
         self.sections: list[Section] = []
         self.surfaces: list[Surface] = []
+        self.aoi = None   # AOI | None — avoid importing AOI here to keep deps light
         self.horizon_picks: list[HorizonPick] = []
         self.wells: list[Well] = []
         self.seismic_refs: list[SeismicRef] = []

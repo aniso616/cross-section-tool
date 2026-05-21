@@ -431,6 +431,10 @@ class MainWindow(QMainWindow):
         self._import_vector_action = QAction("Shapefile / GeoPackage…", self)
         self._import_vector_action.triggered.connect(self._on_import_vector)
         import_menu.addAction(self._import_vector_action)
+        import_menu.addSeparator()
+        self._import_surface_action = QAction("Surface / Horizon Grid (XYZ)…", self)
+        self._import_surface_action.triggered.connect(self._on_import_surface)
+        import_menu.addAction(self._import_surface_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -601,6 +605,13 @@ class MainWindow(QMainWindow):
             if tid in ("zoom", "new_section", "polygon"):
                 tools_menu.addSeparator()
 
+        tools_menu.addSeparator()
+        self._set_aoi_action = QAction("Set Area of Interest (AOI)…", self)
+        self._set_aoi_action.triggered.connect(self._on_set_aoi)
+        tools_menu.addAction(self._set_aoi_action)
+        self._clear_aoi_action = QAction("Clear AOI", self)
+        self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
+        tools_menu.addAction(self._clear_aoi_action)
         tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
@@ -1098,6 +1109,95 @@ class MainWindow(QMainWindow):
                     "Your sections may be in a different coordinate system. "
                     "Consider creating a section near the well location.",
                 )
+
+    def _on_import_surface(self) -> None:
+        """Import → Surface: load an XYZ surface file."""
+        from section_tool.io.surface_readers import supported_extensions
+        exts = " ".join(f"*{e}" for e in supported_extensions())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Surface",
+            "", f"Surface Files ({exts});;All Files (*)",
+        )
+        if not path:
+            return
+        from PySide6.QtWidgets import QInputDialog
+        from section_tool.io.surface_readers import load_surface
+        import os
+        default_name = os.path.splitext(os.path.basename(path))[0]
+        name, ok = QInputDialog.getText(self, "Surface Name", "Name:", text=default_name)
+        if not ok:
+            name = default_name
+        crs = self._state.project.crs_epsg
+        try:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            surf = load_surface(path, name=name.strip() or default_name, crs_epsg=crs)
+            self._state.add_surface(surf)
+            self._section_view.render()
+            self._map_view.render()
+            QMessageBox.information(
+                self, "Surface Loaded",
+                f"'{surf.name}'\n{surf.n_points:,} points loaded.\n"
+                f"Extent: {surf.extent()[0]:.0f}–{surf.extent()[1]:.0f} E, "
+                f"{surf.extent()[2]:.0f}–{surf.extent()[3]:.0f} N",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _on_set_aoi(self) -> None:
+        """Tools → Set AOI: define a rectangular area of interest."""
+        from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+                                         QDoubleSpinBox, QLineEdit)
+        from section_tool.core.aoi import AOI
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Set Area of Interest")
+        layout = QFormLayout(dlg)
+
+        def _spin(val=0.0, lo=-1e9, hi=1e9):
+            s = QDoubleSpinBox()
+            s.setRange(lo, hi)
+            s.setDecimals(1)
+            s.setValue(val)
+            s.setSingleStep(1000.0)
+            return s
+
+        # Pre-fill from current map limits if available
+        try:
+            xl = self._map_view._ax.get_xlim()
+            yl = self._map_view._ax.get_ylim()
+        except Exception:
+            xl = yl = (0.0, 10000.0)
+
+        xmin_s = _spin(xl[0]); xmax_s = _spin(xl[1])
+        ymin_s = _spin(min(yl)); ymax_s = _spin(max(yl))
+        name_ed = QLineEdit("AOI")
+
+        layout.addRow("Name:", name_ed)
+        layout.addRow("X min (E):", xmin_s)
+        layout.addRow("X max (E):", xmax_s)
+        layout.addRow("Y min (N):", ymin_s)
+        layout.addRow("Y max (N):", ymax_s)
+
+        bb = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        layout.addRow(bb)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        aoi = AOI.from_rectangle(
+            x_min=xmin_s.value(), x_max=xmax_s.value(),
+            y_min=ymin_s.value(), y_max=ymax_s.value(),
+            crs_epsg=self._state.project.crs_epsg,
+            name=name_ed.text().strip() or "AOI",
+        )
+        self._state.set_aoi(aoi)
+        self._map_view.render()
+        self._section_view.render()
 
     def _on_view_segy_header(self) -> None:
         """Tools → View SEG-Y Header: pick a file and show the header inspector."""

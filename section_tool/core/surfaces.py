@@ -16,8 +16,11 @@ class Surface:
         z: list | np.ndarray,
         name: str = "",
         kind: Literal["horizon", "fault", "unconformity"] = "horizon",
-        z_units: Literal["m", "ft", "ms"] = "m",
+        z_units: Literal["m", "ft", "ms", "km", "s"] = "m",
         crs_epsg: int = 32632,
+        display_color: str = "#E87722",
+        source_file: str | None = None,
+        source_format: str | None = None,
     ) -> None:
         x = np.asarray(x, dtype=float).ravel()
         y = np.asarray(y, dtype=float).ravel()
@@ -31,10 +34,36 @@ class Surface:
         self._z = z
         self._is_grid = False
         self._interp = None
+        self._hull = None   # lazy shapely convex hull
         self.name = name
         self.kind: Literal["horizon", "fault", "unconformity"] = kind
-        self.z_units: Literal["m", "ft", "ms"] = z_units
+        self.z_units: Literal["m", "ft", "ms", "km", "s"] = z_units
         self.crs_epsg = int(crs_epsg)
+        self.display_color: str = display_color
+        self.source_file: str | None = source_file
+        self.source_format: str | None = source_format
+
+    @property
+    def z_domain(self):
+        """Return a :class:`~section_tool.core.zdomain.ZDomain` for this surface."""
+        from section_tool.core.zdomain import ZDomain
+        _map = {"ft": ZDomain.DEPTH_FT, "km": ZDomain.DEPTH_KM,
+                "ms": ZDomain.TWT_MS,   "s":  ZDomain.TWT_S}
+        return _map.get(self.z_units, ZDomain.DEPTH_M)
+
+    @property
+    def convex_hull(self):
+        """Shapely Polygon of the data point convex hull (lazy, cached)."""
+        if self._hull is None:
+            import shapely
+            self._hull = shapely.convex_hull(
+                shapely.multipoints(np.column_stack([self._x, self._y]))
+            )
+        return self._hull
+
+    @property
+    def n_points(self) -> int:
+        return len(self._x)
 
     @classmethod
     def from_grid(
@@ -64,6 +93,7 @@ class Surface:
         inst._grid_x = x_coords
         inst._grid_y = y_coords
         inst._grid_z = z_grid
+        inst._hull = None
         return inst
 
     # ------------------------------------------------------------------
@@ -145,8 +175,8 @@ class Surface:
     def __repr__(self) -> str:
         storage = "grid" if self._is_grid else "scattered"
         return (
-            f"Surface(name={self.name!r}, n_points={len(self._x)}, "
-            f"kind={self.kind!r}, storage={storage!r})"
+            f"Surface(name={self.name!r}, n_points={self.n_points}, "
+            f"kind={self.kind!r}, z_units={self.z_units!r}, storage={storage!r})"
         )
 
 

@@ -202,6 +202,31 @@ CREATE TABLE IF NOT EXISTS reference_lines (
     map_y        REAL
 );
 
+CREATE TABLE IF NOT EXISTS aoi (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT    NOT NULL DEFAULT 'AOI',
+    polygon_wkt  TEXT    NOT NULL,
+    crs_epsg     INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS surfaces (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT    NOT NULL,
+    kind           TEXT    DEFAULT 'horizon',
+    z_units        TEXT    DEFAULT 'm',
+    crs_epsg       INTEGER NOT NULL,
+    display_color  TEXT    DEFAULT '#E87722',
+    source_file    TEXT,
+    source_format  TEXT,
+    point_count    INTEGER NOT NULL DEFAULT 0,
+    x_min          REAL,  x_max REAL,
+    y_min          REAL,  y_max REAL,
+    z_min          REAL,  z_max REAL,
+    is_gridded     INTEGER DEFAULT 0,
+    grid_info_json TEXT,
+    points_blob    BLOB
+);
+
 CREATE TABLE IF NOT EXISTS seismic (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     name              TEXT    NOT NULL,
@@ -1235,4 +1260,94 @@ class ProjectDatabase:
             "polygons":        self.get_all_polygons(),
             "reference_lines": self.get_all_reference_lines(),
             "annotations":     self.get_all_annotations(),
+            "aoi":             self.get_aoi(),
+            "surfaces":        self.get_all_surfaces(),
         }
+
+    # ------------------------------------------------------------------
+    # AOI
+    # ------------------------------------------------------------------
+
+    def upsert_aoi(self, aoi) -> None:
+        """Insert or replace the single AOI row (id=1 always)."""
+        if aoi is None:
+            self.conn.execute("DELETE FROM aoi WHERE id = 1")
+        else:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO aoi(id, name, polygon_wkt, crs_epsg)
+                   VALUES(1, ?, ?, ?)""",
+                (aoi.name, aoi.polygon_wkt, aoi.crs_epsg),
+            )
+        self.conn.commit()
+
+    def get_aoi(self) -> dict | None:
+        row = self.conn.execute("SELECT * FROM aoi WHERE id = 1").fetchone()
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Surfaces
+    # ------------------------------------------------------------------
+
+    def upsert_surface(self, surface, surface_id: int | None = None) -> int:
+        """Insert or update a Surface, storing point data as a compressed blob."""
+        import zlib
+        xyz = np.column_stack([surface._x, surface._y, surface._z]).astype(np.float64)
+        blob = zlib.compress(xyz.tobytes(), level=6)
+        xmin, xmax, ymin, ymax = surface.extent()
+        valid_z = surface._z[np.isfinite(surface._z)]
+        zmin = float(valid_z.min()) if len(valid_z) else None
+        zmax = float(valid_z.max()) if len(valid_z) else None
+        is_grid = int(getattr(surface, "_is_grid", False))
+        grid_json = None
+        if is_grid:
+            import json
+            gx = surface._grid_x.tolist()
+            gy = surface._grid_y.tolist()
+            grid_json = json.dumps({"grid_x": gx, "grid_y": gy,
+                                    "shape": [len(gy), len(gx)]})
+        params = (
+            surface.name,
+            getattr(surface, "kind", "horizon"),
+            getattr(surface, "z_units", "m"),
+            surface.crs_epsg,
+            getattr(surface, "display_color", "#E87722"),
+            getattr(surface, "source_file", None),
+            getattr(surface, "source_format", None),
+            len(surface._x),
+            float(xmin), float(xmax), float(ymin), float(ymax),
+            zmin, zmax,
+            is_grid,
+            grid_json,
+            blob,
+        )
+        if surface_id is not None:
+            self.conn.execute(
+                """UPDATE surfaces SET name=?,kind=?,z_units=?,crs_epsg=?,
+                   display_color=?,source_file=?,source_format=?,
+                   point_count=?,x_min=?,x_max=?,y_min=?,y_max=?,z_min=?,z_max=?,
+                   is_gridded=?,grid_info_json=?,points_blob=?
+                   WHERE id=?""",
+                params + (surface_id,),
+            )
+            self.conn.commit()
+            return surface_id
+        cur = self.conn.execute(
+            """INSERT INTO surfaces(name,kind,z_units,crs_epsg,display_color,
+               source_file,source_format,point_count,
+               x_min,x_max,y_min,y_max,z_min,z_max,
+               is_gridded,grid_info_json,points_blob)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            params,
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def get_all_surfaces(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM surfaces ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_surface(self, surface_id: int) -> None:
+        self.conn.execute("DELETE FROM surfaces WHERE id=?", (surface_id,))
+        self.conn.commit()
