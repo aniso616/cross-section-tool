@@ -1641,7 +1641,18 @@ class SectionView(QWidget):
 
         def _imshow(img_data, dist0, dist1, y_top, y_bot):
             img_data = self._display_seismic_data(img_data)
-            vmax = float(np.percentile(np.abs(img_data), clip_pct) or 1.0) * gain
+            # Use a tighter clip (97%) for better trace-to-trace contrast.
+            # clip_pct from settings defaults to 99 — cap at 97 for display.
+            effective_clip = min(float(clip_pct), 97.0)
+            vmax = float(np.percentile(np.abs(img_data), effective_clip) or 1.0) * gain
+            # Adaptive interpolation: nearest when many traces are visible (preserves
+            # trace character), bilinear when zoomed-out for smoother appearance.
+            xl = self._ax.get_xlim()
+            visible_dist = abs(xl[1] - xl[0]) if xl[1] != xl[0] else (dist1 - dist0)
+            n_traces = img_data.shape[1] if img_data.ndim == 2 else 1
+            trace_spacing = (dist1 - dist0) / max(n_traces - 1, 1)
+            visible_traces = visible_dist / max(trace_spacing, 1.0)
+            interp = "nearest" if visible_traces < 300 else "bilinear"
             art = self._ax.imshow(
                 img_data,
                 aspect="auto",
@@ -1649,7 +1660,7 @@ class SectionView(QWidget):
                 origin="upper",
                 cmap=cmap_name,
                 vmin=-vmax, vmax=vmax,
-                interpolation="bilinear",
+                interpolation=interp,
                 alpha=opacity,
                 zorder=1,
             )

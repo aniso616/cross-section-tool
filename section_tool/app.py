@@ -2637,7 +2637,7 @@ class SectionMainWindow(MainWindow):
         QTimer.singleShot(80, self._apply_default_proportions)
 
     def _build_tiled_toolbar(self) -> None:
-        """Single-row action toolbar for the tiled layout."""
+        """Minimal toolbar: Save, Undo, Redo + section info on the right."""
         tb = QToolBar("Main", self)
         tb.setObjectName("TiledMainToolBar")
         tb.setMovable(False)
@@ -2655,8 +2655,8 @@ class SectionMainWindow(MainWindow):
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 3px;
-                padding: 4px 10px;
-                font-size: 12px;
+                padding: 3px 8px;
+                font-size: 11px;
             }
             QToolButton:hover {
                 background: #252830;
@@ -2667,32 +2667,65 @@ class SectionMainWindow(MainWindow):
             QToolBar::separator {
                 width: 1px;
                 background: #2a2d33;
-                margin: 6px 4px;
+                margin: 5px 3px;
             }
         """)
 
-        for label, slot in [
-            ("New Section",    self._on_new_section_tiled),
-            ("Add Well",       self._on_add_well_tiled),
-            ("Import Data",    self._on_import_data_tiled),
-            ("Import Seismic", self._on_import_seismic_tiled),
-        ]:
-            a = QAction(label, self)
-            a.triggered.connect(slot)
-            tb.addAction(a)
+        style = self.style()
+        SP = QStyle.StandardPixmap
+
+        save_a = QAction(self)
+        save_a.setIcon(style.standardIcon(SP.SP_DialogSaveButton))
+        save_a.setToolTip("Save  (Ctrl+S)")
+        save_a.triggered.connect(self._on_save)
+        tb.addAction(save_a)
 
         tb.addSeparator()
 
-        for label, slot in [
-            ("Open…",  self._on_open),
-            ("Save",   self._on_save),
-        ]:
-            a = QAction(label, self)
-            a.triggered.connect(slot)
-            tb.addAction(a)
+        undo_a = QAction(self)
+        undo_a.setIcon(style.standardIcon(SP.SP_ArrowBack))
+        undo_a.setToolTip("Undo  (Ctrl+Z)")
+        undo_a.triggered.connect(self._state.undo)
+        tb.addAction(undo_a)
+
+        redo_a = QAction(self)
+        redo_a.setIcon(style.standardIcon(SP.SP_ArrowForward))
+        redo_a.setToolTip("Redo  (Ctrl+Shift+Z)")
+        redo_a.triggered.connect(self._state.redo)
+        tb.addAction(redo_a)
+
+        # Spacer pushes section info to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        tb.addWidget(spacer)
+
+        self._section_info_label = QLabel("")
+        self._section_info_label.setStyleSheet("color: #666; font-size: 8pt; padding-right: 8px;")
+        tb.addWidget(self._section_info_label)
 
         self.addToolBar(tb)
         self.tiled_toolbar = tb
+
+        # Update section info when active section changes
+        self._state.active_section_changed.connect(self._update_section_info)
+        self._state.section_modified.connect(lambda *_: self._update_section_info(
+            self._state.active_section))
+
+    def _update_section_info(self, section=None) -> None:
+        lbl = getattr(self, "_section_info_label", None)
+        if lbl is None:
+            return
+        if section is None:
+            section = self._state.active_section
+        if section is None:
+            lbl.setText("")
+            return
+        try:
+            azs = section.segment_azimuths()
+            az = f"{azs[0]:.0f}°" if len(azs) == 1 else f"{azs[0]:.0f}°–{azs[-1]:.0f}°"
+        except Exception:
+            az = "—"
+        lbl.setText(f"{section.name}  ·  {section.total_length()/1000:.2f} km  ·  Az {az}")
 
     def _build_tiled_layout(self) -> None:
         """Build three-column splitter: [project] | [section/map] | [properties]."""
@@ -2816,14 +2849,33 @@ class SectionMainWindow(MainWindow):
             self._on_save_as()
 
     def _on_save_as(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
-            self, "Save Project To Folder", ""
+        from PySide6.QtWidgets import QInputDialog
+        # Step 1: pick parent directory
+        parent = QFileDialog.getExistingDirectory(
+            self, "Choose Location for New Project", os.path.expanduser("~")
         )
-        if not folder:
+        if not parent:
             return
-        project_name = self._state.project.name or "Untitled"
-        dest = os.path.join(folder, project_name)
+        # Step 2: ask for project name
+        default_name = self._state.project.name or "Untitled"
+        name, ok = QInputDialog.getText(
+            self, "Project Name", "Enter project name:", text=default_name
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        dest = os.path.join(parent, name)
+        # Step 3: confirm overwrite if folder exists
+        if os.path.exists(dest):
+            reply = QMessageBox.question(
+                self, "Folder Already Exists",
+                f"'{name}' already exists at that location. Overwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         try:
+            os.makedirs(dest, exist_ok=True)
             self._state.save_project_as(dest)
             self._update_title()
         except Exception as exc:

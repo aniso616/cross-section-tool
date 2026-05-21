@@ -24,11 +24,11 @@ def _sep_label(text: str) -> QLabel:
     lbl = QLabel(text)
     font = QFont()
     font.setBold(True)
-    font.setPointSize(10)
+    font.setPointSize(9)
     lbl.setFont(font)
     lbl.setStyleSheet(
-        "color: #222222; margin-top: 12px; margin-bottom: 2px; "
-        "border-bottom: 1px solid #555; padding-bottom: 3px;"
+        "color: #CCCCCC; margin-top: 6px; margin-bottom: 1px; "
+        "border-bottom: 1px solid #444; padding-bottom: 2px;"
     )
     return lbl
 
@@ -36,25 +36,23 @@ def _sep_label(text: str) -> QLabel:
 def _val_label(text: str) -> QLabel:
     if not text or not str(text).strip():
         lbl = QLabel("—")
-        lbl.setStyleSheet("color: #999; font-style: italic; font-size: 9pt;")
+        lbl.setStyleSheet("color: #666; font-style: italic; font-size: 8pt;")
     else:
         lbl = QLabel(str(text))
-        lbl.setStyleSheet("color: #222222; font-size: 9pt;")
-        lbl.setWordWrap(True)
-    lbl.setMinimumWidth(80)
+        lbl.setStyleSheet("color: #CCCCCC; font-size: 8pt;")
+        lbl.setWordWrap(False)
     return lbl
 
 
 def _form() -> QFormLayout:
-    """Standard QFormLayout with consistent spacing."""
+    """Compact single-line QFormLayout: label on left, value on right."""
     f = QFormLayout()
-    # WrapAllRows: label on its own line, value below — no overlap regardless of panel width
-    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
     f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-    f.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     f.setVerticalSpacing(3)
-    f.setHorizontalSpacing(6)
-    f.setContentsMargins(6, 4, 6, 4)
+    f.setHorizontalSpacing(8)
+    f.setContentsMargins(4, 2, 4, 2)
     return f
 
 
@@ -102,12 +100,12 @@ class PropertiesPanel(QDockWidget):
         self._inner = QWidget()
         self._layout = QVBoxLayout(self._inner)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._layout.setSpacing(0)
-        self._layout.setContentsMargins(8, 6, 8, 8)
+        self._layout.setSpacing(2)
+        self._layout.setContentsMargins(6, 4, 6, 4)
         scroll.setWidget(self._inner)
         self.setWidget(scroll)
         self.setMinimumHeight(180)
-        self.setMinimumWidth(250)
+        self.setMinimumWidth(200)
 
         self._rebuilding = False   # re-entry guard
         self._connect_signals()
@@ -428,11 +426,20 @@ class PropertiesPanel(QDockWidget):
 
     def _commit_section_ve(self, ve: float) -> None:
         sec = self._state.active_section
-        if sec is None: return
+        if sec is None:
+            return
+        if abs(getattr(sec, "vertical_exaggeration", 1.0) - ve) < 0.001:
+            return
         idx = self._state.project.sections.index(sec)
         s2 = copy.deepcopy(sec)
         s2.vertical_exaggeration = ve
-        self._state.update_section(idx, s2)
+        # Block panel rebuild so the spinbox isn't deleted while valueChanged is in flight.
+        # The section_view handles the re-render via its own section_modified connection.
+        self._rebuilding = True
+        try:
+            self._state.update_section(idx, s2)
+        finally:
+            self._rebuilding = False
 
     def _commit_pick_name(self, cat, idx, name):
         self._pick_op(cat, idx, lambda h: setattr(h, "name", name.strip()))
