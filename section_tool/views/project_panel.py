@@ -26,7 +26,8 @@ from section_tool.app_state import AppState
 # Category labels and per-object type colours
 # ---------------------------------------------------------------------------
 
-_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines", "Polygons", "Wells"]
+_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines",
+               "Polygons", "Wells", "Surfaces"]
 _DEFAULT_COLORS = {
     "Sections":        "#1f77b4",
     "Horizons":        "#2ca02c",
@@ -34,6 +35,7 @@ _DEFAULT_COLORS = {
     "Reference Lines": "#999999",
     "Wells":           "#8B4513",
     "Polygons":        "#9467bd",
+    "Surfaces":        "#E87722",
 }
 _ICONS = {
     "Sections":        "⟋",
@@ -42,6 +44,7 @@ _ICONS = {
     "Reference Lines": "·",
     "Polygons":        "■",
     "Wells":           "▼",
+    "Surfaces":        "◇",
 }
 
 
@@ -442,6 +445,12 @@ class ProjectPanel(QDockWidget):
         if category == "Wells":
             return [(w.name or f"Well {i+1}", _DEFAULT_COLORS["Wells"], _dw, _ds)
                     for i, w in enumerate(proj.wells)]
+        if category == "Surfaces":
+            surfs = proj.surfaces if hasattr(proj, "surfaces") else []
+            return [(s.name or f"Surface {i+1}",
+                     s.display_color if hasattr(s, "display_color") else _DEFAULT_COLORS["Surfaces"],
+                     float(getattr(s, "line_width", _dw)), _ds)
+                    for i, s in enumerate(surfs)]
         return []
 
     # ------------------------------------------------------------------
@@ -488,20 +497,18 @@ class ProjectPanel(QDockWidget):
                 self._state.set_active_section(proj.sections[idx])
 
     def _on_context_menu(self, pos) -> None:
-        # Check if user right-clicked a category header
         item_at = self._tree.itemAt(pos)
-        if item_at is not None and item_at.parent() is None:
-            # Category header context menu — add object
+        if item_at is None:
+            return
+
+        # Category header: "Add …" only
+        if item_at.parent() is None:
             cat = item_at.text(0)
             menu = QMenu(self)
-            if cat == "Horizons":
-                add_act = menu.addAction("Add Horizon…")
-            elif cat == "Faults":
-                add_act = menu.addAction("Add Fault…")
-            else:
-                add_act = menu.addAction(f"Add {cat}")
-            chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
-            if chosen is add_act:
+            lbl = "Add Horizon…" if cat == "Horizons" else \
+                  "Add Fault…"   if cat == "Faults"   else f"Add {cat}"
+            add_act = menu.addAction(lbl)
+            if menu.exec(self._tree.viewport().mapToGlobal(pos)) is add_act:
                 self.add_requested.emit(cat)
             return
 
@@ -511,38 +518,72 @@ class ProjectPanel(QDockWidget):
         cat, idx = result
 
         menu = QMenu(self)
-        props_act  = None
-        ew_sec_act = None
-        ns_sec_act = None
-        if cat in ("Horizons", "Faults"):
-            props_act = menu.addAction("Properties…")
-            menu.addSeparator()
-        if cat == "Wells":
-            ew_sec_act = menu.addAction("Create E–W Section Through Well")
-            ns_sec_act = menu.addAction("Create N–S Section Through Well")
-            menu.addSeparator()
-        rename_act = menu.addAction("Rename")
+
+        # --- Properties (all types) ---
+        menu.addAction("Properties…",
+                       lambda: self._show_properties_dialog(cat, idx))
         menu.addSeparator()
-        up_act = menu.addAction("Move Up")
+
+        # --- Visibility ---
+        row = self._row_widgets.get((cat, idx))
+        if row:
+            vis_act = menu.addAction("Visible")
+            vis_act.setCheckable(True)
+            vis_act.setChecked(row.is_visible)
+            vis_act.triggered.connect(
+                lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v))
+
+        # --- Color ---
+        menu.addAction("Color…",
+                       lambda: self._quick_color_change(cat, idx))
+
+        # --- Line style submenu ---
+        style_menu = menu.addMenu("Line Style")
+        for label, val in [("Solid", "solid"), ("Dashed", "dashed"),
+                            ("Dotted", "dotted"), ("Dash-Dot", "dashdot")]:
+            style_menu.addAction(
+                label,
+                lambda v=val, c=cat, i=idx: self._apply_prop(c, i, {"line_style": v}),
+            )
+
+        # --- Line width submenu ---
+        width_menu = menu.addMenu("Line Width")
+        for w in [0.5, 1.0, 1.5, 2.0, 3.0, 4.0]:
+            width_menu.addAction(
+                str(w),
+                lambda wv=w, c=cat, i=idx: self._apply_prop(c, i, {"line_width": wv}),
+            )
+
+        menu.addSeparator()
+
+        # --- Well-specific quick actions ---
+        if cat == "Wells":
+            menu.addAction("Create E–W Section Through Well",
+                           lambda: self.create_ew_section_through_well.emit(idx))
+            menu.addAction("Create N–S Section Through Well",
+                           lambda: self.create_ns_section_through_well.emit(idx))
+            menu.addSeparator()
+
+        # --- Smart actions (type-specific) ---
+        self._add_smart_actions(menu, cat, idx)
+
+        menu.addSeparator()
+
+        # --- Standard CRUD ---
+        menu.addAction("Rename…", lambda: self._rename_item(cat, idx))
+        menu.addSeparator()
+        up_act   = menu.addAction("Move Up")
         down_act = menu.addAction("Move Down")
         menu.addSeparator()
-        del_act = menu.addAction("Delete")
+        del_act  = menu.addAction("Delete")
 
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
-        if props_act and chosen is props_act:
-            self.properties_requested.emit(cat, idx)
-        elif ew_sec_act and chosen is ew_sec_act:
-            self.create_ew_section_through_well.emit(idx)
-        elif ns_sec_act and chosen is ns_sec_act:
-            self.create_ns_section_through_well.emit(idx)
-        elif chosen is rename_act:
-            self._rename_item(cat, idx)
-        elif chosen is del_act:
-            self.object_deleted.emit(cat, idx)
+        if chosen is del_act:
+            self._confirm_delete(cat, idx)
         elif chosen is up_act and idx > 0:
             self.object_moved.emit(cat, idx, idx - 1)
         elif chosen is down_act:
-            n = self._category_items[cat].childCount()
+            n = self._category_items.get(cat, item_at.parent()).childCount()
             if idx < n - 1:
                 self.object_moved.emit(cat, idx, idx + 1)
 
@@ -603,6 +644,343 @@ class ProjectPanel(QDockWidget):
         menu.addAction("Add Polygon",       lambda: self.add_requested.emit("Polygons"))
         menu.addAction("Add Reference Line",lambda: self.add_requested.emit("Reference Lines"))
         menu.popup(self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft()))
+
+    # ------------------------------------------------------------------
+    # Properties dialog
+    # ------------------------------------------------------------------
+
+    def _show_properties_dialog(self, cat: str, idx: int) -> None:
+        obj_data = self._get_object_data(cat, idx)
+        dialog_cls = self._get_dialog_class(cat)
+        dlg = dialog_cls(cat, obj_data, parent=self)
+        dlg.properties_changed.connect(
+            lambda vals, c=cat, i=idx: self._apply_prop(c, i, vals))
+        dlg.exec()
+
+    def _get_dialog_class(self, cat: str):
+        from .properties_dialog import PropertiesDialog
+        from .horizon_properties_dialog import HorizonPropertiesDialog
+        from .fault_properties_dialog import FaultPropertiesDialog
+        from .polygon_properties_dialog import PolygonPropertiesDialog
+        from .well_properties_dialog import WellPropertiesDialog
+        from .section_properties_dialog import SectionPropertiesDialog
+        from .surface_properties_dialog import SurfacePropertiesDialog
+        from .reference_line_properties_dialog import ReferenceLinePropertiesDialog
+        return {
+            "Horizons":       HorizonPropertiesDialog,
+            "Faults":         FaultPropertiesDialog,
+            "Polygons":       PolygonPropertiesDialog,
+            "Wells":          WellPropertiesDialog,
+            "Sections":       SectionPropertiesDialog,
+            "Surfaces":       SurfacePropertiesDialog,
+            "Reference Lines":ReferenceLinePropertiesDialog,
+        }.get(cat, PropertiesDialog)
+
+    def _get_object_data(self, cat: str, idx: int) -> dict:
+        """Extract properties dict from the project object at (cat, idx)."""
+        import math
+        proj = self._state.project
+        try:
+            if cat == "Horizons":
+                hp = proj.horizon_picks[idx]
+                return {
+                    "name": hp.name, "color": hp.color,
+                    "line_width": hp.line_width, "line_style": hp.line_style,
+                    "contact_type": getattr(hp, "contact_type", "conformable"),
+                    "formation_above": getattr(hp, "formation_above", ""),
+                    "formation_below": getattr(hp, "formation_below", ""),
+                    "age_ma": getattr(hp, "age_ma", None),
+                    "confidence": getattr(hp, "confidence", 1.0),
+                }
+            if cat == "Faults":
+                fp = proj.fault_picks[idx]
+                return {
+                    "name": fp.name, "color": fp.color,
+                    "line_width": fp.line_width, "line_style": fp.line_style,
+                    "fault_type": getattr(fp, "fault_type", "normal"),
+                    "dip_direction": getattr(fp, "dip_direction", "right"),
+                    "displacement": getattr(fp, "displacement", None),
+                }
+            if cat == "Sections":
+                sec = proj.sections[idx]
+                try:
+                    azs = sec.segment_azimuths()
+                    az = float(azs[0]) if len(azs) >= 1 else 0.0
+                except Exception:
+                    az = 0.0
+                return {
+                    "name": sec.name,
+                    "total_length": sec.total_length(),
+                    "azimuth": az,
+                    "n_nodes": sec.n_nodes,
+                    "crs_epsg": sec.crs_epsg,
+                    "display_domain": getattr(sec, "display_domain", "depth"),
+                    "depth_units": sec.depth_units,
+                    "vertical_exaggeration": sec.vertical_exaggeration,
+                }
+            if cat == "Polygons":
+                poly = proj.polygons[idx]
+                return {
+                    "name": getattr(poly, "name", ""),
+                    "color": getattr(poly, "fill_color", "#9467bd"),
+                    "fill_color": getattr(poly, "fill_color", "#9467bd"),
+                    "fill_opacity": getattr(poly, "fill_alpha", 0.6),
+                    "formation_name": getattr(poly, "formation", ""),
+                }
+            if cat == "Wells":
+                w = proj.wells[idx]
+                return {
+                    "name": w.name,
+                    "x": w.x, "y": w.y,
+                    "kb_elevation": w.kb,
+                    "td": w.deviation.max_tvd if w.deviation else 0,
+                    "available_logs": list(w.log_names),
+                }
+            if cat == "Surfaces":
+                surf = proj.surfaces[idx]
+                b = surf.bounds()
+                zr = surf.z_range()
+                return {
+                    "name": surf.name,
+                    "color": surf.display_color,
+                    "n_points": surf.n_points,
+                    "z_domain": surf.z_domain,
+                    "z_units": surf.z_units,
+                    "z_range": zr,
+                    "bounds": b,
+                    "crs_epsg": surf.crs_epsg,
+                    "source_file": surf.source_file,
+                    "source_format": surf.source_format,
+                    "interpolation": surf.interpolation,
+                    "line_width": surf.line_width,
+                    "visible": surf.visible,
+                }
+            if cat == "Reference Lines":
+                rl = proj.reference_lines[idx]
+                return {
+                    "name": rl.name, "color": rl.color,
+                    "kind": rl.kind, "value": rl.value,
+                    "visible": rl.visible,
+                }
+        except (IndexError, AttributeError):
+            pass
+        return {"name": ""}
+
+    def _apply_prop(self, cat: str, idx: int, values: dict) -> None:
+        """Apply a values dict to the object at (cat, idx) and emit signals."""
+        import copy
+        proj = self._state.project
+        try:
+            if cat == "Horizons" and idx < len(proj.horizon_picks):
+                hp = copy.deepcopy(proj.horizon_picks[idx])
+                for k, v in values.items():
+                    if hasattr(hp, k):
+                        setattr(hp, k, v)
+                self._state.update_horizon_pick(idx, hp)
+                # Sync the row widget color/width/style immediately
+                row = self._row_widgets.get((cat, idx))
+                if row and "color" in values:
+                    row.set_color(values["color"])
+
+            elif cat == "Faults" and idx < len(proj.fault_picks):
+                fp = copy.deepcopy(proj.fault_picks[idx])
+                for k, v in values.items():
+                    if hasattr(fp, k):
+                        setattr(fp, k, v)
+                self._state.update_fault_pick(idx, fp)
+                row = self._row_widgets.get((cat, idx))
+                if row and "color" in values:
+                    row.set_color(values["color"])
+
+            elif cat == "Polygons" and idx < len(proj.polygons):
+                poly = copy.deepcopy(proj.polygons[idx])
+                if "fill_color" in values:
+                    poly.fill_color = values["fill_color"]
+                if "fill_opacity" in values:
+                    poly.fill_alpha = float(values["fill_opacity"])
+                if "formation_name" in values:
+                    poly.formation = values["formation_name"]
+                if "name" in values:
+                    poly.name = values["name"]
+                self._state.update_polygon(idx, poly)
+
+            elif cat == "Sections" and idx < len(proj.sections):
+                sec = copy.deepcopy(proj.sections[idx])
+                if "name" in values:
+                    sec.name = values["name"]
+                if "vertical_exaggeration" in values:
+                    sec.vertical_exaggeration = float(
+                        values["vertical_exaggeration"])
+                if "display_domain" in values:
+                    sec.display_domain = values["display_domain"]
+                if "depth_units" in values:
+                    sec.depth_units = values["depth_units"]
+                self._state.update_section(idx, sec)
+
+            elif cat == "Surfaces" and idx < len(proj.surfaces):
+                surf = proj.surfaces[idx]
+                if "name" in values:
+                    surf.name = values["name"]
+                if "color" in values:
+                    c = values["color"]
+                    if isinstance(c, str) and c.startswith("#"):
+                        r = int(c[1:3], 16); g = int(c[3:5], 16); b = int(c[5:7], 16)
+                        surf.color = (r, g, b)
+                if "line_width" in values:
+                    surf.line_width = float(values["line_width"])
+                if "visible" in values:
+                    surf.visible = bool(values["visible"])
+                if "interpolation" in values:
+                    surf.interpolation = values["interpolation"]
+                    surf.invalidate_cache()
+                self._state.update_surface(idx, surf)
+
+            elif cat == "Reference Lines" and idx < len(proj.reference_lines):
+                rl = proj.reference_lines[idx]
+                if "name" in values:
+                    rl.name = values["name"]
+                if "color" in values:
+                    rl.color = values["color"]
+                if "visible" in values:
+                    rl.visible = bool(values["visible"])
+                if "value" in values:
+                    rl.value = float(values["value"])
+                self._state.update_reference_line(idx, rl)
+
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Quick actions
+    # ------------------------------------------------------------------
+
+    def _quick_color_change(self, cat: str, idx: int) -> None:
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        data = self._get_object_data(cat, idx)
+        cur = data.get("color", "#888888")
+        if isinstance(cur, tuple):
+            r, g, b = cur; cur = f"#{r:02x}{g:02x}{b:02x}"
+        qc = QColorDialog.getColor(QColor(cur), self, "Choose Colour")
+        if qc.isValid():
+            self._apply_prop(cat, idx, {"color": qc.name()})
+            row = self._row_widgets.get((cat, idx))
+            if row:
+                row.set_color(qc.name())
+
+    def _confirm_delete(self, cat: str, idx: int) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        data = self._get_object_data(cat, idx)
+        name = data.get("name", f"{cat} {idx}")
+        reply = QMessageBox.question(
+            self, "Delete",
+            f"Delete {cat.rstrip('s').lower()} '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.object_deleted.emit(cat, idx)
+
+    # ------------------------------------------------------------------
+    # Smart actions
+    # ------------------------------------------------------------------
+
+    def _add_smart_actions(self, menu, cat: str, idx: int) -> None:
+        """Append type-specific smart actions to *menu*."""
+        from PySide6.QtWidgets import QMessageBox
+
+        def stub(title):
+            QMessageBox.information(self, title, "Not yet implemented.")
+
+        if cat == "Horizons":
+            menu.addSeparator()
+            menu.addAction("Clear Picks on Active Section",
+                           lambda: self._clear_picks_active_section(idx))
+            menu.addAction("Clear All Picks",
+                           lambda: self._clear_picks_all(idx))
+            menu.addAction("Convert to 3D Surface",
+                           lambda: stub("Convert to 3D Surface"))
+
+        elif cat == "Faults":
+            menu.addSeparator()
+            menu.addAction("Flip Dip Direction",
+                           lambda: self._flip_fault_dip(idx))
+
+        elif cat == "Polygons":
+            menu.addSeparator()
+            menu.addAction("Merge with Adjacent (same formation)",
+                           lambda: stub("Merge Polygons"))
+
+        elif cat == "Surfaces":
+            menu.addSeparator()
+            menu.addAction("Sample at All Wells",
+                           lambda: stub("Sample Surface at Wells"))
+            menu.addAction("Convert to Section Picks",
+                           lambda: stub("Convert to Picks"))
+
+        elif cat == "Sections":
+            menu.addSeparator()
+            menu.addAction("Re-extract Seismic",
+                           lambda: stub("Re-extract Seismic"))
+
+    def _clear_picks_active_section(self, horizon_idx: int) -> None:
+        import copy
+        from PySide6.QtWidgets import QMessageBox
+        sec = self._state.active_section
+        if sec is None:
+            QMessageBox.information(self, "No Active Section",
+                                    "Select a section first.")
+            return
+        proj = self._state.project
+        if horizon_idx >= len(proj.horizon_picks):
+            return
+        hp = proj.horizon_picks[horizon_idx]
+        reply = QMessageBox.question(
+            self, "Clear Picks",
+            f"Clear all picks for '{hp.name}' on '{sec.name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        new_hp = copy.deepcopy(hp)
+        # Remove only picks belonging to this section
+        keep = new_hp._section_names != sec.name
+        import numpy as np
+        for attr in ("_distances", "_depths", "_section_names",
+                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+            setattr(new_hp, attr, getattr(new_hp, attr)[keep])
+        self._state.update_horizon_pick(horizon_idx, new_hp)
+
+    def _clear_picks_all(self, horizon_idx: int) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        from section_tool.core.surfaces import HorizonPick
+        proj = self._state.project
+        if horizon_idx >= len(proj.horizon_picks):
+            return
+        hp = proj.horizon_picks[horizon_idx]
+        reply = QMessageBox.question(
+            self, "Clear All Picks",
+            f"Clear ALL picks for '{hp.name}' on every section?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        empty = HorizonPick.empty(name=hp.name, color=hp.color,
+                                  line_width=hp.line_width,
+                                  line_style=hp.line_style)
+        self._state.update_horizon_pick(horizon_idx, empty)
+
+    def _flip_fault_dip(self, fault_idx: int) -> None:
+        import copy
+        proj = self._state.project
+        if fault_idx >= len(proj.fault_picks):
+            return
+        fp = copy.deepcopy(proj.fault_picks[fault_idx])
+        cur = getattr(fp, "dip_direction", "right")
+        fp.dip_direction = "left" if cur == "right" else "right"
+        self._state.update_fault_pick(fault_idx, fp)
 
     # ------------------------------------------------------------------
     # Public helpers
