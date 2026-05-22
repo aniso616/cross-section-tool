@@ -2033,13 +2033,18 @@ class SectionView(QWidget):
                     self._ax.text(td + tick_w * 1.4, tz, top_name,
                                   fontsize=6, color="#5CB85C", va="center", zorder=9))
 
-            gr_name = next(
-                (n for n in well.log_names
-                 if "GR" in n.upper() or n.upper() in ("GAMMA", "GR")),
-                None,
-            )
-            if gr_name:
-                self._render_gr_log(well, gr_name, collar_dist, section)
+            # Use explicitly selected log; fall back to auto-detecting a GR curve
+            display_log = getattr(well, "display_log", None)
+            if display_log and display_log in well.log_names:
+                log_name = display_log
+            else:
+                log_name = next(
+                    (n for n in well.log_names
+                     if "GR" in n.upper() or n.upper() in ("GAMMA", "GR")),
+                    None,
+                )
+            if log_name:
+                self._render_gr_log(well, log_name, collar_dist, section)
 
     def _render_gr_log(self, well, gr_name: str, collar_dist: float,
                        section: Section) -> None:

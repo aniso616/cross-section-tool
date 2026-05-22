@@ -335,6 +335,7 @@ class ProjectPanel(QDockWidget):
         s.fault_pick_modified.connect(lambda *_: self._rebuild())
         s.well_added.connect(lambda _: self._rebuild())
         s.well_removed.connect(lambda _: self._rebuild())
+        s.well_modified.connect(lambda *_: self._rebuild())
         s.reference_line_added.connect(lambda _: self._rebuild())
         s.reference_line_removed.connect(lambda _: self._rebuild())
         s.reference_line_modified.connect(lambda *_: self._rebuild())
@@ -443,7 +444,8 @@ class ProjectPanel(QDockWidget):
             return [(p.name or f"Polygon {i+1}", p.fill_color, 1.5, "solid")
                     for i, p in enumerate(proj.polygons)]
         if category == "Wells":
-            return [(w.name or f"Well {i+1}", _DEFAULT_COLORS["Wells"], _dw, _ds)
+            return [(w.name or f"Well {i+1}",
+                     getattr(w, "color", _DEFAULT_COLORS["Wells"]), _dw, _ds)
                     for i, w in enumerate(proj.wells)]
         if category == "Surfaces":
             surfs = proj.surfaces if hasattr(proj, "surfaces") else []
@@ -558,6 +560,28 @@ class ProjectPanel(QDockWidget):
 
         # --- Well-specific quick actions ---
         if cat == "Wells":
+            # Display Log submenu
+            try:
+                well = self._state.project.wells[idx]
+                log_names = list(well.log_names)
+                if log_names:
+                    log_menu = menu.addMenu("Display Log")
+                    current_log = getattr(well, "display_log", None)
+                    none_act = log_menu.addAction("Auto (GR)")
+                    none_act.setCheckable(True)
+                    none_act.setChecked(current_log is None)
+                    none_act.triggered.connect(
+                        lambda *_, i=idx: self._set_well_display_log(i, None))
+                    log_menu.addSeparator()
+                    for ln in log_names:
+                        a = log_menu.addAction(ln)
+                        a.setCheckable(True)
+                        a.setChecked(ln == current_log)
+                        a.triggered.connect(
+                            lambda *_, i=idx, l=ln: self._set_well_display_log(i, l))
+                    menu.addSeparator()
+            except (IndexError, AttributeError):
+                pass
             menu.addAction("Create E–W Section Through Well",
                            lambda: self.create_ew_section_through_well.emit(idx))
             menu.addAction("Create N–S Section Through Well",
@@ -993,6 +1017,16 @@ class ProjectPanel(QDockWidget):
                                   line_width=hp.line_width,
                                   line_style=hp.line_style)
         self._state.update_horizon_pick(horizon_idx, empty)
+
+    def _set_well_display_log(self, well_idx: int, log_name: str | None) -> None:
+        """Set the displayed log curve for a well and re-render."""
+        import copy
+        proj = self._state.project
+        if well_idx >= len(proj.wells):
+            return
+        well = copy.deepcopy(proj.wells[well_idx])
+        well.display_log = log_name
+        self._state.update_well(well_idx, well)
 
     def _flip_fault_dip(self, fault_idx: int) -> None:
         import copy

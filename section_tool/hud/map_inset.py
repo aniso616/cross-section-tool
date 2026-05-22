@@ -240,7 +240,8 @@ class MapInset(QWidget):
         # Well collars
         for well in proj.wells:
             sx, sy = well.deviation.surface_x, well.deviation.surface_y
-            self._ax.plot(sx, sy, "^", color="#CC7744", markersize=3, zorder=5)
+            wc = getattr(well, "color", "#CC7744")
+            self._ax.plot(sx, sy, "^", color=wc, markersize=3, zorder=5)
             any_data = True
 
         if not any_data:
