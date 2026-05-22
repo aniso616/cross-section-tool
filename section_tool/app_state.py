@@ -17,29 +17,27 @@ from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
 
-def _surface_from_db_row(row: dict) -> Surface:
-    """Reconstruct a Surface from a surfaces table row dict."""
-    import zlib, json as _json
-    blob = row["points_blob"]
-    arr = np.frombuffer(zlib.decompress(blob), dtype=np.float64).reshape(-1, 3)
-    x, y, z = arr[:, 0], arr[:, 1], arr[:, 2]
-    kwargs = dict(
+def _surface_from_db_row(row: dict, points: np.ndarray) -> Surface:
+    """Reconstruct a Surface from a surfaces table row + pre-loaded points array."""
+    color = (
+        int(row.get("color_r", 255)),
+        int(row.get("color_g", 165)),
+        int(row.get("color_b", 0)),
+    )
+    return Surface(
         name=row.get("name", ""),
-        kind=row.get("kind", "horizon"),
+        points=points,
+        crs_epsg=int(row.get("crs_epsg", 0)),
+        z_domain=row.get("z_domain", "depth_m"),
         z_units=row.get("z_units", "m"),
-        crs_epsg=int(row.get("crs_epsg", 32632)),
-        display_color=row.get("display_color", "#E87722"),
+        color=color,
+        line_width=float(row.get("line_width", 1.5)),
+        visible=bool(row.get("visible", 1)),
+        interpolation=row.get("interpolation", "linear"),
         source_file=row.get("source_file"),
         source_format=row.get("source_format"),
+        kind=row.get("kind", "horizon"),
     )
-    if row.get("is_gridded"):
-        gi = _json.loads(row["grid_info_json"])
-        gx = np.array(gi["grid_x"])
-        gy = np.array(gi["grid_y"])
-        ny, nx = gi["shape"]
-        gz = z.reshape(ny, nx)
-        return Surface.from_grid(gx, gy, gz, **kwargs)
-    return Surface(x, y, z, **kwargs)
 
 
 class AppState(QObject):
@@ -568,10 +566,20 @@ class AppState(QObject):
                 crs_epsg=int(aoi_row["crs_epsg"]),
             )
 
-        # Surfaces
+        # Surfaces (metadata from DB, points from .npy sidecar files)
+        surfaces_dir = os.path.join(folder_path, "surfaces")
         for srow in data.get("surfaces", []):
             try:
-                surf = _surface_from_db_row(srow)
+                pf = srow.get("points_file")
+                if pf:
+                    npy_path = os.path.join(surfaces_dir, pf)
+                    if os.path.exists(npy_path):
+                        points = np.load(npy_path)
+                    else:
+                        continue
+                else:
+                    continue
+                surf = _surface_from_db_row(srow, points)
                 proj.surfaces.append(surf)
             except Exception:
                 pass
@@ -737,30 +745,54 @@ class AppState(QObject):
     # Surfaces
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Surface public accessors
+    # ------------------------------------------------------------------
+
+    def get_surfaces(self) -> list:
+        return list(self._project.surfaces)
+
+    def get_visible_surfaces(self) -> list:
+        return [s for s in self._project.surfaces if getattr(s, "visible", True)]
+
+    @property
+    def project_crs_epsg(self) -> int:
+        return self._project.crs_epsg
+
+    # ------------------------------------------------------------------
+    # Surface CRUD
+    # ------------------------------------------------------------------
+
     def add_surface(self, surface: Surface) -> None:
         self._project.surfaces.append(surface)
         self._set_modified()
-        self._db_write(lambda: self._pm.db.upsert_surface(surface))
+        self._db_write(lambda: self._save_surface_to_db(surface))
         self.surface_added.emit(surface)
 
     def remove_surface(self, surface: Surface) -> None:
-        idx = self._project.surfaces.index(surface)
+        name = surface.name
         self._project.surfaces.remove(surface)
         self._set_modified()
-        # Surface DB rows are identified by position; reload will rebuild order.
-        # For now remove by re-saving all surfaces (table is small).
-        def _resave_all():
-            self._pm.db.conn.execute("DELETE FROM surfaces")
-            for s in self._project.surfaces:
-                self._pm.db.upsert_surface(s)
-        self._db_write(_resave_all)
+        self._db_write(lambda: self._pm.db.delete_surface_by_name(name))
         self.surface_removed.emit(surface)
 
     def update_surface(self, index: int, surface: Surface) -> None:
         self._project.surfaces[index] = surface
         self._set_modified()
-        self._db_write(lambda: self._pm.db.upsert_surface(surface))
+        self._db_write(lambda: self._save_surface_to_db(surface))
         self.surface_modified.emit(index, surface)
+
+    def _save_surface_to_db(self, surface: Surface) -> None:
+        """Persist surface metadata to DB and points to a .npy sidecar file."""
+        if not self._pm.is_open:
+            return
+        surfaces_dir = os.path.join(self._pm.project_path, "surfaces")
+        os.makedirs(surfaces_dir, exist_ok=True)
+        safe = "".join(c if c.isalnum() or c in "-_" else "_"
+                       for c in surface.name)
+        rel = f"{safe}.npy"
+        np.save(os.path.join(surfaces_dir, rel), surface.points)
+        self._pm.db.upsert_surface(surface, points_file=rel)
 
     # ------------------------------------------------------------------
     # AOI

@@ -211,20 +211,25 @@ CREATE TABLE IF NOT EXISTS aoi (
 
 CREATE TABLE IF NOT EXISTS surfaces (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    name           TEXT    NOT NULL,
+    name           TEXT    UNIQUE NOT NULL,
     kind           TEXT    DEFAULT 'horizon',
+    z_domain       TEXT    DEFAULT 'depth_m',
     z_units        TEXT    DEFAULT 'm',
-    crs_epsg       INTEGER NOT NULL,
-    display_color  TEXT    DEFAULT '#E87722',
+    crs_epsg       INTEGER NOT NULL DEFAULT 0,
+    color_r        INTEGER DEFAULT 255,
+    color_g        INTEGER DEFAULT 165,
+    color_b        INTEGER DEFAULT 0,
+    line_width     REAL    DEFAULT 1.5,
+    visible        INTEGER DEFAULT 1,
+    interpolation  TEXT    DEFAULT 'linear',
     source_file    TEXT,
     source_format  TEXT,
-    point_count    INTEGER NOT NULL DEFAULT 0,
+    point_count    INTEGER DEFAULT 0,
     x_min          REAL,  x_max REAL,
     y_min          REAL,  y_max REAL,
     z_min          REAL,  z_max REAL,
-    is_gridded     INTEGER DEFAULT 0,
-    grid_info_json TEXT,
-    points_blob    BLOB
+    points_file    TEXT,       -- relative path to .npy file in surfaces/ subdir
+    created_date   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS seismic (
@@ -411,19 +416,35 @@ class ProjectDatabase:
 
     def _migrate(self) -> None:
         """Add columns introduced after initial schema without breaking existing DBs."""
-        migrations = [
-            ("horizon_picks",  "x",     "REAL"),
-            ("horizon_picks",  "y",     "REAL"),
-            ("fault_picks",    "x",     "REAL"),
-            ("fault_picks",    "y",     "REAL"),
-            ("reference_lines","map_x", "REAL"),
-            ("reference_lines","map_y", "REAL"),
+        col_migrations = [
+            ("horizon_picks",  "x",          "REAL"),
+            ("horizon_picks",  "y",          "REAL"),
+            ("fault_picks",    "x",          "REAL"),
+            ("fault_picks",    "y",          "REAL"),
+            ("reference_lines","map_x",      "REAL"),
+            ("reference_lines","map_y",      "REAL"),
+            # surfaces table redesign — add new columns if table already exists
+            ("surfaces",       "kind",        "TEXT DEFAULT 'horizon'"),
+            ("surfaces",       "z_domain",    "TEXT DEFAULT 'depth_m'"),
+            ("surfaces",       "color_r",     "INTEGER DEFAULT 255"),
+            ("surfaces",       "color_g",     "INTEGER DEFAULT 165"),
+            ("surfaces",       "color_b",     "INTEGER DEFAULT 0"),
+            ("surfaces",       "line_width",  "REAL DEFAULT 1.5"),
+            ("surfaces",       "visible",     "INTEGER DEFAULT 1"),
+            ("surfaces",       "interpolation","TEXT DEFAULT 'linear'"),
+            ("surfaces",       "points_file", "TEXT"),
+            ("surfaces",       "created_date","TEXT"),
         ]
-        for table, col, coltype in migrations:
+        for table, col, coltype in col_migrations:
             try:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
             except Exception:
                 pass  # column already exists
+        # Drop obsolete blob column if it exists (ignore if already gone)
+        try:
+            self.conn.execute("ALTER TABLE surfaces DROP COLUMN points_blob")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Context manager for batched writes
@@ -1288,66 +1309,58 @@ class ProjectDatabase:
     # Surfaces
     # ------------------------------------------------------------------
 
-    def upsert_surface(self, surface, surface_id: int | None = None) -> int:
-        """Insert or update a Surface, storing point data as a compressed blob."""
-        import zlib
-        xyz = np.column_stack([surface._x, surface._y, surface._z]).astype(np.float64)
-        blob = zlib.compress(xyz.tobytes(), level=6)
-        xmin, xmax, ymin, ymax = surface.extent()
-        valid_z = surface._z[np.isfinite(surface._z)]
-        zmin = float(valid_z.min()) if len(valid_z) else None
-        zmax = float(valid_z.max()) if len(valid_z) else None
-        is_grid = int(getattr(surface, "_is_grid", False))
-        grid_json = None
-        if is_grid:
-            import json
-            gx = surface._grid_x.tolist()
-            gy = surface._grid_y.tolist()
-            grid_json = json.dumps({"grid_x": gx, "grid_y": gy,
-                                    "shape": [len(gy), len(gx)]})
+    def upsert_surface(self, surface, points_file: str | None = None) -> int:
+        """Insert or replace a Surface row (metadata only; point data is in .npy)."""
+        from datetime import datetime as _dt
+        b = surface.bounds()
+        zr = surface.z_range()
+        color = getattr(surface, "color", (255, 165, 0))
+        row = self.conn.execute(
+            "SELECT id FROM surfaces WHERE name=?", (surface.name,)
+        ).fetchone()
         params = (
             surface.name,
             getattr(surface, "kind", "horizon"),
+            getattr(surface, "z_domain", "depth_m"),
             getattr(surface, "z_units", "m"),
-            surface.crs_epsg,
-            getattr(surface, "display_color", "#E87722"),
+            getattr(surface, "crs_epsg", 0),
+            int(color[0]), int(color[1]), int(color[2]),
+            float(getattr(surface, "line_width", 1.5)),
+            int(getattr(surface, "visible", True)),
+            getattr(surface, "interpolation", "linear"),
             getattr(surface, "source_file", None),
             getattr(surface, "source_format", None),
-            len(surface._x),
-            float(xmin), float(xmax), float(ymin), float(ymax),
-            zmin, zmax,
-            is_grid,
-            grid_json,
-            blob,
+            surface.n_points,
+            float(b[0]), float(b[2]), float(b[1]), float(b[3]),
+            float(zr[0]), float(zr[1]),
+            points_file,
         )
-        if surface_id is not None:
+        if row:
             self.conn.execute(
-                """UPDATE surfaces SET name=?,kind=?,z_units=?,crs_epsg=?,
-                   display_color=?,source_file=?,source_format=?,
-                   point_count=?,x_min=?,x_max=?,y_min=?,y_max=?,z_min=?,z_max=?,
-                   is_gridded=?,grid_info_json=?,points_blob=?
-                   WHERE id=?""",
-                params + (surface_id,),
+                """UPDATE surfaces SET kind=?,z_domain=?,z_units=?,crs_epsg=?,
+                   color_r=?,color_g=?,color_b=?,line_width=?,visible=?,
+                   interpolation=?,source_file=?,source_format=?,point_count=?,
+                   x_min=?,x_max=?,y_min=?,y_max=?,z_min=?,z_max=?,points_file=?
+                   WHERE name=?""",
+                params[1:] + (surface.name,),
             )
             self.conn.commit()
-            return surface_id
+            return row["id"]
         cur = self.conn.execute(
-            """INSERT INTO surfaces(name,kind,z_units,crs_epsg,display_color,
+            """INSERT INTO surfaces(name,kind,z_domain,z_units,crs_epsg,
+               color_r,color_g,color_b,line_width,visible,interpolation,
                source_file,source_format,point_count,
-               x_min,x_max,y_min,y_max,z_min,z_max,
-               is_gridded,grid_info_json,points_blob)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            params,
+               x_min,x_max,y_min,y_max,z_min,z_max,points_file,created_date)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            params + (_dt.now().isoformat(),),
         )
         self.conn.commit()
         return cur.lastrowid
 
     def get_all_surfaces(self) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT * FROM surfaces ORDER BY id"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in
+                self.conn.execute("SELECT * FROM surfaces ORDER BY id").fetchall()]
 
-    def delete_surface(self, surface_id: int) -> None:
-        self.conn.execute("DELETE FROM surfaces WHERE id=?", (surface_id,))
+    def delete_surface_by_name(self, name: str) -> None:
+        self.conn.execute("DELETE FROM surfaces WHERE name=?", (name,))
         self.conn.commit()

@@ -346,7 +346,7 @@ class MapView(QWidget):
                 all_y.append(well.y)
         for surf in proj.surfaces:
             try:
-                xmn, xmx, ymn, ymx = surf.extent()
+                xmn, ymn, xmx, ymx = surf.bounds()
                 if xmx > xmn and ymx > ymn:
                     all_x.extend([xmn, xmx])
                     all_y.extend([ymn, ymx])
@@ -525,16 +525,15 @@ class MapView(QWidget):
                           fontsize=7, color=_WELL_COLOR, va="bottom", zorder=5)
 
     def _render_surfaces(self) -> None:
-        for surf in self._state.project.surfaces:
-            color = getattr(surf, "display_color", _SURFACE_COLOR)
-            xmin, xmax, ymin, ymax = surf.extent()
+        for surf in self._state.get_visible_surfaces():
+            color = surf.display_color
+            xmin, ymin, xmax, ymax = surf.bounds()
             if xmin == xmax or ymin == ymax:
                 continue
-            # Try contour map using map xlim/ylim for sampling
+            # Contour map clipped to visible extent
             try:
                 xl = self._ax.get_xlim()
                 yl = self._ax.get_ylim()
-                # Clip grid to surface extent
                 gx0 = max(xl[0], xmin); gx1 = min(xl[1], xmax)
                 gy0 = max(yl[0], ymin); gy1 = min(yl[1], ymax)
                 if gx1 > gx0 and gy1 > gy0:
@@ -543,14 +542,12 @@ class MapView(QWidget):
                     ys_g = np.linspace(gy0, gy1, ny)
                     xx, yy = np.meshgrid(xs_g, ys_g)
                     zz = surf.sample_many(xx.ravel(), yy.ravel()).reshape(ny, nx)
-                    valid = np.isfinite(zz)
-                    if valid.sum() > 20:
+                    if np.isfinite(zz).sum() > 20:
                         self._ax.contour(xx, yy, zz, levels=6,
                                          colors=[color], linewidths=0.7,
                                          alpha=0.7, zorder=2)
             except Exception:
                 pass
-            # Always draw extent outline as fallback / reference
             rect = Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
                               fill=False, edgecolor=color,
                               linewidth=0.8, linestyle="--", alpha=0.5, zorder=2)

@@ -1765,10 +1765,14 @@ class SectionView(QWidget):
 
     def _render_surfaces(self, section: Section) -> None:
         aoi = getattr(self._state.project, "aoi", None)
-        for surf in self._state.project.surfaces:
-            distances, z_values = surf.profile_along_section(section, n_samples=500)
+        surfaces = self._state.get_visible_surfaces()
+        for surf in surfaces:
+            try:
+                distances, z_values = surf.intersect_section(section, n_samples=200)
+            except Exception:
+                continue
 
-            # Clip to AOI when set
+            # AOI masking
             if aoi is not None:
                 try:
                     map_pts = np.array([section.section_to_map(d) for d in distances])
@@ -1777,28 +1781,32 @@ class SectionView(QWidget):
                 except Exception:
                     pass
 
+            # Z domain conversion when seismic is in TWT and surface is in depth (or vice versa)
+            sds = getattr(section, "seismic_display", None)
+            vel = sds.constant_velocity if sds else 2000.0
+            if getattr(surf, "z_domain", "depth_m") == "twt_ms" and section.depth_domain != "twt":
+                z_values = z_values * vel / 2000.0   # TWT ms → depth m
+
             valid = ~np.isnan(z_values)
             if not np.any(valid):
                 continue
 
-            color = getattr(surf, "display_color", "#E87722")
+            color = surf.display_color
             kind  = getattr(surf, "kind", "horizon")
             ls    = "--" if kind == "fault" else "-"
-            lw    = 1.2 if kind == "fault" else 1.5
+            lw    = float(getattr(surf, "line_width", 1.5))
 
+            z_masked = np.ma.masked_invalid(z_values)
             self._overlay_artists.extend(
-                self._ax.plot(distances[valid], z_values[valid],
-                              color=color, linewidth=lw, linestyle=ls,
-                              alpha=0.9, zorder=6)
+                self._ax.plot(distances, z_masked, color=color,
+                              linewidth=lw, linestyle=ls, alpha=0.9, zorder=6)
             )
-            # Label at section midpoint if valid there
+            # Name label at the midpoint of valid data
             mid = len(distances) // 2
             if valid[mid]:
                 self._overlay_artists.append(
-                    self._ax.text(
-                        distances[mid], z_values[mid], f" {surf.name}",
-                        fontsize=6, color=color, va="bottom", zorder=6,
-                    )
+                    self._ax.text(distances[mid], z_values[mid], f" {surf.name}",
+                                  fontsize=6, color=color, va="bottom", zorder=6)
                 )
 
     def _render_polygons(self, section: Section) -> None:

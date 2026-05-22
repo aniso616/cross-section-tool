@@ -1112,7 +1112,7 @@ class MainWindow(QMainWindow):
 
     def _on_import_surface(self) -> None:
         """Import → Surface: load an XYZ surface file."""
-        from section_tool.io.surface_readers import supported_extensions
+        from section_tool.io.surface_readers import read_surface, supported_extensions
         exts = " ".join(f"*{e}" for e in supported_extensions())
         path, _ = QFileDialog.getOpenFileName(
             self, "Import Surface",
@@ -1120,25 +1120,21 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        from PySide6.QtWidgets import QInputDialog
-        from section_tool.io.surface_readers import load_surface
-        import os
-        default_name = os.path.splitext(os.path.basename(path))[0]
-        name, ok = QInputDialog.getText(self, "Surface Name", "Name:", text=default_name)
-        if not ok:
-            name = default_name
-        crs = self._state.project.crs_epsg
+        crs = self._state.project_crs_epsg
         try:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            surf = load_surface(path, name=name.strip() or default_name, crs_epsg=crs)
+            surf = read_surface(path, crs_epsg=crs)
             self._state.add_surface(surf)
             self._section_view.render()
             self._map_view.render()
+            b = surf.bounds()
+            zr = surf.z_range()
             QMessageBox.information(
                 self, "Surface Loaded",
-                f"'{surf.name}'\n{surf.n_points:,} points loaded.\n"
-                f"Extent: {surf.extent()[0]:.0f}–{surf.extent()[1]:.0f} E, "
-                f"{surf.extent()[2]:.0f}–{surf.extent()[3]:.0f} N",
+                f"'{surf.name}'\nFormat: {surf.source_format}\n"
+                f"Points: {surf.n_points:,}\n"
+                f"Z domain: {surf.z_domain}  range: {zr[0]:.1f}–{zr[1]:.1f}\n"
+                f"Bounds: {b[0]:.0f}–{b[2]:.0f} E, {b[1]:.0f}–{b[3]:.0f} N",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))

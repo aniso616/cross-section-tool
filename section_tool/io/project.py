@@ -211,17 +211,13 @@ def _save_surfaces(f: h5py.File, surfaces: list[Surface]) -> None:
     for i, surf in enumerate(surfaces):
         sg = grp.create_group(str(i))
         sg.attrs["name"] = surf.name
-        sg.attrs["kind"] = surf.kind
-        sg.attrs["z_units"] = surf.z_units
-        sg.attrs["crs_epsg"] = surf.crs_epsg
-        sg.attrs["is_grid"] = int(surf._is_grid)
-        sg.create_dataset("x", data=surf._x, dtype="float64")
-        sg.create_dataset("y", data=surf._y, dtype="float64")
-        sg.create_dataset("z", data=surf._z, dtype="float64")
-        if surf._is_grid:
-            sg.create_dataset("grid_x", data=surf._grid_x, dtype="float64")
-            sg.create_dataset("grid_y", data=surf._grid_y, dtype="float64")
-            sg.create_dataset("grid_z", data=surf._grid_z, dtype="float64")
+        sg.attrs["kind"] = getattr(surf, "kind", "horizon")
+        sg.attrs["z_domain"] = getattr(surf, "z_domain", "depth_m")
+        sg.attrs["z_units"] = getattr(surf, "z_units", "m")
+        sg.attrs["crs_epsg"] = getattr(surf, "crs_epsg", 0)
+        pts = surf.points if hasattr(surf, "points") else None
+        if pts is not None:
+            sg.create_dataset("points", data=pts.astype(np.float64))
 
 
 def _save_horizon_picks_group(
@@ -362,16 +358,21 @@ def _load_surfaces(f: h5py.File) -> list[Surface]:
     result = []
     for k in _sorted_keys(grp):
         sg = grp[k]
-        kwargs = dict(
-            name=_str(sg.attrs.get("name", "")),
-            kind=_str(sg.attrs.get("kind", "horizon")),
-            z_units=_str(sg.attrs.get("z_units", "m")),
-            crs_epsg=int(sg.attrs.get("crs_epsg", 32632)),
-        )
-        if bool(sg.attrs.get("is_grid", 0)):
-            surf = Surface.from_grid(sg["grid_x"][:], sg["grid_y"][:], sg["grid_z"][:], **kwargs)
+        name      = _str(sg.attrs.get("name", ""))
+        kind      = _str(sg.attrs.get("kind", "horizon"))
+        z_domain  = _str(sg.attrs.get("z_domain", "depth_m"))
+        z_units   = _str(sg.attrs.get("z_units", "m"))
+        crs_epsg  = int(sg.attrs.get("crs_epsg", 0))
+        if "points" in sg:
+            pts = sg["points"][:]
+        elif "x" in sg:
+            pts = np.column_stack([sg["x"][:], sg["y"][:], sg["z"][:]])
         else:
-            surf = Surface(sg["x"][:], sg["y"][:], sg["z"][:], **kwargs)
+            continue
+        surf = Surface(
+            name=name, points=pts.astype(np.float64),
+            crs_epsg=crs_epsg, z_domain=z_domain, z_units=z_units, kind=kind,
+        )
         result.append(surf)
     return result
 

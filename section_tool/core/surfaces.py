@@ -1,183 +1,205 @@
+"""3D geological surface data model with section intersection.
+
+Primary representation: irregular point cloud (N, 3) with on-demand
+Delaunay interpolation. Regular grids are detected automatically and
+use bilinear lookup for fast section intersection.
+"""
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Literal, Optional
 
 import numpy as np
-from scipy.interpolate import LinearNDInterpolator, RegularGridInterpolator
 
 
+# ---------------------------------------------------------------------------
+# Grid metadata
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GridInfo:
+    """Optional metadata for surfaces that happen to lie on a regular grid."""
+    origin: tuple           # (x0, y0)
+    step_x: tuple           # (dx_x, dx_y) — supports rotated grids
+    step_y: tuple           # (dy_x, dy_y)
+    nx: int
+    ny: int
+    inline_range: tuple = None   # (il_min, il_max) — populated by survey readers
+    xline_range: tuple = None    # (xl_min, xl_max)
+
+
+# ---------------------------------------------------------------------------
+# Surface
+# ---------------------------------------------------------------------------
+
+@dataclass
 class Surface:
-    """Map-space 2.5D surface: (x, y) → z, stored as scattered or regular-grid data."""
+    """3D surface stored as irregular points with on-demand interpolation.
 
-    def __init__(
-        self,
-        x: list | np.ndarray,
-        y: list | np.ndarray,
-        z: list | np.ndarray,
-        name: str = "",
-        kind: Literal["horizon", "fault", "unconformity"] = "horizon",
-        z_units: Literal["m", "ft", "ms", "km", "s"] = "m",
-        crs_epsg: int = 32632,
-        display_color: str = "#E87722",
-        source_file: str | None = None,
-        source_format: str | None = None,
-    ) -> None:
-        x = np.asarray(x, dtype=float).ravel()
-        y = np.asarray(y, dtype=float).ravel()
-        z = np.asarray(z, dtype=float).ravel()
-        if not (len(x) == len(y) == len(z)):
-            raise ValueError("x, y, z must have the same length")
-        if len(x) < 3:
-            raise ValueError("Surface requires at least 3 points")
-        self._x = x
-        self._y = y
-        self._z = z
-        self._is_grid = False
-        self._interp = None
-        self._hull = None   # lazy shapely convex hull
-        self.name = name
-        self.kind: Literal["horizon", "fault", "unconformity"] = kind
-        self.z_units: Literal["m", "ft", "ms", "km", "s"] = z_units
-        self.crs_epsg = int(crs_epsg)
-        self.display_color: str = display_color
-        self.source_file: str | None = source_file
-        self.source_format: str | None = source_format
+    All coordinates in geographic CRS. Z values may be depth, TWT, or
+    elevation depending on z_domain. Section views handle domain conversion.
+    """
 
-    @property
-    def z_domain(self):
-        """Return a :class:`~section_tool.core.zdomain.ZDomain` for this surface."""
-        from section_tool.core.zdomain import ZDomain
-        _map = {"ft": ZDomain.DEPTH_FT, "km": ZDomain.DEPTH_KM,
-                "ms": ZDomain.TWT_MS,   "s":  ZDomain.TWT_S}
-        return _map.get(self.z_units, ZDomain.DEPTH_M)
+    name: str
+    points: np.ndarray          # shape (N, 3): X, Y, Z columns
+    crs_epsg: int = 0
+    z_domain: str = "depth_m"   # 'depth_m', 'twt_ms', 'twt_s', 'elevation_m'
+    z_units: str = "m"
+    color: tuple = (255, 165, 0)  # RGB 0-255, orange default
+    line_width: float = 1.5
+    source_file: str | None = None
+    source_format: str | None = None
+    interpolation: str = "linear"   # 'linear', 'nearest'
+    visible: bool = True
+    grid_info: Optional[GridInfo] = None
+    kind: str = "horizon"           # 'horizon', 'fault', 'unconformity'
 
-    @property
-    def convex_hull(self):
-        """Shapely Polygon of the data point convex hull (lazy, cached)."""
-        if self._hull is None:
-            import shapely
-            self._hull = shapely.convex_hull(
-                shapely.multipoints(np.column_stack([self._x, self._y]))
-            )
-        return self._hull
+    # Private lazy-built interpolator — excluded from repr/compare/init
+    _interpolator: object = field(default=None, repr=False, compare=False, init=False)
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
 
     @property
     def n_points(self) -> int:
-        return len(self._x)
+        return len(self.points) if self.points is not None else 0
 
-    @classmethod
-    def from_grid(
-        cls,
-        x_coords: list | np.ndarray,
-        y_coords: list | np.ndarray,
-        z_grid: list | np.ndarray,
-        **kwargs,
-    ) -> "Surface":
-        """Construct from a regular grid.
+    @property
+    def display_color(self) -> str:
+        """Hex colour string (for matplotlib)."""
+        r, g, b = self.color
+        return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
-        x_coords: 1D sorted array of x values, shape (nx,)
-        y_coords: 1D sorted array of y values, shape (ny,)
-        z_grid:   2D array of z values, shape (ny, nx) — z_grid[i, j] is at
-                  (x_coords[j], y_coords[i])
-        """
-        x_coords = np.asarray(x_coords, dtype=float)
-        y_coords = np.asarray(y_coords, dtype=float)
-        z_grid = np.asarray(z_grid, dtype=float)
-        if z_grid.shape != (len(y_coords), len(x_coords)):
-            raise ValueError(
-                f"z_grid shape {z_grid.shape} must be (ny={len(y_coords)}, nx={len(x_coords)})"
-            )
-        xx, yy = np.meshgrid(x_coords, y_coords)
-        inst = cls(xx.ravel(), yy.ravel(), z_grid.ravel(), **kwargs)
-        inst._is_grid = True
-        inst._grid_x = x_coords
-        inst._grid_y = y_coords
-        inst._grid_z = z_grid
-        inst._hull = None
-        return inst
+    def bounds(self) -> tuple[float, float, float, float]:
+        """Return (xmin, ymin, xmax, ymax) bounding box."""
+        if self.n_points == 0:
+            return (0.0, 0.0, 0.0, 0.0)
+        return (
+            float(self.points[:, 0].min()),
+            float(self.points[:, 1].min()),
+            float(self.points[:, 0].max()),
+            float(self.points[:, 1].max()),
+        )
+
+    def extent(self) -> tuple[float, float, float, float]:
+        """Return (xmin, xmax, ymin, ymax) — backward-compat alias for bounds()."""
+        b = self.bounds()
+        return b[0], b[2], b[1], b[3]
+
+    def z_range(self) -> tuple[float, float]:
+        """Return (zmin, zmax) of valid (finite) Z values."""
+        if self.n_points == 0:
+            return (0.0, 0.0)
+        z = self.points[:, 2]
+        valid = z[np.isfinite(z)]
+        if len(valid) == 0:
+            return (0.0, 0.0)
+        return (float(valid.min()), float(valid.max()))
 
     # ------------------------------------------------------------------
-    # Internal
+    # Interpolation
     # ------------------------------------------------------------------
 
     def _build_interpolator(self) -> None:
-        if self._is_grid:
-            self._interp = RegularGridInterpolator(
-                (self._grid_y, self._grid_x),
-                self._grid_z,
-                method="linear",
-                bounds_error=False,
-                fill_value=np.nan,
-            )
+        """Build lazy scipy interpolator from point cloud."""
+        from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+        xy = self.points[:, :2]
+        z  = self.points[:, 2]
+        if self.interpolation == "nearest":
+            self._interpolator = NearestNDInterpolator(xy, z)
         else:
-            self._interp = LinearNDInterpolator(
-                np.column_stack([self._x, self._y]),
-                self._z,
-                fill_value=np.nan,
-            )
+            self._interpolator = LinearNDInterpolator(xy, z, fill_value=np.nan)
 
-    def _ensure_interp(self) -> None:
-        if self._interp is None:
+    def z_along_polyline(self, xy_points: np.ndarray) -> np.ndarray:
+        """Interpolate Z at an (M, 2) array of (x, y) positions.
+
+        Returns an (M,) array; NaN where the surface has no data coverage.
+        """
+        if self.n_points < 3:
+            return np.full(len(xy_points), np.nan)
+        if self._interpolator is None:
             self._build_interpolator()
-
-    # ------------------------------------------------------------------
-    # Sampling
-    # ------------------------------------------------------------------
-
-    def sample(self, x: float, y: float) -> float:
-        """Return z at (x, y). Returns nan outside the data extent / convex hull."""
-        self._ensure_interp()
-        if self._is_grid:
-            return float(self._interp([[y, x]])[0])
-        return float(self._interp([[x, y]])[0])
+        return self._interpolator(xy_points).astype(float)
 
     def sample_many(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """Return z values at arrays of (x, y) coordinates."""
+        """Backward-compat wrapper: interpolate Z at separate x/y arrays."""
         xs = np.asarray(xs, dtype=float)
         ys = np.asarray(ys, dtype=float)
-        self._ensure_interp()
-        if self._is_grid:
-            pts = np.column_stack([ys, xs])
-        else:
-            pts = np.column_stack([xs, ys])
-        return self._interp(pts).astype(float)
+        return self.z_along_polyline(np.column_stack([xs, ys]))
 
-    def profile_along_section(
-        self,
-        section,
-        n_samples: int = 200,
+    def sample(self, x: float, y: float) -> float:
+        """Return Z at a single (x, y). Returns NaN outside data extent."""
+        return float(self.z_along_polyline(np.array([[x, y]]))[0])
+
+    # ------------------------------------------------------------------
+    # Section intersection
+    # ------------------------------------------------------------------
+
+    def intersect_section(
+        self, section, n_samples: int = 200
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Sample the surface along *section*, returning (distances, z_values).
+        """Return (distances, z_values) along *section*'s polyline.
 
-        Both arrays have length *n_samples*, evenly spaced along the polyline.
-        z_values will be nan where the surface has no data.
+        Evenly spaced at *n_samples* positions from 0 to section.total_length().
+        Z is NaN where the surface has no coverage.
         """
-        if n_samples < 2:
-            raise ValueError("n_samples must be at least 2")
-        distances = np.linspace(0.0, section.total_length(), n_samples)
-        map_pts = np.array([section.section_to_map(d) for d in distances])
-        z_values = self.sample_many(map_pts[:, 0], map_pts[:, 1])
+        total = section.total_length()
+        distances = np.linspace(0.0, total, n_samples)
+        xy = np.array([section.section_to_map(d) for d in distances])
+        z_values = self.z_along_polyline(xy)
         return distances, z_values
 
+    # profile_along_section — backward-compat alias
+    def profile_along_section(
+        self, section, n_samples: int = 200
+    ) -> tuple[np.ndarray, np.ndarray]:
+        return self.intersect_section(section, n_samples)
+
     # ------------------------------------------------------------------
-    # Metadata / geometry helpers
+    # Cache invalidation
     # ------------------------------------------------------------------
 
-    def extent(self) -> tuple[float, float, float, float]:
-        """Return (xmin, xmax, ymin, ymax) bounding box of the data points."""
-        return (
-            float(self._x.min()),
-            float(self._x.max()),
-            float(self._y.min()),
-            float(self._y.max()),
-        )
+    def invalidate_cache(self) -> None:
+        """Call when points are modified externally."""
+        self._interpolator = None
 
     def __repr__(self) -> str:
-        storage = "grid" if self._is_grid else "scattered"
         return (
             f"Surface(name={self.name!r}, n_points={self.n_points}, "
-            f"kind={self.kind!r}, z_units={self.z_units!r}, storage={storage!r})"
+            f"z_domain={self.z_domain!r}, visible={self.visible})"
         )
+
+
+# ---------------------------------------------------------------------------
+# Grid detection helper
+# ---------------------------------------------------------------------------
+
+def detect_grid(
+    points: np.ndarray, tolerance: float = 0.01
+) -> Optional[GridInfo]:
+    """Return a GridInfo if *points* lie on a regular axis-aligned grid, else None."""
+    if len(points) < 4:
+        return None
+    xs = np.unique(points[:, 0])
+    ys = np.unique(points[:, 1])
+    if len(xs) * len(ys) != len(points):
+        return None
+    dx = np.diff(xs)
+    dy = np.diff(ys)
+    if len(dx) == 0 or len(dy) == 0:
+        return None
+    if dx.std() / max(abs(dx.mean()), 1e-12) > tolerance:
+        return None
+    if dy.std() / max(abs(dy.mean()), 1e-12) > tolerance:
+        return None
+    return GridInfo(
+        origin=(float(xs[0]), float(ys[0])),
+        step_x=(float(dx.mean()), 0.0),
+        step_y=(0.0, float(dy.mean())),
+        nx=len(xs),
+        ny=len(ys),
+    )
 
 
 # ---------------------------------------------------------------------------

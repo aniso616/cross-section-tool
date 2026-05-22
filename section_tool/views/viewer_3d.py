@@ -322,9 +322,10 @@ class Viewer3D(QWidget):
         for well in self._state.project.wells:
             depths.append(well.deviation.max_tvd)
         for surf in self._state.project.surfaces:
-            valid = surf._z[~np.isnan(surf._z)]
-            if len(valid) > 0:
-                depths.append(float(valid.max()))
+            try:
+                depths.append(surf.z_range()[1])
+            except Exception:
+                pass
         for pick in self._state.project.horizon_picks:
             valid = pick.depths[~np.isnan(pick.depths)]
             if len(valid) > 0:
