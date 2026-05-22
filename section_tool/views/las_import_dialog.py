@@ -7,7 +7,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QRadioButton, QScrollArea,
     QSizePolicy, QTextEdit, QVBoxLayout, QWidget,
@@ -255,16 +255,21 @@ class LASImportDialog(QDialog):
         vl = QVBoxLayout(grp)
 
         proj_name = _crs_name(self._project_crs)
+        self._crs_group = QButtonGroup(self)
+        self._crs_group.setExclusive(True)
+
         self._crs_same = QRadioButton(
             f"Same as project  (EPSG:{self._project_crs} — {proj_name})"
         )
         self._crs_same.setChecked(True)
+        self._crs_group.addButton(self._crs_same, 0)
         vl.addWidget(self._crs_same)
 
         spec_row = QWidget()
         sr = QHBoxLayout(spec_row)
         sr.setContentsMargins(0, 0, 0, 0)
         self._crs_specify = QRadioButton("Specify CRS:  EPSG")
+        self._crs_group.addButton(self._crs_specify, 1)
         sr.addWidget(self._crs_specify)
         self._epsg_edit = QLineEdit()
         self._epsg_edit.setFixedWidth(72)
@@ -279,6 +284,7 @@ class LASImportDialog(QDialog):
         self._crs_manual = QRadioButton(
             "Unknown — place manually on map after import"
         )
+        self._crs_group.addButton(self._crs_manual, 2)
         vl.addWidget(self._crs_manual)
 
         self._transform_note = QLabel("")

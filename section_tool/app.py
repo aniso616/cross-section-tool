@@ -1584,7 +1584,7 @@ class MainWindow(QMainWindow):
         """New section with user-specified azimuth, length, and origin."""
         import math
         from PySide6.QtWidgets import (
-            QDialog, QDialogButtonBox, QFormLayout, QDoubleSpinBox,
+            QButtonGroup, QDialog, QDialogButtonBox, QFormLayout, QDoubleSpinBox,
             QGroupBox, QRadioButton, QVBoxLayout,
         )
         dlg = QDialog(self); dlg.setWindowTitle("New User-Defined Section")
@@ -1607,6 +1607,10 @@ class MainWindow(QMainWindow):
         rb_center = QRadioButton("Center point (section extends half-length each way)")
         rb_start  = QRadioButton("Start point (section extends full length along azimuth)")
         rb_center.setChecked(True)
+        origin_grp = QButtonGroup(dlg)
+        origin_grp.setExclusive(True)
+        origin_grp.addButton(rb_center, 0)
+        origin_grp.addButton(rb_start, 1)
         ovb.addWidget(rb_center); ovb.addWidget(rb_start)
         ofl = QFormLayout()
         x_spin = QDoubleSpinBox(); x_spin.setRange(-1e8, 1e8); x_spin.setDecimals(1)
@@ -2732,9 +2736,30 @@ class SectionMainWindow(MainWindow):
         QShortcut(QKeySequence("Ctrl+5"), self, self._toggle_properties_panel)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
 
-        # 14. Show maximized; apply proportions after event loop starts.
+        # 14. Belt-and-suspenders: any state change re-renders all views.
+        # Individual object signals already connect to view renders, but
+        # project_changed as a catch-all ensures nothing is missed.
+        for _sig in (
+            self._state.project_changed,
+            self._state.surface_added, self._state.surface_removed,
+            self._state.surface_modified,
+        ):
+            _sig.connect(self._force_render_all)
+
+        # 15. Show maximized; apply proportions after event loop starts.
         self.showMaximized()
         QTimer.singleShot(80, self._apply_default_proportions)
+
+    def _force_render_all(self, *_args) -> None:
+        """Ensure every view re-renders after any project state change."""
+        self._section_view.request_render()
+        self._map_view.request_render()
+        # Mark minimap dirty so it repaints on its next 1-second tick
+        if hasattr(self, "hud") and hasattr(self.hud, "map_inset"):
+            mi = self.hud.map_inset
+            if mi is not None:
+                mi._dirty = True
+                mi._timer.start()
 
     def _build_tiled_toolbar(self) -> None:
         """Minimal toolbar: Save, Undo, Redo + section info on the right."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QGroupBox, QLabel,
+    QButtonGroup, QDialog, QDialogButtonBox, QGroupBox, QLabel,
     QRadioButton, QVBoxLayout,
 )
 
@@ -55,10 +55,14 @@ class ImportFileDialog(QDialog):
         grp = QGroupBox("How to store this file")
         vl = QVBoxLayout(grp)
 
+        self._storage_group = QButtonGroup(self)
+        self._storage_group.setExclusive(True)
+
         self._copy_rb = QRadioButton(
             "Copy into project folder  (self-contained, portable)"
         )
         self._copy_rb.setChecked(True)
+        self._storage_group.addButton(self._copy_rb, 0)
         vl.addWidget(self._copy_rb)
 
         if dest_dir:
@@ -69,6 +73,7 @@ class ImportFileDialog(QDialog):
         self._ref_rb = QRadioButton(
             "Reference original location  (lighter, breaks if file moves)"
         )
+        self._storage_group.addButton(self._ref_rb, 1)
         vl.addWidget(self._ref_rb)
 
         orig_lbl = QLabel(f"   Original: {source_path}")

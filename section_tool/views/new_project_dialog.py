@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
@@ -135,9 +135,13 @@ class NewProjectDialog(QDialog):
         du_row = QWidget()
         du_rl = QHBoxLayout(du_row)
         du_rl.setContentsMargins(0, 0, 0, 0)
+        self._depth_units_group = QButtonGroup(self)
+        self._depth_units_group.setExclusive(True)
         self._depth_m_rb = QRadioButton("Metres")
         self._depth_ft_rb = QRadioButton("Feet")
         self._depth_m_rb.setChecked(True)
+        self._depth_units_group.addButton(self._depth_m_rb, 0)
+        self._depth_units_group.addButton(self._depth_ft_rb, 1)
         du_rl.addWidget(self._depth_m_rb)
         du_rl.addWidget(self._depth_ft_rb)
         du_rl.addStretch()
@@ -147,9 +151,13 @@ class NewProjectDialog(QDialog):
         dd_row = QWidget()
         dd_rl = QHBoxLayout(dd_row)
         dd_rl.setContentsMargins(0, 0, 0, 0)
+        self._domain_group = QButtonGroup(self)
+        self._domain_group.setExclusive(True)
         self._domain_md_rb = QRadioButton("Measured Depth")
         self._domain_twt_rb = QRadioButton("Two-Way Time")
         self._domain_md_rb.setChecked(True)
+        self._domain_group.addButton(self._domain_md_rb, 0)
+        self._domain_group.addButton(self._domain_twt_rb, 1)
         dd_rl.addWidget(self._domain_md_rb)
         dd_rl.addWidget(self._domain_twt_rb)
         dd_rl.addStretch()
