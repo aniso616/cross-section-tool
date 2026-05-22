@@ -1125,21 +1125,25 @@ class MainWindow(QMainWindow):
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             surf = read_surface(path, crs_epsg=crs)
             self._state.add_surface(surf)
-            self._section_view.render()
-            self._map_view.render()
             b = surf.bounds()
             zr = surf.z_range()
-            QMessageBox.information(
-                self, "Surface Loaded",
-                f"'{surf.name}'\nFormat: {surf.source_format}\n"
-                f"Points: {surf.n_points:,}\n"
-                f"Z domain: {surf.z_domain}  range: {zr[0]:.1f}–{zr[1]:.1f}\n"
-                f"Bounds: {b[0]:.0f}–{b[2]:.0f} E, {b[1]:.0f}–{b[3]:.0f} N",
-            )
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
+            return
         finally:
             QApplication.restoreOverrideCursor()
+
+        # Show info THEN render — QMessageBox blocks the event loop, so draw_idle()
+        # calls inside render() would never paint until after the dialog anyway.
+        QMessageBox.information(
+            self, "Surface Loaded",
+            f"'{surf.name}'\nFormat: {surf.source_format}\n"
+            f"Points: {surf.n_points:,}\n"
+            f"Z domain: {surf.z_domain}  range: {zr[0]:.1f}–{zr[1]:.1f}\n"
+            f"Bounds: {b[0]:.0f}–{b[2]:.0f} E, {b[1]:.0f}–{b[3]:.0f} N",
+        )
+        self._section_view.render()
+        self._map_view.render()
 
     def _on_set_aoi(self) -> None:
         """Tools → Set AOI: define a rectangular area of interest."""

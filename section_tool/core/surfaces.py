@@ -53,6 +53,7 @@ class Surface:
     visible: bool = True
     grid_info: Optional[GridInfo] = None
     kind: str = "horizon"           # 'horizon', 'fault', 'unconformity'
+    map_display: str = "bbox"       # 'bbox', 'contours', 'points', 'none'
 
     # Private lazy-built interpolator — excluded from repr/compare/init
     _interpolator: object = field(default=None, repr=False, compare=False, init=False)

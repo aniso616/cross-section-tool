@@ -530,34 +530,48 @@ class MapView(QWidget):
 
     def _render_surfaces(self) -> None:
         for surf in self._state.get_visible_surfaces():
+            mode = getattr(surf, "map_display", "bbox")
+            if mode == "none":
+                continue
             color = surf.display_color
             xmin, ymin, xmax, ymax = surf.bounds()
             if xmin == xmax or ymin == ymax:
                 continue
-            # Contour map clipped to visible extent
-            try:
-                xl = self._ax.get_xlim()
-                yl = self._ax.get_ylim()
-                gx0 = max(xl[0], xmin); gx1 = min(xl[1], xmax)
-                gy0 = max(yl[0], ymin); gy1 = min(yl[1], ymax)
-                if gx1 > gx0 and gy1 > gy0:
-                    nx, ny = 60, 60
-                    xs_g = np.linspace(gx0, gx1, nx)
-                    ys_g = np.linspace(gy0, gy1, ny)
-                    xx, yy = np.meshgrid(xs_g, ys_g)
-                    zz = surf.sample_many(xx.ravel(), yy.ravel()).reshape(ny, nx)
-                    if np.isfinite(zz).sum() > 20:
-                        self._ax.contour(xx, yy, zz, levels=6,
-                                         colors=[color], linewidths=0.7,
-                                         alpha=0.7, zorder=2)
-            except Exception:
-                pass
+
+            # Bounding box — always shown unless mode is 'none'
             rect = Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
                               fill=False, edgecolor=color,
-                              linewidth=0.8, linestyle="--", alpha=0.5, zorder=2)
+                              linewidth=0.8, linestyle="--", alpha=0.6, zorder=2)
             self._ax.add_patch(rect)
             self._ax.text(xmin, ymax, f" {surf.name}",
                           fontsize=6, color=color, va="bottom", zorder=5)
+
+            if mode == "points":
+                pts = surf.points
+                if pts is not None and len(pts) > 0:
+                    # Subsample to prevent flooding the map
+                    n = len(pts)
+                    step = max(1, n // 2000)
+                    s = pts[::step]
+                    self._ax.scatter(s[:, 0], s[:, 1],
+                                     c=[color], s=0.5, alpha=0.3, zorder=3)
+
+            elif mode == "contours":
+                try:
+                    xl = self._ax.get_xlim(); yl = self._ax.get_ylim()
+                    gx0 = max(xl[0], xmin); gx1 = min(xl[1], xmax)
+                    gy0 = max(yl[0], ymin); gy1 = min(yl[1], ymax)
+                    if gx1 > gx0 and gy1 > gy0:
+                        xs_g = np.linspace(gx0, gx1, 60)
+                        ys_g = np.linspace(gy0, gy1, 60)
+                        xx, yy = np.meshgrid(xs_g, ys_g)
+                        zz = surf.sample_many(xx.ravel(), yy.ravel()).reshape(60, 60)
+                        if np.isfinite(zz).sum() > 20:
+                            self._ax.contour(xx, yy, zz, levels=6,
+                                             colors=[color], linewidths=0.7,
+                                             alpha=0.7, zorder=2)
+                except Exception:
+                    pass
 
     def _render_seismic_coverage(self) -> None:
         """Draw each SEG-Y survey's spatial extent as a semi-transparent box."""
