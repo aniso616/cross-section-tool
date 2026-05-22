@@ -731,6 +731,7 @@ class ProjectPanel(QDockWidget):
                 w = proj.wells[idx]
                 return {
                     "name": w.name,
+                    "color": getattr(w, "color", "#E8C46A"),
                     "x": w.x, "y": w.y,
                     "kb_elevation": w.kb,
                     "td": w.deviation.max_tvd if w.deviation else 0,
@@ -794,6 +795,9 @@ class ProjectPanel(QDockWidget):
 
             elif cat == "Polygons" and idx < len(proj.polygons):
                 poly = copy.deepcopy(proj.polygons[idx])
+                # "color" from quick-change maps to fill_color
+                if "color" in values:
+                    poly.fill_color = values["color"]
                 if "fill_color" in values:
                     poly.fill_color = values["fill_color"]
                 if "fill_opacity" in values:
@@ -803,6 +807,24 @@ class ProjectPanel(QDockWidget):
                 if "name" in values:
                     poly.name = values["name"]
                 self._state.update_polygon(idx, poly)
+
+            elif cat == "Wells" and idx < len(proj.wells):
+                import copy as _copy
+                well = _copy.deepcopy(proj.wells[idx])
+                if "color" in values:
+                    well.color = values["color"]
+                if "x" in values:
+                    well.x = float(values["x"])
+                if "y" in values:
+                    well.y = float(values["y"])
+                if "kb_elevation" in values:
+                    well.kb = float(values["kb_elevation"])
+                if "name" in values and values["name"]:
+                    well.name = values["name"]
+                self._state.update_well(idx, well)
+                row = self._row_widgets.get((cat, idx))
+                if row and "color" in values:
+                    row.set_color(values["color"])
 
             elif cat == "Sections" and idx < len(proj.sections):
                 sec = copy.deepcopy(proj.sections[idx])

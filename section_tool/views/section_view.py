@@ -1996,9 +1996,10 @@ class SectionView(QWidget):
                 continue
 
             # 1. Well stick — drawn first (lowest zorder) so log curves render on top
+            well_color = getattr(well, "color", "#E8E4D0")
             self._overlay_artists.extend(
                 self._ax.plot([collar_dist, collar_dist], [0.0, well_bottom],
-                              color="#E8E4D0", linewidth=2.0,
+                              color=well_color, linewidth=2.0,
                               solid_capstyle="butt", zorder=8))
 
             # 2. Deviated trajectory overlay (only adds value for non-vertical wells)
@@ -2016,7 +2017,7 @@ class SectionView(QWidget):
                     label,
                     xy=(collar_dist, 0.0),
                     xytext=(4, 4), textcoords="offset points",
-                    fontsize=7, color="#C8C4B0", zorder=10,
+                    fontsize=7, color=well_color, zorder=10,
                     ha="left", va="bottom",
                 ))
 

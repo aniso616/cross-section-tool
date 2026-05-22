@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QDockWidget,
-    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QScrollArea,
     QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
@@ -44,16 +44,42 @@ def _val_label(text: str) -> QLabel:
     return lbl
 
 
-def _form() -> QFormLayout:
-    """Compact single-line QFormLayout: label on left, value on right."""
-    f = QFormLayout()
-    f.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
-    f.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    f.setVerticalSpacing(3)
-    f.setHorizontalSpacing(8)
-    f.setContentsMargins(4, 2, 4, 2)
-    return f
+def _grid():
+    """Return (QGridLayout, add_row_fn).
+
+    add_row_fn(label_text, value) appends one property row. *value* may be a
+    str (rendered as a read-only QLabel) or any QWidget. Labels are fixed at
+    70px wide with no word-wrap so they never overlap the value column.
+    """
+    g = QGridLayout()
+    g.setContentsMargins(4, 2, 4, 2)
+    g.setHorizontalSpacing(8)
+    g.setVerticalSpacing(3)
+    g.setColumnStretch(0, 0)          # label column — fixed
+    g.setColumnStretch(1, 1)          # value column — expands
+    g.setColumnMinimumWidth(0, 70)
+
+    _row = [0]
+
+    def add_row(label_text: str, value) -> None:
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("color: #888888; font-size: 8pt;")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl.setFixedWidth(70)
+        lbl.setWordWrap(False)
+        g.addWidget(lbl, _row[0], 0,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if isinstance(value, str):
+            val = QLabel(str(value) if value else "—")
+            val.setStyleSheet("color: #CCCCCC; font-size: 8pt;")
+            val.setWordWrap(False)
+            g.addWidget(val, _row[0], 1,
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        else:
+            g.addWidget(value, _row[0], 1)
+        _row[0] += 1
+
+    return g, add_row
 
 
 def _swatch(color: str) -> QLabel:
@@ -92,6 +118,7 @@ class PropertiesPanel(QDockWidget):
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
         self.setMinimumWidth(220)
+        self.setMaximumWidth(300)
 
         # Scrollable inner area
         scroll = QScrollArea()
@@ -194,67 +221,60 @@ class PropertiesPanel(QDockWidget):
     def _build_default(self) -> None:
         proj = self._state.project
         self._layout.addWidget(_sep_label("Project"))
-        form = _form()
-        form.addRow("Name:",      _val_label(proj.name or "Untitled"))
-        form.addRow("CRS:",       _val_label(f"EPSG:{proj.crs_epsg}"))
-        form.addRow("Sections:",  _val_label(str(len(proj.sections))))
-        form.addRow("Horizons:",  _val_label(str(len(proj.horizon_picks))))
-        form.addRow("Faults:",    _val_label(str(len(proj.fault_picks))))
-        form.addRow("Polygons:",  _val_label(str(len(proj.polygons))))
-        self._layout.addLayout(form)
+        grid, ar = _grid()
+        ar("Name:",     proj.name or "Untitled")
+        ar("CRS:",      f"EPSG:{proj.crs_epsg}")
+        ar("Sections:", str(len(proj.sections)))
+        ar("Horizons:", str(len(proj.horizon_picks)))
+        ar("Faults:",   str(len(proj.fault_picks)))
+        ar("Polygons:", str(len(proj.polygons)))
+        self._layout.addLayout(grid)
         self._layout.addStretch()
 
     def _build_section(self, sec) -> None:
         self._layout.addWidget(_sep_label("Section"))
-        form = _form()
+        grid, ar = _grid()
 
-        # Editable name
         name_ed = QLineEdit(sec.name)
         name_ed.returnPressed.connect(lambda: self._commit_section_name(name_ed.text()))
         name_ed.editingFinished.connect(lambda: self._commit_section_name(name_ed.text()))
-        form.addRow("Name:", name_ed)
+        ar("Name:", name_ed)
 
-        # Active section may still be the old object while section_modified fires;
-        # tolerate not finding it in the list during an in-progress update.
         try:
             idx = self._state.project.sections.index(sec)
-            form.addRow("Index:", _val_label(str(idx)))
+            ar("Index:", str(idx))
         except ValueError:
             pass
-        form.addRow("Nodes:",    _val_label(str(sec.n_nodes)))
-        form.addRow("Length:",   _val_label(f"{sec.total_length():.1f} {sec.depth_units}"))
+        ar("Nodes:",  str(sec.n_nodes))
+        ar("Length:", f"{sec.total_length():.1f} {sec.depth_units}")
 
         try:
             azs = sec.segment_azimuths()
-            az_str = f"{azs[0]:.1f}°" if len(azs) == 1 else f"{azs[0]:.1f}° … {azs[-1]:.1f}°"
+            az_str = f"{azs[0]:.1f}°" if len(azs) == 1 else f"{azs[0]:.1f}°…{azs[-1]:.1f}°"
         except Exception:
             az_str = "—"
-        form.addRow("Azimuth:", _val_label(az_str))
-
-        form.addRow("Domain:",   _val_label(sec.depth_domain))
-        form.addRow("Units:",    _val_label(sec.depth_units))
+        ar("Azimuth:", az_str)
+        ar("Domain:",  sec.depth_domain)
+        ar("Units:",   sec.depth_units)
 
         ve_spin = QDoubleSpinBox()
-        ve_spin.setRange(0.5, 20.0)
-        ve_spin.setSingleStep(0.5)
-        ve_spin.setDecimals(1)
-        ve_spin.blockSignals(True)
-        ve_spin.setValue(sec.vertical_exaggeration)
+        ve_spin.setRange(0.5, 20.0); ve_spin.setSingleStep(0.5); ve_spin.setDecimals(1)
+        ve_spin.blockSignals(True); ve_spin.setValue(sec.vertical_exaggeration)
         ve_spin.blockSignals(False)
         ve_spin.valueChanged.connect(lambda v: self._commit_section_ve(v))
-        form.addRow("VE:", ve_spin)
+        ar("VE:", ve_spin)
 
-        self._layout.addLayout(form)
+        self._layout.addLayout(grid)
         self._layout.addStretch()
 
     def _build_horizon(self, idx: int, hp) -> None:
         self._layout.addWidget(_sep_label("Horizon"))
-        form = _form()
+        grid, ar = _grid()
 
         name_ed = QLineEdit(hp.name)
         name_ed.editingFinished.connect(
             lambda: self._commit_pick_name("Horizons", idx, name_ed.text()))
-        form.addRow("Name:", name_ed)
+        ar("Name:", name_ed)
 
         from section_tool.views.horizon_dialog import CONTACT_TYPES
         ct_combo = QComboBox()
@@ -264,43 +284,41 @@ class PropertiesPanel(QDockWidget):
         ct_combo.blockSignals(True); ct_combo.setCurrentIndex(ci); ct_combo.blockSignals(False)
         ct_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ct("Horizons", idx, ct_combo.currentData()))
-        form.addRow("Type:", ct_combo)
+        ar("Type:", ct_combo)
 
-        color_row = self._make_color_row(hp.color,
-            lambda c: self._commit_pick_color("Horizons", idx, c))
-        form.addRow("Color:", color_row)
+        ar("Color:", self._make_color_row(hp.color,
+            lambda c: self._commit_pick_color("Horizons", idx, c)))
 
         lw = QDoubleSpinBox()
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
         lw.blockSignals(True); lw.setValue(getattr(hp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Horizons", idx, v))
-        form.addRow("Width:", lw)
+        ar("Width:", lw)
 
         fa_ed = QLineEdit(getattr(hp, "formation_above", ""))
         fa_ed.editingFinished.connect(
             lambda: self._commit_pick_formation("Horizons", idx, "above", fa_ed.text()))
-        form.addRow("Fm above:", fa_ed)
+        ar("Fm above:", fa_ed)
 
         fb_ed = QLineEdit(getattr(hp, "formation_below", ""))
         fb_ed.editingFinished.connect(
             lambda: self._commit_pick_formation("Horizons", idx, "below", fb_ed.text()))
-        form.addRow("Fm below:", fb_ed)
+        ar("Fm below:", fb_ed)
 
         n_secs = len({str(s) for s in hp._section_names if s != ""}) if hp.n_picks else 0
-        form.addRow("Picks:",
-            _val_label(f"{hp.n_picks} total on {n_secs} section(s)"))
+        ar("Picks:", f"{hp.n_picks} on {n_secs} section(s)")
 
-        self._layout.addLayout(form)
+        self._layout.addLayout(grid)
         self._layout.addStretch()
 
     def _build_fault(self, idx: int, fp) -> None:
         self._layout.addWidget(_sep_label("Fault"))
-        form = _form()
+        grid, ar = _grid()
 
         name_ed = QLineEdit(fp.name)
         name_ed.editingFinished.connect(
             lambda: self._commit_pick_name("Faults", idx, name_ed.text()))
-        form.addRow("Name:", name_ed)
+        ar("Name:", name_ed)
 
         from section_tool.views.fault_dialog import FAULT_TYPES
         ft_combo = QComboBox()
@@ -310,9 +328,8 @@ class PropertiesPanel(QDockWidget):
         ft_combo.blockSignals(True); ft_combo.setCurrentIndex(fi); ft_combo.blockSignals(False)
         ft_combo.currentIndexChanged.connect(
             lambda _: self._commit_pick_ft("Faults", idx, ft_combo.currentData()))
-        form.addRow("Type:", ft_combo)
+        ar("Type:", ft_combo)
 
-        # Dip direction
         dd_combo = QComboBox()
         dd_combo.addItems(["Right", "Left"])
         _di = 0 if getattr(fp, "dip_direction", "right") == "right" else 1
@@ -320,49 +337,45 @@ class PropertiesPanel(QDockWidget):
         dd_combo.currentIndexChanged.connect(
             lambda i: self._commit_pick_dd("Faults", idx,
                                             "right" if i == 0 else "left"))
-        form.addRow("Dip dir:", dd_combo)
+        ar("Dip dir:", dd_combo)
 
-        color_row = self._make_color_row(fp.color,
-            lambda c: self._commit_pick_color("Faults", idx, c))
-        form.addRow("Color:", color_row)
+        ar("Color:", self._make_color_row(fp.color,
+            lambda c: self._commit_pick_color("Faults", idx, c)))
 
         lw = QDoubleSpinBox()
         lw.setRange(0.5, 6.0); lw.setSingleStep(0.5); lw.setDecimals(1)
         lw.blockSignals(True); lw.setValue(getattr(fp, "line_width", 1.5)); lw.blockSignals(False)
         lw.valueChanged.connect(lambda v: self._commit_pick_lw("Faults", idx, v))
-        form.addRow("Width:", lw)
+        ar("Width:", lw)
 
         n_secs = len({str(s) for s in fp._section_names if s != ""}) if fp.n_picks else 0
-        form.addRow("Picks:",
-            _val_label(f"{fp.n_picks} total on {n_secs} section(s)"))
+        ar("Picks:", f"{fp.n_picks} on {n_secs} section(s)")
 
-        self._layout.addLayout(form)
+        self._layout.addLayout(grid)
         self._layout.addStretch()
 
     def _build_node(self, cat: str, oi: int, pi: int, hp) -> None:
-        self._layout.addWidget(_sep_label(f"Node on: {hp.name or cat[:-1]}"))
-        form = _form()
+        self._layout.addWidget(_sep_label(f"Node: {hp.name or cat[:-1]}"))
+        grid, ar = _grid()
 
-        d  = float(hp._distances[pi])
-        z  = float(hp._depths[pi])
+        d = float(hp._distances[pi]); z = float(hp._depths[pi])
 
         d_ed = QLineEdit(f"{d:.2f}")
         d_ed.editingFinished.connect(
             lambda: self._commit_node_coord(cat, oi, pi, "d", d_ed.text()))
-        form.addRow("Dist (m):", d_ed)
+        ar("Dist (m):", d_ed)
 
         z_ed = QLineEdit(f"{z:.2f}")
         z_ed.editingFinished.connect(
             lambda: self._commit_node_coord(cat, oi, pi, "z", z_ed.text()))
-        form.addRow("Depth (m):", z_ed)
+        ar("Depth (m):", z_ed)
 
-        # Map coordinates
         sec = self._state.active_section
         if sec is not None:
             try:
                 mx, my = sec.section_to_map(d)
-                form.addRow("Map X:", _val_label(f"{mx:.1f}"))
-                form.addRow("Map Y:", _val_label(f"{my:.1f}"))
+                ar("Map X:", f"{mx:.1f}")
+                ar("Map Y:", f"{my:.1f}")
             except Exception:
                 pass
 
@@ -372,7 +385,7 @@ class PropertiesPanel(QDockWidget):
         conf_spin.blockSignals(True); conf_spin.setValue(conf); conf_spin.blockSignals(False)
         conf_spin.valueChanged.connect(
             lambda v: self._commit_node_meta(cat, oi, pi, "confidence", v))
-        form.addRow("Confidence:", conf_spin)
+        ar("Confidence:", conf_spin)
 
         qual_vals = ["picked", "interpolated", "projected", "inferred"]
         qual_combo = QComboBox()
@@ -382,14 +395,14 @@ class PropertiesPanel(QDockWidget):
         qual_combo.blockSignals(True); qual_combo.setCurrentIndex(qi); qual_combo.blockSignals(False)
         qual_combo.currentIndexChanged.connect(
             lambda i: self._commit_node_meta(cat, oi, pi, "quality", qual_vals[i]))
-        form.addRow("Quality:", qual_combo)
+        ar("Quality:", qual_combo)
 
         note_ed = QLineEdit(str(hp._note[pi]) if len(hp._note) > pi else "")
         note_ed.editingFinished.connect(
             lambda: self._commit_node_meta(cat, oi, pi, "note", note_ed.text()))
-        form.addRow("Note:", note_ed)
+        ar("Note:", note_ed)
 
-        self._layout.addLayout(form)
+        self._layout.addLayout(grid)
         self._layout.addStretch()
 
     # ------------------------------------------------------------------

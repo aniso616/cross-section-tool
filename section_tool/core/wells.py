@@ -217,6 +217,7 @@ class Well:
         self.y = float(y)
         self.kb = float(kb)
         self.uwi = uwi
+        self.color: str = "#E8C46A"   # default warm-gold well colour
         # Original (pre-transformation) coordinates — set by importer when CRS differs
         self.original_x: float | None = None
         self.original_y: float | None = None

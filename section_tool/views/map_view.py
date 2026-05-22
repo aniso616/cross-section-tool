@@ -147,6 +147,10 @@ class MapView(QWidget):
         s.surface_added.connect(self._on_surfaces_changed)
         s.surface_removed.connect(self._on_surfaces_changed)
         s.surface_modified.connect(self._on_surfaces_changed)
+        # Re-render map when interpretation objects change (e.g. color/style edits)
+        for sig in (s.horizon_pick_modified, s.fault_pick_modified,
+                    s.polygon_modified, s.reference_line_modified):
+            sig.connect(lambda *_: self.request_render())
         s.seismic_ref_added.connect(self._on_seismic_changed)
         s.seismic_ref_removed.connect(self._on_seismic_changed)
         # Clear hover/selection when active tool changes
@@ -519,10 +523,10 @@ class MapView(QWidget):
 
     def _render_wells(self) -> None:
         for well in self._state.project.wells:
-            self._ax.scatter(well.x, well.y, marker="^", s=50,
-                             color=_WELL_COLOR, zorder=5)
+            c = getattr(well, "color", _WELL_COLOR)
+            self._ax.scatter(well.x, well.y, marker="^", s=50, color=c, zorder=5)
             self._ax.text(well.x, well.y, f" {well.name}",
-                          fontsize=7, color=_WELL_COLOR, va="bottom", zorder=5)
+                          fontsize=7, color=c, va="bottom", zorder=5)
 
     def _render_surfaces(self) -> None:
         for surf in self._state.get_visible_surfaces():
