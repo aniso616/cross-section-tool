@@ -477,7 +477,22 @@ class SectionView(QWidget):
         layout.addWidget(self._header)
         layout.addWidget(self._seismic_row)
         layout.addWidget(self._pick_banner)
-        layout.addWidget(self._canvas, stretch=1)
+
+        # Layered canvas: pyqtgraph seismic (bottom) + matplotlib overlays (top)
+        from PySide6.QtWidgets import QStackedLayout as _SL
+        from section_tool.views.seismic_layer import SeismicLayer
+        self._seismic_layer = SeismicLayer(self)
+        self._canvas_stack = QWidget(self)
+        _sl = _SL(self._canvas_stack)
+        _sl.setStackingMode(_SL.StackingMode.StackAll)
+        _sl.addWidget(self._seismic_layer)   # bottom — fast seismic
+        _sl.addWidget(self._canvas)          # top — matplotlib overlays
+        # Make matplotlib canvas transparent so seismic shows through
+        self._canvas.setStyleSheet("background: transparent;")
+        self._canvas.setAttribute(Qt.WA_NoSystemBackground, True)
+        layout.addWidget(self._canvas_stack, stretch=1)
+        # Track which section's seismic is currently loaded in pyqtgraph
+        self._seismic_layer_key: str | None = None
 
         # Matplotlib events
         self._canvas.mpl_connect("button_press_event",   self._on_sv_press)
@@ -510,7 +525,7 @@ class SectionView(QWidget):
         s.surface_modified.connect(self._on_data_changed)
         s.seismic_ref_added.connect(self._on_seismic_refs_changed)
         s.seismic_ref_removed.connect(self._on_seismic_refs_changed)
-        s.seismic_extracted.connect(self._on_data_changed)
+        s.seismic_extracted.connect(self._on_seismic_extracted)
         s.polygon_added.connect(self._on_data_changed)
         s.polygon_removed.connect(self._on_data_changed)
         s.polygon_modified.connect(self._on_data_changed)
@@ -571,7 +586,6 @@ class SectionView(QWidget):
     @staticmethod
     def _configure_axes(ax) -> None:
         """Strip all matplotlib chrome from an axes object."""
-        from section_tool.style import BG_CANVAS
         for spine in ax.spines.values():
             spine.set_visible(False)
         ax.set_xticks([])
@@ -580,8 +594,9 @@ class SectionView(QWidget):
         ax.yaxis.set_visible(False)
         ax.set_xlabel("")
         ax.set_ylabel("")
-        ax.set_facecolor(BG_CANVAS)
-        ax.figure.patch.set_facecolor(BG_CANVAS)
+        # Transparent: pyqtgraph seismic layer behind shows through
+        ax.set_facecolor((0.0, 0.0, 0.0, 0.0))
+        ax.figure.patch.set_alpha(0.0)
 
     def set_game_mode(self, enabled: bool) -> None:
         """Switch to game UI mode: hide all chrome, suppress pick banner."""
@@ -943,14 +958,17 @@ class SectionView(QWidget):
             self.frame_time_ms.emit(ms)
 
     def _full_render(self, section) -> None:
-        """Simple, correct render. No caching tricks — ax.clear() every frame."""
+        """Simple, correct render. Seismic via pyqtgraph; overlays via matplotlib."""
         self._seismic_artists.clear()
         self._overlay_artists.clear()
         self._ax.clear()
         self._configure_axes(self._ax)
         self._setup_axes(section)   # sets default xlim/ylim
         self._render_image_overlays(section)
-        self._setup_seismic_artists(section)
+        # Load seismic into pyqtgraph layer (only when data actually changes)
+        self._update_seismic_layer(section)
+        # Also render boundary mask on the matplotlib overlay layer
+        self._apply_seismic_boundary_mask_overlay(section)
 
         # Apply zoom limits AFTER seismic setup.
         # Priority: pending (new scroll/VE command) > saved (persisted from last zoom)
@@ -986,6 +1004,11 @@ class SectionView(QWidget):
             self._ax.set_ylim(_yl[1], _yl[0])
             if self._saved_ylim is not None:
                 self._saved_ylim = (self._saved_ylim[1], self._saved_ylim[0])
+
+        # Sync pyqtgraph viewbox to current matplotlib limits
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()   # yl[0] > yl[1] (inverted: deeper at index 0)
+        self._seismic_layer.sync_view(xl[0], xl[1], min(yl), max(yl))
 
         self.view_changed.emit()
         _t_draw = time.perf_counter()
@@ -1715,6 +1738,97 @@ class SectionView(QWidget):
                 _imshow(data.T, dist0f, dist1f, y_top, y_bot)
                 # Dim seismic outside section bounds (same as extracted path)
                 self._apply_seismic_boundary_mask(section, dist0f, dist1f)
+
+    # ------------------------------------------------------------------
+    # pyqtgraph seismic layer helpers
+    # ------------------------------------------------------------------
+
+    def _update_seismic_layer(self, section: Section) -> None:
+        """Load or refresh the pyqtgraph seismic layer. Only does work when data changes."""
+        # Use section name as cache key; also invalidated by seismic_extracted signal
+        cache_key = section.name
+        ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
+
+        if ex_data is None or ex_meta is None:
+            # Try the fallback SEG-Y path for the cached projection
+            proj_key_prefix = section.name
+            cached = next(
+                (v for k, v in self._seismic_proj_cache.items()
+                 if k[0] == proj_key_prefix), None)
+            if cached is None:
+                # No seismic available yet
+                if cache_key != self._seismic_layer_key:
+                    self._seismic_layer.clear()
+                    self._seismic_layer_key = None
+                return
+            distances, data, perps = cached
+            mask = np.abs(perps) <= 500.0
+            if mask.sum() < 2:
+                self._seismic_layer.clear()
+                return
+            distances = distances[mask]; data = data[mask]
+            ex_data = data
+            sds = getattr(section, "seismic_display", None)
+            vel = sds.constant_velocity if sds else 2000.0
+            for ref in self._state.project.seismic_refs:
+                ds = self._seismic_cache.get(ref.path if ref.path else "")
+                if ds is not None:
+                    samples = ds.samples
+                    domain  = ds.domain
+                    break
+            else:
+                self._seismic_layer.clear(); return
+            if domain == "twt":
+                scale = vel / 2000.0
+                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+            else:
+                y_top, y_bot = float(samples[0]), float(samples[-1])
+            ex_meta = {"dist_min": float(distances[0]), "dist_max": float(distances[-1]),
+                       "samples": samples, "domain": domain}
+
+        # Build a per-render cache key so we only re-upload when data changes
+        new_key = f"{section.name}:{ex_meta.get('dist_min',0):.0f}"
+        if new_key == self._seismic_layer_key:
+            return  # already uploaded — just sync the viewbox later
+
+        sds     = getattr(section, "seismic_display", None)
+        clip_pct = sds.clip_percentile   if sds else 99.0
+        gain     = sds.gain              if sds else 1.0
+        cmap_key = sds.colormap          if sds else _DEFAULT_CMAP
+        stretch  = sds.stretch_mode      if sds else "linear"
+        vel      = sds.constant_velocity if sds else 2000.0
+
+        samples = np.asarray(ex_meta["samples"])
+        domain  = ex_meta.get("domain", "twt")
+        if stretch == "linear" and domain == "twt":
+            scale = vel / 2000.0
+            y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+        else:
+            y_top, y_bot = float(samples[0]), float(samples[-1])
+
+        disp_data = self._display_seismic_data(ex_data)
+        effective_clip = min(float(clip_pct), 97.0)
+        vmax = float(np.percentile(np.abs(disp_data), effective_clip) or 1.0) * gain
+
+        dist0 = float(ex_meta.get("dist_min", 0.0))
+        dist1 = float(ex_meta.get("dist_max", section.total_length()))
+
+        self._seismic_layer.set_data(
+            data=disp_data, vmax=vmax,
+            dist_min=dist0, dist_max=dist1,
+            y_top=y_top, y_bot=y_bot,
+            cmap_key=cmap_key,
+        )
+        self._seismic_layer_key = new_key
+        self._seismic_boundary_info = (dist0, dist1)
+
+    def _apply_seismic_boundary_mask_overlay(self, section: Section) -> None:
+        """Render boundary mask as matplotlib patches on the transparent overlay."""
+        info = getattr(self, "_seismic_boundary_info", None)
+        if info is None:
+            return
+        seis_start, seis_end = info
+        self._apply_seismic_boundary_mask(section, seis_start, seis_end)
 
     def _apply_seismic_boundary_mask(
         self, section, seis_start: float, seis_end: float,
@@ -2993,6 +3107,12 @@ class SectionView(QWidget):
     def _on_data_changed(self, *_args) -> None:
         self.request_render()
 
+    def _on_seismic_extracted(self, *_args) -> None:
+        """Seismic extraction completed — invalidate pyqtgraph layer and re-render."""
+        self._seismic_layer_key = None
+        self._seismic_boundary_info = None
+        self.request_render()
+
     def _on_seismic_refs_changed(self, *_args) -> None:
         self._seismic_cache.clear()
         self._seismic_proj_cache.clear()
@@ -3002,6 +3122,8 @@ class SectionView(QWidget):
     def _on_active_section_changed_seismic_invalidate(self, *_args) -> None:
         """Reset zoom state when section changes — new section gets default limits."""
         self._seismic_proj_cache.clear()
+        self._seismic_layer_key = None      # force pyqtgraph layer to reload
+        self._seismic_boundary_info = None
         self._user_has_zoomed = False
         self._pending_xlim = None
         self._pending_ylim = None
