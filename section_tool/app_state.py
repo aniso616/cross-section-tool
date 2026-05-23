@@ -17,6 +17,17 @@ from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
 
+def _restore_construction_rule(obj, json_str: str | None) -> None:
+    """Attach a deserialized ConstructionRule to *obj* (in-place, silent on error)."""
+    if not json_str:
+        return
+    try:
+        from section_tool.core.construction import deserialize_rule
+        obj.construction_rule = deserialize_rule(json_str)
+    except Exception:
+        pass
+
+
 def _surface_from_db_row(row: dict, points: np.ndarray) -> Surface:
     """Reconstruct a Surface from a surfaces table row + pre-loaded points array."""
     color = (
@@ -435,6 +446,7 @@ class AppState(QObject):
                 formation_above=hrow.get("formation_above", ""),
                 formation_below=hrow.get("formation_below", ""),
             )
+            _restore_construction_rule(hp, hrow.get("construction_rule_json"))
             proj.horizon_picks.append(hp)
 
         # Faults + picks
@@ -462,6 +474,7 @@ class AppState(QObject):
                 map_x=map_xs,
                 map_y=map_ys,
             )
+            _restore_construction_rule(fp, frow.get("construction_rule_json"))
             proj.fault_picks.append(fp)
 
         # Wells
@@ -528,6 +541,7 @@ class AppState(QObject):
                 fill_alpha=float(prow.get("fill_opacity", 0.6)),
                 formation=prow.get("formation_name", ""),
             )
+            _restore_construction_rule(poly, prow.get("construction_rule_json"))
             proj.polygons.append(poly)
 
         # Reference lines
@@ -583,6 +597,9 @@ class AppState(QObject):
                 proj.surfaces.append(surf)
             except Exception:
                 pass
+
+        # Restoration sequence
+        proj.restoration_sequence = db.get_restoration_sequence()
 
         return proj
 
@@ -758,6 +775,19 @@ class AppState(QObject):
     @property
     def project_crs_epsg(self) -> int:
         return self._project.crs_epsg
+
+    # ------------------------------------------------------------------
+    # Restoration sequence
+    # ------------------------------------------------------------------
+
+    @property
+    def restoration_sequence(self):
+        return self._project.restoration_sequence
+
+    def set_restoration_sequence(self, sequence) -> None:
+        self._project.restoration_sequence = sequence
+        self._set_modified()
+        self._db_write(lambda: self._pm.db.set_restoration_sequence(sequence))
 
     # ------------------------------------------------------------------
     # Surface CRUD

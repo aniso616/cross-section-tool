@@ -41,17 +41,18 @@ CREATE TABLE IF NOT EXISTS sections (
 );
 
 CREATE TABLE IF NOT EXISTS horizons (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    name              TEXT    UNIQUE NOT NULL,
-    contact_type      TEXT    DEFAULT 'conformable',
-    color             TEXT    DEFAULT '#2ca02c',
-    line_width        REAL    DEFAULT 1.5,
-    line_style        TEXT    DEFAULT 'solid',
-    formation_above   TEXT    DEFAULT '',
-    formation_below   TEXT    DEFAULT '',
-    age_ma            REAL,
-    confidence        REAL    DEFAULT 1.0,
-    event_id          INTEGER
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                   TEXT    UNIQUE NOT NULL,
+    contact_type           TEXT    DEFAULT 'conformable',
+    color                  TEXT    DEFAULT '#2ca02c',
+    line_width             REAL    DEFAULT 1.5,
+    line_style             TEXT    DEFAULT 'solid',
+    formation_above        TEXT    DEFAULT '',
+    formation_below        TEXT    DEFAULT '',
+    age_ma                 REAL,
+    confidence             REAL    DEFAULT 1.0,
+    event_id               INTEGER,
+    construction_rule_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS horizon_picks (
@@ -73,18 +74,19 @@ CREATE TABLE IF NOT EXISTS horizon_picks (
 );
 
 CREATE TABLE IF NOT EXISTS faults (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    name               TEXT    UNIQUE NOT NULL,
-    fault_type         TEXT    DEFAULT 'normal',
-    dip_direction      TEXT    DEFAULT 'right',
-    color              TEXT    DEFAULT '#d62728',
-    line_width         REAL    DEFAULT 1.5,
-    line_style         TEXT    DEFAULT 'solid',
-    displacement       REAL,
-    age_activation_ma  REAL,
-    age_cessation_ma   REAL,
-    confidence         REAL    DEFAULT 1.0,
-    event_id           INTEGER
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                   TEXT    UNIQUE NOT NULL,
+    fault_type             TEXT    DEFAULT 'normal',
+    dip_direction          TEXT    DEFAULT 'right',
+    color                  TEXT    DEFAULT '#d62728',
+    line_width             REAL    DEFAULT 1.5,
+    line_style             TEXT    DEFAULT 'solid',
+    displacement           REAL,
+    age_activation_ma      REAL,
+    age_cessation_ma       REAL,
+    confidence             REAL    DEFAULT 1.0,
+    event_id               INTEGER,
+    construction_rule_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fault_picks (
@@ -179,14 +181,15 @@ CREATE TABLE IF NOT EXISTS formations (
 );
 
 CREATE TABLE IF NOT EXISTS polygons (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    name            TEXT    NOT NULL,
-    section_name    TEXT    NOT NULL,
-    formation_name  TEXT    DEFAULT '',
-    vertices_json   TEXT    NOT NULL,
-    fill_color      TEXT    DEFAULT '#9467bd',
-    fill_opacity    REAL    DEFAULT 0.6,
-    outline_width   REAL    DEFAULT 1.0
+    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                   TEXT    NOT NULL,
+    section_name           TEXT    NOT NULL,
+    formation_name         TEXT    DEFAULT '',
+    vertices_json          TEXT    NOT NULL,
+    fill_color             TEXT    DEFAULT '#9467bd',
+    fill_opacity           REAL    DEFAULT 0.6,
+    outline_width          REAL    DEFAULT 1.0,
+    construction_rule_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reference_lines (
@@ -434,6 +437,10 @@ class ProjectDatabase:
             ("surfaces",       "interpolation","TEXT DEFAULT 'linear'"),
             ("surfaces",       "points_file", "TEXT"),
             ("surfaces",       "created_date","TEXT"),
+            # Kinematic restoration — construction metadata
+            ("horizons",  "construction_rule_json", "TEXT"),
+            ("faults",    "construction_rule_json", "TEXT"),
+            ("polygons",  "construction_rule_json", "TEXT"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -550,6 +557,8 @@ class ProjectDatabase:
     # ------------------------------------------------------------------
 
     def upsert_horizon(self, pick) -> int:
+        from section_tool.core.construction import serialize_rule
+        rule_json = serialize_rule(getattr(pick, "construction_rule", None))
         row = self.conn.execute(
             "SELECT id FROM horizons WHERE name=?", (pick.name,)
         ).fetchone()
@@ -558,7 +567,7 @@ class ProjectDatabase:
             self.conn.execute(
                 """UPDATE horizons SET color=?, line_width=?, line_style=?,
                    contact_type=?, formation_above=?, formation_below=?,
-                   confidence=?
+                   confidence=?, construction_rule_json=?
                    WHERE id=?""",
                 (pick.color,
                  getattr(pick, "line_width", 1.5),
@@ -567,20 +576,23 @@ class ProjectDatabase:
                  getattr(pick, "formation_above", ""),
                  getattr(pick, "formation_below", ""),
                  getattr(pick, "confidence", 1.0),
+                 rule_json,
                  hid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO horizons(name, color, line_width, line_style,
-                   contact_type, formation_above, formation_below, confidence)
-                   VALUES(?,?,?,?,?,?,?,?)""",
+                   contact_type, formation_above, formation_below, confidence,
+                   construction_rule_json)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
                 (pick.name, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "contact_type", "conformable"),
                  getattr(pick, "formation_above", ""),
                  getattr(pick, "formation_below", ""),
-                 getattr(pick, "confidence", 1.0))
+                 getattr(pick, "confidence", 1.0),
+                 rule_json)
             )
             hid = cur.lastrowid
 
@@ -632,6 +644,8 @@ class ProjectDatabase:
     # ------------------------------------------------------------------
 
     def upsert_fault(self, pick) -> int:
+        from section_tool.core.construction import serialize_rule
+        rule_json = serialize_rule(getattr(pick, "construction_rule", None))
         row = self.conn.execute(
             "SELECT id FROM faults WHERE name=?", (pick.name,)
         ).fetchone()
@@ -639,7 +653,8 @@ class ProjectDatabase:
             fid = row["id"]
             self.conn.execute(
                 """UPDATE faults SET color=?, line_width=?, line_style=?,
-                   fault_type=?, dip_direction=?, confidence=?
+                   fault_type=?, dip_direction=?, confidence=?,
+                   construction_rule_json=?
                    WHERE id=?""",
                 (pick.color,
                  getattr(pick, "line_width", 1.5),
@@ -647,19 +662,22 @@ class ProjectDatabase:
                  getattr(pick, "fault_type", "normal"),
                  getattr(pick, "dip_direction", "right"),
                  getattr(pick, "confidence", 1.0),
+                 rule_json,
                  fid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO faults(name, color, line_width, line_style,
-                   fault_type, dip_direction, confidence)
-                   VALUES(?,?,?,?,?,?,?)""",
+                   fault_type, dip_direction, confidence,
+                   construction_rule_json)
+                   VALUES(?,?,?,?,?,?,?,?)""",
                 (pick.name, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "fault_type", "normal"),
                  getattr(pick, "dip_direction", "right"),
-                 getattr(pick, "confidence", 1.0))
+                 getattr(pick, "confidence", 1.0),
+                 rule_json)
             )
             fid = cur.lastrowid
 
@@ -847,7 +865,9 @@ class ProjectDatabase:
     # ------------------------------------------------------------------
 
     def upsert_polygon(self, poly, section_name: str, poly_idx: int) -> int:
+        from section_tool.core.construction import serialize_rule
         name = getattr(poly, "name", f"Polygon {poly_idx}")
+        rule_json = serialize_rule(getattr(poly, "construction_rule", None))
         # Use name + section_name as identifier
         row = self.conn.execute(
             "SELECT id FROM polygons WHERE name=? AND section_name=?",
@@ -858,21 +878,25 @@ class ProjectDatabase:
             pid = row["id"]
             self.conn.execute(
                 """UPDATE polygons SET vertices_json=?, fill_color=?,
-                   fill_opacity=?, formation_name=? WHERE id=?""",
+                   fill_opacity=?, formation_name=?,
+                   construction_rule_json=? WHERE id=?""",
                 (verts_json, getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
                  getattr(poly, "formation", ""),
+                 rule_json,
                  pid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO polygons
-                   (name, section_name, vertices_json, fill_color, fill_opacity, formation_name)
-                   VALUES(?,?,?,?,?,?)""",
+                   (name, section_name, vertices_json, fill_color, fill_opacity,
+                    formation_name, construction_rule_json)
+                   VALUES(?,?,?,?,?,?,?)""",
                 (name, section_name, verts_json,
                  getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
-                 getattr(poly, "formation", ""))
+                 getattr(poly, "formation", ""),
+                 rule_json)
             )
             pid = cur.lastrowid
         self.conn.commit()
@@ -898,6 +922,25 @@ class ProjectDatabase:
             (name, section_name)
         )
         self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Restoration sequence
+    # ------------------------------------------------------------------
+
+    def set_restoration_sequence(self, sequence) -> None:
+        """Persist the project restoration sequence as a JSON project_meta entry."""
+        self.set_meta("restoration_sequence", sequence.to_json())
+
+    def get_restoration_sequence(self):
+        """Load the restoration sequence from project_meta, or return an empty one."""
+        from section_tool.core.restoration import RestorationSequence
+        raw = self.get_meta("restoration_sequence", "")
+        if not raw:
+            return RestorationSequence()
+        try:
+            return RestorationSequence.from_json(raw)
+        except Exception:
+            return RestorationSequence()
 
     # ------------------------------------------------------------------
     # Reference lines

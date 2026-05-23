@@ -114,6 +114,9 @@ class Project:
         self.intersections: list[FaultHorizonIntersection] = []
         self.velocity_model: VelocityModel = VelocityModel()
         self.annotations: list[Annotation] = []
+        # Kinematic restoration
+        from section_tool.core.restoration import RestorationSequence
+        self.restoration_sequence: RestorationSequence = RestorationSequence()
 
     # ------------------------------------------------------------------
     # Persistence

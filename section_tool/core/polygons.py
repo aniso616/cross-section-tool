@@ -53,6 +53,8 @@ class SectionPolygon:
         self.edge_width = float(edge_width)
         self.formation: str = formation
         self.section_name: str = section_name  # which section these coords belong to
+        # Kinematic restoration: how this polygon was constructed
+        self.construction_rule = None  # ConstructionRule | None
 
     # ------------------------------------------------------------------
     # Properties

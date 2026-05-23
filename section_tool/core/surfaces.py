@@ -291,6 +291,8 @@ class HorizonPick:
         self.displacement:     float | None = displacement
         self.age_activation_ma: float | None = age_activation_ma
         self.age_cessation_ma:  float | None = age_cessation_ma
+        # Kinematic restoration: how this element was constructed
+        self.construction_rule = None  # ConstructionRule | None
 
     # ------------------------------------------------------------------
     # Properties
