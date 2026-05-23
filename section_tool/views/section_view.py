@@ -315,8 +315,7 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        from section_tool.style import BG_CANVAS
-        self._fig = Figure(figsize=(10, 6), facecolor=BG_CANVAS)
+        self._fig = Figure(figsize=(10, 6), facecolor=(0, 0, 0, 0))
         # Single axis — strat column is now a HUD QWidget, not a matplotlib subplot
         self._fig.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
         self._ax = self._fig.add_subplot(111)
@@ -487,9 +486,11 @@ class SectionView(QWidget):
         _sl.setStackingMode(_SL.StackingMode.StackAll)
         _sl.addWidget(self._seismic_layer)   # bottom — fast seismic
         _sl.addWidget(self._canvas)          # top — matplotlib overlays
-        # Make matplotlib canvas transparent so seismic shows through
+        # Make matplotlib canvas transparent so seismic layer shows through
         self._canvas.setStyleSheet("background: transparent;")
         self._canvas.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._canvas.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._canvas_stack.setAttribute(Qt.WA_TranslucentBackground, True)
         layout.addWidget(self._canvas_stack, stretch=1)
         # Track which section's seismic is currently loaded in pyqtgraph
         self._seismic_layer_key: str | None = None
@@ -1813,6 +1814,7 @@ class SectionView(QWidget):
         dist0 = float(ex_meta.get("dist_min", 0.0))
         dist1 = float(ex_meta.get("dist_max", section.total_length()))
 
+        print(f"[seismic_layer] set_data: dist={dist0:.0f}–{dist1:.0f}  y={y_top:.0f}–{y_bot:.0f}  shape={disp_data.shape}")
         self._seismic_layer.set_data(
             data=disp_data, vmax=vmax,
             dist_min=dist0, dist_max=dist1,
