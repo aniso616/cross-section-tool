@@ -1622,12 +1622,25 @@ class SectionView(QWidget):
 
         # else: conformable / strike_slip / marker_bed — rendered by main plot above
 
+    def _get_removed_names(self) -> set[str]:
+        """Return element names hidden at the current restoration step (empty set = present day)."""
+        seq = self._state.restoration_sequence
+        if not seq.events or seq.current_step == 0:
+            return set()
+        return seq.elements_visible_at_step(seq.current_step)
+
     def _render_horizons(self, section: Section) -> None:
+        removed = self._get_removed_names()
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
+            if removed and hp.name and hp.name in removed:
+                continue
             self._render_pick_object("Horizons", obj_idx, hp, section, "o", "solid")
 
     def _render_faults(self, section: Section) -> None:
+        removed = self._get_removed_names()
         for obj_idx, fp in enumerate(self._state.project.fault_picks):
+            if removed and fp.name and fp.name in removed:
+                continue
             self._render_pick_object("Faults", obj_idx, fp, section, "D", "dashed")
 
     def _pick_point_style(
@@ -1951,7 +1964,10 @@ class SectionView(QWidget):
 
     def _render_polygons(self, section: Section) -> None:
         from matplotlib.patches import Polygon as MplPolygon
+        removed = self._get_removed_names()
         for poly in self._state.project.polygons:
+            if removed and poly.name and poly.name in removed:
+                continue
             # Only render polygons that belong to this section (or have no section tag)
             poly_sec = getattr(poly, "section_name", "")
             if poly_sec and poly_sec != section.name:
