@@ -642,6 +642,9 @@ class MainWindow(QMainWindow):
         self._restoration_stack_action = QAction("Restoration &Stack…", self)
         self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
         tools_menu.addAction(self._restoration_stack_action)
+        self._attribute_table_action = QAction("&Attribute Table…", self)
+        self._attribute_table_action.triggered.connect(self._on_attribute_table)
+        tools_menu.addAction(self._attribute_table_action)
         tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
@@ -1272,6 +1275,13 @@ class MainWindow(QMainWindow):
         from section_tool.views.restoration_stack_dialog import RestorationStackDialog
         dlg = RestorationStackDialog(self._state, parent=self)
         dlg.exec()
+
+    def _on_attribute_table(self) -> None:
+        """Tools → Attribute Table: tabular view of all geological element attributes."""
+        from section_tool.views.attribute_table_dialog import AttributeTableDialog
+        dlg = AttributeTableDialog(self._state, parent=self)
+        dlg.exec()
+
 
     def _on_view_segy_header(self) -> None:
         """Tools → View SEG-Y Header: pick a file and show the header inspector."""
