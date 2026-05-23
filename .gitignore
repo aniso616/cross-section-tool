@@ -117,6 +117,13 @@ ipython_config.py
 .pdm-python
 .pdm-build/
 
+# Project data files (seismic cache, databases, extracted data)
+cache/
+*.npy
+*.npz
+*.sqlite
+*.extract.meta.json
+
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
 # pixi.lock

@@ -281,6 +281,19 @@ class MainWindow(QMainWindow):
         self._properties_panel.setObjectName("PropertiesDock")
         self._properties_panel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
 
+        # ── Restoration panel ─────────────────────────────────────────────────
+        from section_tool.views.restoration_panel import RestorationPanel
+        self._restoration_panel = QDockWidget("Restoration", self)
+        self._restoration_panel.setObjectName("RestorationDock")
+        self._restoration_panel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self._restoration_panel.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        self._restoration_widget = RestorationPanel(self._state, self)
+        self._restoration_panel.setWidget(self._restoration_widget)
+
         # ── Apply default dock layout ─────────────────────────────────────────
         self._apply_default_dock_layout()
 
@@ -310,6 +323,9 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._view3d_dock)
         self.tabifyDockWidget(self._section_dock, self._view3d_dock)
         self._section_dock.raise_()
+        # Restoration panel: tabbed behind Properties in left column
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._restoration_panel)
+        self.tabifyDockWidget(self._properties_panel, self._restoration_panel)
         # Default left-column width
         self.resizeDocks([self._map_dock], [400], Qt.Orientation.Horizontal)
 
@@ -318,7 +334,8 @@ class MainWindow(QMainWindow):
         settings = QSettings("Geoscience", "CrossSectionTool")
         settings.remove("window/state")
         for dock in (self._map_dock, self._section_dock, self._view3d_dock,
-                     self._project_panel, self._properties_panel):
+                     self._project_panel, self._properties_panel,
+                     self._restoration_panel):
             dock.setFloating(False)
         self._apply_default_dock_layout()
 
@@ -488,6 +505,9 @@ class MainWindow(QMainWindow):
         _props_ta = self._properties_panel.toggleViewAction()
         _props_ta.setText(_props_ta.text() + "\tCtrl+5")
         view_menu.addAction(_props_ta)
+        _rest_ta = self._restoration_panel.toggleViewAction()
+        _rest_ta.setText("&Restoration Panel\tCtrl+6")
+        view_menu.addAction(_rest_ta)
         view_menu.addSeparator()
         reset_layout_a = QAction("&Reset Layout", self)
         reset_layout_a.triggered.connect(self._reset_layout)
@@ -612,6 +632,10 @@ class MainWindow(QMainWindow):
         self._clear_aoi_action = QAction("Clear AOI", self)
         self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
         tools_menu.addAction(self._clear_aoi_action)
+        tools_menu.addSeparator()
+        self._thermal_action = QAction("&Thermal Modeling…", self)
+        self._thermal_action.triggered.connect(self._on_thermal_modeling)
+        tools_menu.addAction(self._thermal_action)
         tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
@@ -744,12 +768,24 @@ class MainWindow(QMainWindow):
         s.annotation_added.connect(lambda _: self._section_view.request_render())
         s.annotation_removed.connect(lambda _: self._section_view.request_render())
         s.annotation_modified.connect(lambda *_: self._section_view.request_render())
+        # Restoration panel: step_changed → rebuild panel and request render
+        self._restoration_widget.step_changed.connect(self._on_restoration_step_changed)
+        # Rebuild restoration panel when project changes
+        s.project_changed.connect(self._restoration_widget.rebuild)
         # FPS display from section view
         self._section_view.frame_time_ms.connect(self._on_frame_time)
         # All keyboard shortcuts registered centrally
         self._register_shortcuts()
         # Initial tool availability pass
         self._update_tool_availability()
+
+    # ------------------------------------------------------------------
+    # Restoration
+    # ------------------------------------------------------------------
+
+    def _on_restoration_step_changed(self, step: int) -> None:
+        """Restoration panel advanced to *step* — re-render section."""
+        self._section_view.request_render()
 
     # ------------------------------------------------------------------
     # Tool availability
@@ -1198,6 +1234,19 @@ class MainWindow(QMainWindow):
         self._state.set_aoi(aoi)
         self._map_view.render()
         self._section_view.render()
+
+    def _on_thermal_modeling(self) -> None:
+        """Tools → Thermal Modeling: open the thermal modeling dialog."""
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(
+                self, "No active section",
+                "Select or create a section before running thermal modeling.",
+            )
+            return
+        dlg = ThermalModelingDialog(self._state, section, parent=self)
+        dlg.exec()
 
     def _on_view_segy_header(self) -> None:
         """Tools → View SEG-Y Header: pick a file and show the header inspector."""

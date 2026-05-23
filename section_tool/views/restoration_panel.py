@@ -238,7 +238,7 @@ class RestorationPanel(QWidget):
         ev = seq.events[idx]
         answer = QMessageBox.question(
             self, "Remove event",
-            f"Remove restoration event "{ev.name}"?",
+            f"Remove restoration event \"{ev.name}\"?",
             QMessageBox.Yes | QMessageBox.No,
         )
         if answer != QMessageBox.Yes:

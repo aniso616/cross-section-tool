@@ -318,7 +318,7 @@ class ThermalModelingDialog(QDialog):
 
         layers: list[dict] = []
         if best_well and hasattr(best_well, "formation_tops"):
-            tops = sorted(best_well.formation_tops, key=lambda t: t[1])
+            tops = sorted(best_well.formation_tops.items(), key=lambda t: t[1])
             for i, (name, md) in enumerate(tops[:-1]):
                 layers.append({
                     "z_top":               float(md),
