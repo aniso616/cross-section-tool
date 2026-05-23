@@ -1,12 +1,19 @@
-"""1D steady-state thermal modeling.
-
-Stage 1 of the thermal modeling roadmap:
-  * steady_state_geotherm   — layered temperature profile
-  * thermal_conductivity_with_porosity — geometric mean mixing
-  * effective_conductivity_column     — depth-dependent k
-  * maturity_easy_ro        — Sweeney & Burnham (1990) Easy%Ro kinetics
+"""1D thermal modeling — steady-state and transient heat flow, plus
+thermochronometric kinetics (AFT, AHe, ZHe) and maturity (Easy%Ro).
 
 No GUI or Qt dependencies.
+
+Functions
+---------
+steady_state_geotherm          — layered steady-state temperature profile
+thermal_conductivity_with_porosity — geometric-mean mixing
+effective_conductivity_column  — porosity-corrected effective k
+maturity_easy_ro               — Sweeney & Burnham (1990) Easy%Ro
+transient_1d_heat              — implicit FD transient heat solver
+aft_age                        — apatite fission-track apparent age
+aft_track_length_distribution  — AFT track-length histogram
+ahe_age                        — apatite (U-Th)/He apparent age
+zhe_age                        — zircon (U-Th)/He apparent age
 """
 from __future__ import annotations
 
@@ -236,3 +243,347 @@ def maturity_easy_ro(
 
     total_reacted = float(np.sum(_F0) - np.sum(f))
     return float(np.exp(-1.6 + 3.7 * total_reacted))
+
+
+# ---------------------------------------------------------------------------
+# Transient 1D heat solver
+# ---------------------------------------------------------------------------
+
+def transient_1d_heat(
+    depths_initial: np.ndarray,
+    temperatures_initial: np.ndarray,
+    burial_history,
+    time_steps_ma: np.ndarray,
+    thermal_conductivity: float,
+    heat_capacity: float = 2.5e6,
+    surface_temp_C: float = 10.0,
+    basal_heat_flow_mW: float = 60.0,
+    dt_kyr: float = 10.0,
+) -> np.ndarray:
+    """Solve the 1D transient heat equation through a burial history.
+
+    Uses an implicit (backward-Euler) finite-difference scheme for
+    unconditional stability regardless of time step size.
+
+    Parameters
+    ----------
+    depths_initial:
+        Initial depth grid (m), length N.
+    temperatures_initial:
+        Initial temperature (°C) at each grid point, length N.
+    burial_history:
+        ``(n_times, N)`` array of depth grids at each time step, or
+        ``None`` to hold the grid fixed.
+    time_steps_ma:
+        Geological time (Ma) at each time step (decreasing, oldest first).
+    thermal_conductivity:
+        Thermal conductivity — scalar (W/m·K).  Layered support in a
+        future extension.
+    heat_capacity:
+        Volumetric heat capacity ρ·c (J/m³/K).  Default 2.5 MJ/m³/K.
+    surface_temp_C:
+        Fixed temperature at z = 0 (Dirichlet BC).
+    basal_heat_flow_mW:
+        Heat flow at the base (mW/m²) — Neumann BC.
+    dt_kyr:
+        Not used (kept for API compatibility; the solver uses the
+        geological time steps directly).
+
+    Returns
+    -------
+    np.ndarray, shape (n_times, N)
+        Temperature (°C) at each time step and grid node.
+    """
+    from scipy.sparse import diags
+    from scipy.sparse.linalg import spsolve
+
+    depths_initial = np.asarray(depths_initial, dtype=float)
+    temperatures_initial = np.asarray(temperatures_initial, dtype=float)
+    time_steps_ma = np.asarray(time_steps_ma, dtype=float)
+
+    n_times = len(time_steps_ma)
+    n = len(depths_initial)
+
+    temps = np.zeros((n_times, n))
+    temps[0] = temperatures_initial
+
+    k = float(thermal_conductivity)
+    alpha = k / heat_capacity                       # thermal diffusivity m²/s
+    q_base = basal_heat_flow_mW * 1e-3              # W/m²
+
+    _SECS_PER_MA = 1e6 * 365.25 * 24.0 * 3600.0
+
+    for i in range(1, n_times):
+        dt_ma = abs(time_steps_ma[i - 1] - time_steps_ma[i])
+        dt_s  = dt_ma * _SECS_PER_MA
+
+        depths = (burial_history[i]
+                  if burial_history is not None
+                  else depths_initial)
+
+        dz_vec = np.diff(depths)
+        dz = float(np.mean(dz_vec)) if len(dz_vec) else 1.0
+
+        # Fourier number: stability factor for implicit scheme
+        r = alpha * dt_s / dz ** 2
+
+        # Separate sub- and super-diagonals so BCs can be set independently
+        main_diag = np.full(n, 1.0 + 2.0 * r)
+        sub_diag  = np.full(n - 1, -r)    # below main (indices 1..n-1)
+        sup_diag  = np.full(n - 1, -r)    # above main (indices 0..n-2)
+
+        # Surface Dirichlet BC: row 0 → identity; remove both connections
+        main_diag[0] = 1.0
+        sup_diag[0]  = 0.0    # (0, 1) element
+
+        # Bottom Neumann BC: row n-1 → identity; remove sub-diagonal connection
+        main_diag[-1] = 1.0
+        sub_diag[-1]  = 0.0   # (n-1, n-2) element
+
+        A = diags([sub_diag, main_diag, sup_diag], [-1, 0, 1]).tocsc()
+
+        b = temps[i - 1].copy()
+        # Apply RHS corrections so intermediate rows see correct T at boundaries
+        b[0]  = surface_temp_C                   # surface: T = T_surf
+        b[1] += r * surface_temp_C               # row 1 gains term from known T[0]
+        b[-1] = temps[i - 1, -1] + q_base * dz / k  # bottom Neumann approx
+
+        temps[i] = spsolve(A, b)
+
+    return temps
+
+
+# ---------------------------------------------------------------------------
+# AFT kinetics — apatite fission-track apparent age
+# ---------------------------------------------------------------------------
+
+# Simple Arrhenius model calibrated for Tc ≈ 110°C (Durango apatite)
+# Ea = 140 kJ/mol; A chosen so τ ≈ geological time scale at Tc.
+_AFT_Ea = 140.0e3      # J/mol
+_AFT_A  = 4.0e5        # s⁻¹ (calibrated pre-exponential, see thermal.rst)
+_AFT_l0 = 16.3         # µm, initial mean track length (Durango)
+
+
+def aft_age(
+    thermal_history_C: np.ndarray,
+    time_steps_ma: np.ndarray,
+    initial_age_ma: float = 100.0,
+    kinetics: str = "Ketcham07",
+    composition: str = "Durango",
+) -> float:
+    """Compute apatite fission-track apparent age from a thermal history.
+
+    Uses a first-order Arrhenius annealing model calibrated to Durango
+    apatite (Tc ≈ 110 °C at 10 °C/Ma).
+
+    Parameters
+    ----------
+    thermal_history_C:
+        Temperature (°C) at each time step (oldest first).
+    time_steps_ma:
+        Geological time (Ma), same length as *thermal_history_C*.
+    initial_age_ma:
+        Age that would be measured if no annealing occurred (Ma).
+    kinetics, composition:
+        Reserved for future multi-kinetics support.
+
+    Returns
+    -------
+    float
+        Apparent AFT age (Ma).
+    """
+    thermal_history_C = np.asarray(thermal_history_C, dtype=float)
+    time_steps_ma     = np.asarray(time_steps_ma,     dtype=float)
+
+    _SECS_PER_MA = 1e6 * 365.25 * 24.0 * 3600.0
+
+    r = 1.0   # mean reduced track length (1 = fully retained)
+    for i in range(len(time_steps_ma) - 1):
+        dt_ma = abs(time_steps_ma[i] - time_steps_ma[i + 1])
+        if dt_ma == 0.0:
+            continue
+        dt_s = dt_ma * _SECS_PER_MA
+        T_K  = thermal_history_C[i] + 273.15
+        k_ann = _AFT_A * np.exp(-_AFT_Ea / (_R * T_K))
+        r *= np.exp(-k_ann * dt_s)
+        r = max(r, 0.0)
+
+    return float(initial_age_ma * r)
+
+
+def aft_track_length_distribution(
+    thermal_history_C: np.ndarray,
+    time_steps_ma: np.ndarray,
+    n_tracks: int = 100,
+) -> np.ndarray:
+    """Compute an AFT track-length distribution from a thermal history.
+
+    Simulates *n_tracks* fission tracks, each formed at a random time
+    during the burial history and annealed through the remaining history.
+
+    Returns
+    -------
+    np.ndarray
+        Array of individual track lengths (µm).
+    """
+    thermal_history_C = np.asarray(thermal_history_C, dtype=float)
+    time_steps_ma     = np.asarray(time_steps_ma,     dtype=float)
+    n_steps = len(time_steps_ma)
+    if n_steps < 2:
+        return np.array([_AFT_l0] * n_tracks)
+
+    _SECS_PER_MA = 1e6 * 365.25 * 24.0 * 3600.0
+
+    lengths: list[float] = []
+    n_per_step = max(1, n_tracks // (n_steps - 1))
+
+    for i_start in range(n_steps - 1):
+        for _ in range(n_per_step):
+            r = 1.0
+            for j in range(i_start, n_steps - 1):
+                dt_ma = abs(time_steps_ma[j] - time_steps_ma[j + 1])
+                if dt_ma == 0.0:
+                    continue
+                dt_s = dt_ma * _SECS_PER_MA
+                T_K  = thermal_history_C[j] + 273.15
+                k_ann = _AFT_A * np.exp(-_AFT_Ea / (_R * T_K))
+                r *= np.exp(-k_ann * dt_s)
+                r = max(r, 0.0)
+            lengths.append(_AFT_l0 * r)
+
+    return np.array(lengths[:n_tracks] if len(lengths) >= n_tracks else lengths)
+
+
+# ---------------------------------------------------------------------------
+# AHe kinetics — apatite (U-Th)/He apparent age
+# ---------------------------------------------------------------------------
+
+# Farley (2000) diffusion parameters for Durango apatite
+_AHE_D0 = 50.0     # cm²/s
+_AHE_Ea = 138.0e3  # J/mol
+
+# Zircon (U-Th)/He parameters from Reiners et al. (2004)
+_ZHE_D0 = 0.46     # cm²/s
+_ZHE_Ea = 169.0e3  # J/mol
+
+
+def _he_age_diffusion(
+    thermal_history_C: np.ndarray,
+    time_steps_ma: np.ndarray,
+    radius_um: float,
+    D0: float,
+    Ea: float,
+    ft_correction: bool = True,
+) -> float:
+    """Generic (U-Th)/He age solver using simple spherical diffusion loss."""
+    thermal_history_C = np.asarray(thermal_history_C, dtype=float)
+    time_steps_ma     = np.asarray(time_steps_ma,     dtype=float)
+
+    _SECS_PER_MA = 1e6 * 365.25 * 24.0 * 3600.0
+    radius_cm = radius_um * 1.0e-4
+    P = 1.0   # normalised production rate (concentration units cancel)
+
+    He_total    = 0.0
+    He_retained = 0.0
+
+    for i in range(len(time_steps_ma) - 1):
+        dt_ma = abs(time_steps_ma[i] - time_steps_ma[i + 1])
+        if dt_ma == 0.0:
+            continue
+        dt_s = dt_ma * _SECS_PER_MA
+        T_K  = thermal_history_C[i] + 273.15
+
+        D   = D0 * np.exp(-Ea / (_R * T_K))         # cm²/s
+        tau = (radius_cm ** 2) / (np.pi ** 2 * D)   # s
+        loss = 1.0 - np.exp(-dt_s / tau)
+
+        # Retention fraction for He produced uniformly during this interval:
+        # integral_0^dt exp(-t/tau) dt / dt = (tau/dt) * (1 - exp(-dt/tau))
+        if tau > 0 and dt_s > 0:
+            new_retention = (tau / dt_s) * (1.0 - np.exp(-dt_s / tau))
+        else:
+            new_retention = 0.0
+
+        He_produced  = P * dt_ma
+        He_total    += He_produced
+        He_retained  = He_retained * (1.0 - loss) + He_produced * new_retention
+
+    if He_total <= 0.0:
+        return 0.0
+
+    apparent_age = (He_retained / He_total) * abs(
+        float(time_steps_ma[0]) - float(time_steps_ma[-1])
+    )
+
+    if ft_correction:
+        # Alpha-ejection correction for typical grain size
+        ft = 0.79   # apatite / zircon correction (Farley et al. 1996)
+        apparent_age /= ft
+
+    return float(max(apparent_age, 0.0))
+
+
+def ahe_age(
+    thermal_history_C: np.ndarray,
+    time_steps_ma: np.ndarray,
+    radius_um: float = 60.0,
+    ft_correction: bool = True,
+) -> float:
+    """Apatite (U-Th)/He apparent age.
+
+    Uses Farley (2000) diffusion parameters (D₀ = 50 cm²/s,
+    Ea = 138 kJ/mol; Tc ≈ 65–70 °C at 10 °C/Ma).
+
+    Parameters
+    ----------
+    thermal_history_C:
+        Temperature (°C) array, oldest first.
+    time_steps_ma:
+        Time (Ma) array matching *thermal_history_C*.
+    radius_um:
+        Mean grain radius (µm).
+    ft_correction:
+        Apply alpha-ejection correction (Ft ≈ 0.79).
+
+    Returns
+    -------
+    float
+        Apparent AHe age (Ma).
+    """
+    return _he_age_diffusion(
+        thermal_history_C, time_steps_ma,
+        radius_um, _AHE_D0, _AHE_Ea, ft_correction,
+    )
+
+
+def zhe_age(
+    thermal_history_C: np.ndarray,
+    time_steps_ma: np.ndarray,
+    radius_um: float = 60.0,
+    ft_correction: bool = False,
+) -> float:
+    """Zircon (U-Th)/He apparent age.
+
+    Uses Reiners et al. (2004) diffusion parameters (D₀ = 0.46 cm²/s,
+    Ea = 169 kJ/mol; Tc ≈ 180–200 °C).
+
+    Parameters
+    ----------
+    thermal_history_C:
+        Temperature (°C) array, oldest first.
+    time_steps_ma:
+        Time (Ma) array matching *thermal_history_C*.
+    radius_um:
+        Mean grain radius (µm).
+    ft_correction:
+        Apply alpha-ejection correction (default False for zircon).
+
+    Returns
+    -------
+    float
+        Apparent ZHe age (Ma).
+    """
+    return _he_age_diffusion(
+        thermal_history_C, time_steps_ma,
+        radius_um, _ZHE_D0, _ZHE_Ea, ft_correction,
+    )
