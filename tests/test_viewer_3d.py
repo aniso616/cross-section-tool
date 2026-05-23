@@ -67,7 +67,7 @@ def _scatter_surf(name="Scat"):
     x = rng.uniform(0, 1000, 30)
     y = rng.uniform(-200, 200, 30)
     z = x * 0.1 + 400
-    return Surface(x, y, z, name=name)
+    return Surface.from_xyz(x, y, z, name=name)
 
 
 def _well(name="W1", x=500.0, y=0.0):
@@ -190,7 +190,7 @@ class TestBuildSurfaceMesh:
 
     def test_collinear_scattered_returns_none(self):
         # Points on a straight line → Delaunay 2D produces empty mesh → None
-        surf = Surface([0.0, 1.0, 2.0], [0.0, 1.0, 2.0], [10.0, 10.0, 10.0])
+        surf = Surface.from_xyz([0.0, 1.0, 2.0], [0.0, 1.0, 2.0], [10.0, 10.0, 10.0])
         assert build_surface_mesh(surf) is None
 
     def test_scattered_point_count(self):
@@ -394,7 +394,7 @@ class TestViewer3DComputeMaxDepth:
         assert pytest.approx(viewer._compute_max_depth()) == 8000.0
 
     def test_uses_surface_depth(self, viewer, state):
-        surf = Surface([0.0, 1.0, 2.0], [0.0, 1.0, 2.0], [6000.0, 6000.0, 6000.0])
+        surf = Surface.from_xyz([0.0, 1.0, 2.0], [0.0, 1.0, 2.0], [6000.0, 6000.0, 6000.0])
         state.add_surface(surf)
         assert pytest.approx(viewer._compute_max_depth()) == 6000.0
 
@@ -407,8 +407,8 @@ class TestViewer3DComputeMaxDepth:
         dev = DeviationSurvey.vertical(0.0, 0.0, td=3000.0)
         state.add_well(Well("W", 0.0, 0.0, deviation=dev))
         # Surface depth 8000 > default 5000 → must win
-        surf = Surface([0.0, 500.0, 1000.0, 500.0], [0.0, 500.0, 0.0, -500.0],
-                       [8000.0, 8000.0, 8000.0, 8000.0])
+        surf = Surface.from_xyz([0.0, 500.0, 1000.0, 500.0], [0.0, 500.0, 0.0, -500.0],
+                                [8000.0, 8000.0, 8000.0, 8000.0])
         state.add_surface(surf)
         pick = HorizonPick([0.0, 1.0], [2000.0, 2000.0])
         state.add_horizon_pick(pick)

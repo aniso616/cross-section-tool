@@ -2562,6 +2562,13 @@ class MainWindow(QMainWindow):
 
     def _on_tool_changed(self, tool_id: str) -> None:
         """Route palette tool activation to views and AppState."""
+        proj = self._state.project
+        if tool_id == "horizon_pick" and not proj.horizon_picks:
+            self._tool_palette.set_active_tool("select")
+            return
+        if tool_id == "fault_pick" and not proj.fault_picks:
+            self._tool_palette.set_active_tool("select")
+            return
         self._state.set_active_tool(tool_id)
         self._section_view.set_picking_active(tool_id == "horizon_pick")
         self._section_view.set_fault_picking(tool_id == "fault_pick")
