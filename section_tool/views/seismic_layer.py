@@ -114,8 +114,11 @@ class SeismicLayer(QWidget):
         if data is None or data.size == 0:
             return
 
+        # pyqtgraph ImageItem: axis 0 = x (traces), axis 1 = y (samples).
+        # Data arrives as (n_samples, n_traces) — transpose to correct orientation.
         lut = _LUT_GRAY if cmap_key == "gray" else _LUT_GRAY_R
-        self._img = pg.ImageItem(image=data, levels=(-vmax, vmax), lut=lut)
+        self._img = pg.ImageItem(image=np.ascontiguousarray(data.T),
+                                  levels=(-vmax, vmax), lut=lut)
         # Disable pyqtgraph's own auto-levelling
         self._img.setAutoDownsample(True)
 

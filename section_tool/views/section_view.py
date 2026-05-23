@@ -1814,7 +1814,6 @@ class SectionView(QWidget):
         dist0 = float(ex_meta.get("dist_min", 0.0))
         dist1 = float(ex_meta.get("dist_max", section.total_length()))
 
-        print(f"[seismic_layer] set_data: dist={dist0:.0f}–{dist1:.0f}  y={y_top:.0f}–{y_bot:.0f}  shape={disp_data.shape}")
         self._seismic_layer.set_data(
             data=disp_data, vmax=vmax,
             dist_min=dist0, dist_max=dist1,
