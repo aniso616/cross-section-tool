@@ -639,6 +639,9 @@ class MainWindow(QMainWindow):
         self._balance_check_action = QAction("Check Section &Balance…", self)
         self._balance_check_action.triggered.connect(self._on_balance_check)
         tools_menu.addAction(self._balance_check_action)
+        self._restoration_stack_action = QAction("Restoration &Stack…", self)
+        self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
+        tools_menu.addAction(self._restoration_stack_action)
         tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
@@ -1262,6 +1265,12 @@ class MainWindow(QMainWindow):
             )
             return
         dlg = BalanceCheckDialog(self._state, section, parent=self)
+        dlg.exec()
+
+    def _on_restoration_stack(self) -> None:
+        """Tools → Restoration Stack: show the full restoration sequence timeline."""
+        from section_tool.views.restoration_stack_dialog import RestorationStackDialog
+        dlg = RestorationStackDialog(self._state, parent=self)
         dlg.exec()
 
     def _on_view_segy_header(self) -> None:
