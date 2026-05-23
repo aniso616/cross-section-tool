@@ -98,15 +98,20 @@ class ContextToolbar(QWidget):
         self._rebuilding = True
         self._clear()
         builders = {
-            "select":       self._build_select,
-            "node_edit":    self._build_node_edit,
-            "horizon_pick": self._build_horizon_pick,
-            "fault_pick":   self._build_fault_pick,
-            "polygon":      self._build_polygon,
-            "h_ref":        self._build_ref_line,
-            "v_ref":        self._build_ref_line,
-            "a_ref":        self._build_ref_line,
-            "measure":      self._build_measure,
+            "select":           self._build_select,
+            "node_edit":        self._build_node_edit,
+            "horizon_pick":     self._build_horizon_pick,
+            "fault_pick":       self._build_fault_pick,
+            "polygon":          self._build_polygon,
+            "h_ref":            self._build_ref_line,
+            "v_ref":            self._build_ref_line,
+            "a_ref":            self._build_ref_line,
+            "extend":           self._build_construct,
+            "trim":             self._build_construct,
+            "parallel":         self._build_construct,
+            "dip_constrained":  self._build_dip_constrained,
+            "kink_band":        self._build_kink_band,
+            "measure":          self._build_measure,
         }
         fn = builders.get(tool_id, self._build_default)
         fn()
@@ -237,6 +242,57 @@ class ContextToolbar(QWidget):
         clr = QPushButton("Clear")
         clr.clicked.connect(lambda: self.action_requested.emit("measure_clear"))
         self._layout.addWidget(clr)
+
+    # ------------------------------------------------------------------
+
+    def _build_construct(self) -> None:
+        labels = {
+            "extend":  "Extend  |  Click an endpoint, then the target line.",
+            "trim":    "Trim  |  Click the keep-side of a line, then the cutting line.",
+            "parallel": "Parallel  |  Click reference horizon, then click to place copy.",
+        }
+        tool = self._state.active_tool
+        lbl = QLabel(labels.get(tool, "Construct"))
+        lbl.setStyleSheet("font-size: 8pt; color: #333333;")
+        self._layout.addWidget(lbl)
+        self._layout.addWidget(self._flat_btn(
+            "Cancel", "Cancel  (Escape)", "cancel_construct",
+            self.action_requested, danger=True))
+
+    def _build_dip_constrained(self) -> None:
+        self._layout.addWidget(_qlbl("Dip-constrained  |"))
+        self._layout.addWidget(_qlbl("Dip:"))
+        dip_spin = QDoubleSpinBox()
+        dip_spin.setRange(-89.0, 89.0)
+        dip_spin.setValue(0.0)
+        dip_spin.setSuffix("°")
+        dip_spin.setFixedWidth(72)
+        dip_spin.valueChanged.connect(
+            lambda v: self.action_requested.emit(f"cst_param:dip_deg:{v}"))
+        self._layout.addWidget(dip_spin)
+        self._layout.addWidget(self._flat_btn(
+            "Cancel", "Cancel  (Escape)", "cancel_construct",
+            self.action_requested, danger=True))
+
+    def _build_kink_band(self) -> None:
+        self._layout.addWidget(_qlbl("Kink Band  |"))
+        for label, param, default in [
+            ("Axial:", "axial_dip", 45.0),
+            ("Fore:",  "fore_dip",  30.0),
+            ("Back:",  "back_dip",   0.0),
+        ]:
+            self._layout.addWidget(_qlbl(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 89.0)
+            spin.setValue(default)
+            spin.setSuffix("°")
+            spin.setFixedWidth(68)
+            spin.valueChanged.connect(
+                lambda v, p=param: self.action_requested.emit(f"cst_param:{p}:{v}"))
+            self._layout.addWidget(spin)
+        self._layout.addWidget(self._flat_btn(
+            "Cancel", "Cancel  (Escape)", "cancel_construct",
+            self.action_requested, danger=True))
 
     # ------------------------------------------------------------------
 

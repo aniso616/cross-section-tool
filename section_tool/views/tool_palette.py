@@ -73,6 +73,12 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
      "Trim  —  click a pick line then click the cutting line."),
     ("parallel",    "‗", "Parallel",
      "Parallel  —  click source line then click to place parallel copy."),
+    ("dip_constrained", "⧊", "Dip",
+     "Dip-Constrained  (D) — click anchor then click extent.\n"
+     "Creates a horizon segment locked to the configured dip angle."),
+    ("kink_band",   "⋀", "Kink",
+     "Kink Band  (K) — click backlimb horizon then click axial trace.\n"
+     "Creates a forelimb extension using kink-band kinematics."),
     None,
     "Tools",
     ("measure",     "↔", "Measure",

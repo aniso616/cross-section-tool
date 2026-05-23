@@ -26,9 +26,19 @@ from PySide6.QtWidgets import (
 
 from section_tool.app_state import AppState
 from section_tool.core.section import Section
+from section_tool.core.snap import (
+    extend_pick_to_entity as _extend_pick_to_entity,
+    find_snap as _find_snap,
+    trim_pick_at_entity as _trim_pick_at_entity,
+)
 from section_tool.core.surfaces import HorizonPick
 from section_tool.io.project import SeismicRef
 from section_tool.io.segy import SeismicDataset
+from section_tool.tools.construction_tools import (
+    DipConstrainedTool,
+    KinkBandTool,
+    ParallelOffsetTool,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +57,7 @@ _DEPTH_UNITS = ["m", "ft", "km", "mi", "ms", "s", "m+ft"]
 # Tools where snap-to-pick-point/intersection is active
 _SNAP_TOOLS = frozenset({
     "horizon_pick", "fault_pick", "polygon",
-    "extend", "trim", "parallel",
+    "extend", "trim", "parallel", "dip_constrained", "kink_band",
     "node_edit",
 })
 
@@ -253,6 +263,12 @@ class SectionView(QWidget):
         self._cst_state: str = "idle"   # "idle" | "source_selected"
         self._cst_source: dict | None = None  # {'cat': ..., 'idx': ..., 'endpoint': ...}
         self._cst_preview_line: tuple | None = None  # for parallel preview
+        # Construction tool objects (hold per-tool click state)
+        self._cst_dip_tool      = DipConstrainedTool()
+        self._cst_parallel_tool = ParallelOffsetTool()
+        self._cst_kink_tool     = KinkBandTool()
+        # Snap kind for visual indicator
+        self._snap_kind: str = "endpoint"
 
         # ---- display mode ----
         self._display_mode: Literal["variable_density", "wiggle"] = "variable_density"
@@ -692,11 +708,15 @@ class SectionView(QWidget):
 
     def set_ref_line_tool(self, tool_id: str) -> None:
         """Phase 2+3: activate/deactivate reference-line and construct tools."""
-        ref_tools     = {"h_ref", "v_ref", "a_ref"}
-        construct_tools = {"extend", "trim", "parallel"}
+        ref_tools       = {"h_ref", "v_ref", "a_ref"}
+        construct_tools = {"extend", "trim", "parallel", "dip_constrained", "kink_band"}
         self._ref_line_tool  = tool_id if tool_id in ref_tools      else None
         self._construct_tool = tool_id if tool_id in construct_tools else None
         self._aref_anchor    = None  # reset any in-progress A-Ref
+        if self._construct_tool is None:
+            self._cst_dip_tool.reset()
+            self._cst_parallel_tool.reset()
+            self._cst_kink_tool.reset()
 
     def set_picking_active(self, active: bool) -> None:
         """Enable/disable horizon pick mode."""
@@ -1423,20 +1443,25 @@ class SectionView(QWidget):
         if self._snap_point is None:
             return
         sx, sy = self._snap_point
-        s = 8
+        r = 8  # radius in pixels
         try:
             inv = self._ax.transData.inverted()
-            p0 = inv.transform([0, 0])
-            p1 = inv.transform([s, s])
-            dx = abs(float(p1[0]) - float(p0[0]))
-            dy = abs(float(p1[1]) - float(p0[1]))
+            p0 = inv.transform([0.0, 0.0])
+            pr = inv.transform([r, r])
+            rdx = abs(float(pr[0]) - float(p0[0]))
+            rdy = abs(float(pr[1]) - float(p0[1]))
         except Exception:
             return
-        kw = dict(color="magenta", lw=1.5, zorder=13)
-        self._overlay_artists.extend(self._ax.plot([sx, sx + dx],    [sy, sy + dy],      **kw))
-        self._overlay_artists.extend(self._ax.plot([sx + dx, sx],    [sy + dy, sy+2*dy], **kw))
-        self._overlay_artists.extend(self._ax.plot([sx, sx - dx],    [sy+2*dy, sy + dy], **kw))
-        self._overlay_artists.extend(self._ax.plot([sx - dx, sx],    [sy + dy, sy],      **kw))
+        kw = dict(color="#00FF88", lw=1.5, zorder=13)
+        n_seg = 12
+        xs = [sx + rdx * math.cos(2 * math.pi * i / n_seg) for i in range(n_seg + 1)]
+        ys = [sy + rdy * math.sin(2 * math.pi * i / n_seg) for i in range(n_seg + 1)]
+        self._overlay_artists.extend(self._ax.plot(xs, ys, **kw))
+        ext = 1.6
+        self._overlay_artists.extend(
+            self._ax.plot([sx - rdx * ext, sx + rdx * ext], [sy, sy], **kw))
+        self._overlay_artists.extend(
+            self._ax.plot([sx, sx], [sy - rdy * ext, sy + rdy * ext], **kw))
 
     # ------------------------------------------------------------------
     # Object renderers
@@ -2326,51 +2351,36 @@ class SectionView(QWidget):
         return (best_cat, best_idx) if best_cat is not None else None
 
     def _compute_snap(self, x: float, y: float) -> tuple[float, float] | None:
-        """Return nearest snap target (pick point or topology intersection) within threshold."""
+        """Return nearest snap target within threshold, or None."""
         if not self._snap_active:
             return None
         section = self._state.active_section
         if section is None:
             return None
         sec_name = section.name
-        ex, ey = self._to_screen_px_sv(x, y)
-        best_dist = float(_SNAP_THRESHOLD)
-        best_pt: tuple[float, float] | None = None
-
-        # Pick points
-        for picks_list in [self._state.project.horizon_picks,
-                            self._state.project.fault_picks]:
-            for hp in picks_list:
-                for fi in hp.section_indices(sec_name):
-                    d = float(hp._distances[fi])
-                    z = float(hp._depths[fi])
-                    nx, ny = self._to_screen_px_sv(d, z)
-                    dist = math.hypot(ex - nx, ey - ny)
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_pt = (d, z)
-
-        # Topology intersection points (higher priority if closer)
         topo = self._state.topology
-        if topo is not None and topo.section_name == sec_name:
-            for d, z in topo.get_snap_targets():
-                nx, ny = self._to_screen_px_sv(d, z)
-                dist = math.hypot(ex - nx, ey - ny)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_pt = (d, z)
-
-        # Section endpoints always snap within 20px
-        total = section.total_length()
-        for edge_d in (0.0, total):
-            # Use the current data-space y as z for the edge snap
-            nx, ny = self._to_screen_px_sv(edge_d, y)
-            dist = math.hypot(ex - nx, ey - ny)
-            if dist < 20.0 and dist < best_dist:
-                best_dist = dist
-                best_pt = (edge_d, y)
-
-        return best_pt
+        topo_pts: list[tuple[float, float]] = (
+            [(float(d), float(z)) for d, z in topo.get_snap_targets()]
+            if topo is not None and topo.section_name == sec_name
+            else []
+        )
+        result = _find_snap(
+            cursor=(x, y),
+            picks_by_cat={
+                "Horizons": self._state.project.horizon_picks,
+                "Faults":   self._state.project.fault_picks,
+            },
+            threshold_px=float(_SNAP_THRESHOLD),
+            to_screen=self._to_screen_px_sv,
+            section_edges=(0.0, section.total_length()),
+            topology_pts=topo_pts,
+            sec_name=sec_name,
+        )
+        if result is not None:
+            self._snap_kind = result.kind
+            return result.pt
+        self._snap_kind = "endpoint"
+        return None
 
     def _get_active_pick_last_point(
         self,
@@ -3092,6 +3102,28 @@ class SectionView(QWidget):
             self._state.set_active_tool("select")
         elif action == "new_fault":
             self._state.set_active_tool("select")
+        elif action == "cancel_construct":
+            self._cst_state = "idle"
+            self._cst_source = None
+            self._cst_dip_tool.reset()
+            self._cst_kink_tool.reset()
+            self.render()
+        elif action.startswith("cst_param:"):
+            parts = action.split(":")
+            if len(parts) == 3:
+                try:
+                    v = float(parts[2])
+                except ValueError:
+                    return
+                param = parts[1]
+                if param == "dip_deg":
+                    self._cst_dip_tool.dip_deg = v
+                elif param == "axial_dip":
+                    self._cst_kink_tool.axial_surface_dip_deg = v
+                elif param == "fore_dip":
+                    self._cst_kink_tool.fore_dip_deg = v
+                elif param == "back_dip":
+                    self._cst_kink_tool.back_dip_deg = v
 
     def _on_active_section_changed(self, section) -> None:
         self._ax_limits_set = False   # new section gets default limits
@@ -3286,9 +3318,18 @@ class SectionView(QWidget):
     # ------------------------------------------------------------------
 
     def _handle_construct_click(self, x: float, y: float) -> None:
-        """2-step state machine for extend/trim/parallel tools."""
+        """2-step state machine for construction tools."""
         tool = self._construct_tool
         if tool is None:
+            return
+
+        if tool == "dip_constrained":
+            self._handle_dip_constrained_click(x, y)
+            self.render()
+            return
+        if tool == "kink_band":
+            self._handle_kink_band_click(x, y)
+            self.render()
             return
 
         if self._cst_state == "idle":
@@ -3299,6 +3340,39 @@ class SectionView(QWidget):
             self._cst_source = None
             self._state.set_active_tool("select")
         self.render()
+
+    def _handle_dip_constrained_click(self, x: float, y: float) -> None:
+        section = self._state.active_section
+        if section is None:
+            return
+        sec_name = section.name
+        hp = self._cst_dip_tool.handle_click(x, y, sec_name)
+        if hp is None:
+            self._flash_hint(self._cst_dip_tool.hint())
+        else:
+            self._state.add_horizon_pick(hp)
+            self._state.set_active_tool("select")
+
+    def _handle_kink_band_click(self, x: float, y: float) -> None:
+        section = self._state.active_section
+        if section is None:
+            return
+        sec_name = section.name
+        if self._cst_kink_tool.state == "idle":
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is None:
+                self._flash_hint("Click on the backlimb horizon (Kink Band)")
+                return
+            cat, oi = hit_line
+            picks = (self._state.project.horizon_picks if cat == "Horizons"
+                     else self._state.project.fault_picks)
+            self._cst_kink_tool.set_reference(picks[oi])
+            self._flash_hint(self._cst_kink_tool.hint())
+        else:
+            hp_new = self._cst_kink_tool.handle_axial_click(x, sec_name)
+            if hp_new is not None:
+                self._state.add_horizon_pick(hp_new)
+                self._state.set_active_tool("select")
 
     def _cst_first_click(self, tool: str, x: float, y: float) -> None:
         """Select the source object for construct operation."""
@@ -3338,7 +3412,6 @@ class SectionView(QWidget):
 
     def _cst_second_click(self, tool: str, x: float, y: float) -> None:
         """Apply the construct operation."""
-        import copy as _cp
         section = self._state.active_section
         if section is None or self._cst_source is None:
             return
@@ -3353,27 +3426,20 @@ class SectionView(QWidget):
             if oi >= len(picks):
                 return
             hp = picks[oi]
-            sec_idxs = hp.section_indices(sec_name)
-            if len(sec_idxs) < 2:
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is None:
+                self._flash_hint("No target line found — extension cancelled")
                 return
-            d_sec = hp._distances[sec_idxs]
-            z_sec = hp._depths[sec_idxs]
-
-            if endpoint == "start":
-                slope = (z_sec[1] - z_sec[0]) / max(d_sec[1] - d_sec[0], 1e-9)
-                origin_d, origin_z = float(d_sec[0]), float(z_sec[0])
-            else:
-                slope = (z_sec[-1] - z_sec[-2]) / max(d_sec[-1] - d_sec[-2], 1e-9)
-                origin_d, origin_z = float(d_sec[-1]), float(z_sec[-1])
-
-            intersect = self._ray_line_intersection(
-                origin_d, origin_z, slope, x, y, sec_name)
-            if intersect is None:
-                self._flash_hint("Lines do not intersect — extension cancelled")
+            tcat, toi = hit_line
+            tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
+                      else self._state.project.fault_picks)
+            if toi >= len(tpicks):
                 return
-            ix, iy = intersect
-            hp2 = _cp.deepcopy(hp)
-            hp2.insert_pick(ix, iy, sec_name)
+            try:
+                hp2 = _extend_pick_to_entity(hp, endpoint, tpicks[toi], sec_name)
+            except ValueError as err:
+                self._flash_hint(str(err))
+                return
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp2)
             else:
@@ -3382,40 +3448,27 @@ class SectionView(QWidget):
         elif tool == "trim":
             src = self._cst_source
             cat, oi = src["cat"], src["idx"]
-            click_x = src["click_x"]
+            keep_side_x = src["click_x"]
             picks = (self._state.project.horizon_picks if cat == "Horizons"
                      else self._state.project.fault_picks)
             if oi >= len(picks):
                 return
             hp = picks[oi]
-            sec_idxs = hp.section_indices(sec_name)
-            d_sec = hp._distances[sec_idxs]
-            z_sec = hp._depths[sec_idxs]
-
-            cut_intersect = self._find_line_intersect_at(x, y, d_sec, z_sec, sec_name)
-            if cut_intersect is None:
-                self._flash_hint("No intersection found — trim cancelled")
+            hit_line = self._find_nearest_pick_line(x, y)
+            if hit_line is None:
+                self._flash_hint("No cutting line found — trim cancelled")
                 return
-            ix, _ = cut_intersect
-
-            keep_left = click_x <= ix
-            keep_mask = (d_sec <= ix) if keep_left else (d_sec >= ix)
-            d_keep = d_sec[keep_mask]
-            z_keep = z_sec[keep_mask]
-
-            hp3 = _cp.deepcopy(picks[oi])
-            idxs_to_remove = sorted(sec_idxs, reverse=True)
-            for idx_r in idxs_to_remove:
-                if hp3.n_picks > 1:
-                    for attr in ("_distances", "_depths", "_section_names",
-                                 "_confidence", "_quality", "_note"):
-                        arr = getattr(hp3, attr)
-                        setattr(hp3, attr, np.delete(arr, idx_r))
-            for d, z in zip(d_keep, z_keep):
-                hp3.insert_pick(float(d), float(z), sec_name)
-            z_intersect_approx = float(np.interp(ix, d_sec, z_sec))
-            hp3.insert_pick(ix, z_intersect_approx, sec_name)
-
+            tcat, toi = hit_line
+            tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
+                      else self._state.project.fault_picks)
+            if toi >= len(tpicks):
+                return
+            cut_hp = tpicks[toi]
+            try:
+                hp3 = _trim_pick_at_entity(hp, cut_hp, keep_side_x, sec_name)
+            except ValueError as err:
+                self._flash_hint(str(err))
+                return
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp3)
             else:
@@ -3543,13 +3596,51 @@ class SectionView(QWidget):
         return None
 
     def _render_construct_preview(self) -> None:
+        section = self._state.active_section
+        if section is None:
+            return
+        sec_name = section.name
+
+        # --- Dip-constrained anchor → cursor preview ---
+        if (self._construct_tool == "dip_constrained"
+                and self._cst_dip_tool.state == "anchor_set"
+                and self._cursor_data is not None):
+            cx, cy = self._cursor_data
+            cz = self._cst_dip_tool.constrain_depth(cx)
+            if cz is not None and self._cst_dip_tool.anchor is not None:
+                ax, az = self._cst_dip_tool.anchor
+                self._overlay_artists.extend(
+                    self._ax.plot([ax, cx], [az, cz], "--", color="#3399FF",
+                                  lw=1.5, alpha=0.8, zorder=12))
+
+        # --- Kink-band backlimb + forelimb preview ---
+        if (self._construct_tool == "kink_band"
+                and self._cst_kink_tool.state == "ref_selected"
+                and self._cursor_data is not None):
+            hp_ref = self._cst_kink_tool.reference
+            if hp_ref is not None:
+                si = hp_ref.section_indices(sec_name)
+                if len(si) >= 2:
+                    d_ref = hp_ref._distances[si]
+                    z_ref = hp_ref._depths[si]
+                    self._overlay_artists.extend(
+                        self._ax.plot(d_ref, z_ref, color=hp_ref.color,
+                                      lw=3.0, alpha=0.4, zorder=12))
+                    cx, cy = self._cursor_data
+                    z_ax = float(np.interp(cx, d_ref, z_ref,
+                                           left=float(z_ref[0]), right=float(z_ref[-1])))
+                    slope = math.tan(math.radians(self._cst_kink_tool.fore_dip_deg))
+                    ext_d = cx + max(abs(float(d_ref[-1]) - float(d_ref[0])) * 0.5, 500.0)
+                    self._overlay_artists.extend(
+                        self._ax.plot([cx, ext_d], [z_ax, z_ax + slope * (ext_d - cx)],
+                                      "--", color=hp_ref.color, lw=1.5, alpha=0.7, zorder=12))
+
+        # --- Existing previews (extend / trim / parallel) ---
         if self._cst_state == "idle" or self._cst_source is None:
             return
         tool = self._construct_tool
-        section = self._state.active_section
-        if section is None or tool not in ("extend", "trim", "parallel"):
+        if tool not in ("extend", "trim", "parallel"):
             return
-        sec_name = section.name
         src = self._cst_source
         cat, oi = src.get("cat"), src.get("idx")
         if cat is None or oi is None:

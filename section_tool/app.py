@@ -2358,6 +2358,10 @@ class MainWindow(QMainWindow):
         # ── Construction ──────────────────────────────────────────────────
         _sc("R", self._cycle_ref_line_tool)
         _sc("M", _tool("measure"))
+        _sc("E", _tool("extend"))
+        _sc("T", _tool("trim"))
+        _sc("D", _tool("dip_constrained"))
+        _sc("K", _tool("kink_band"))
 
         # ── Editing ───────────────────────────────────────────────────────
         _sc("Delete",       self._on_delete_shortcut)
