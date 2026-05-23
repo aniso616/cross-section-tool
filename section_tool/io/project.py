@@ -210,6 +210,7 @@ def _save_sections(f: h5py.File, sections: list[Section]) -> None:
 
 
 def _save_surfaces(f: h5py.File, surfaces: list[Surface]) -> None:
+    from section_tool.core.surfaces import GridInfo
     grp = f.create_group("surfaces")
     for i, surf in enumerate(surfaces):
         sg = grp.create_group(str(i))
@@ -221,6 +222,17 @@ def _save_surfaces(f: h5py.File, surfaces: list[Surface]) -> None:
         pts = surf.points if hasattr(surf, "points") else None
         if pts is not None:
             sg.create_dataset("points", data=pts.astype(np.float64))
+        gi = getattr(surf, "grid_info", None)
+        if gi is not None:
+            sg.attrs["is_grid"] = True
+            sg.attrs["grid_nx"] = int(gi.nx)
+            sg.attrs["grid_ny"] = int(gi.ny)
+            sg.attrs["grid_origin_x"] = float(gi.origin[0])
+            sg.attrs["grid_origin_y"] = float(gi.origin[1])
+            sg.attrs["grid_step_x0"] = float(gi.step_x[0])
+            sg.attrs["grid_step_x1"] = float(gi.step_x[1])
+            sg.attrs["grid_step_y0"] = float(gi.step_y[0])
+            sg.attrs["grid_step_y1"] = float(gi.step_y[1])
 
 
 def _save_horizon_picks_group(
@@ -355,6 +367,7 @@ def _load_sections(f: h5py.File) -> list[Section]:
 
 
 def _load_surfaces(f: h5py.File) -> list[Surface]:
+    from section_tool.core.surfaces import GridInfo
     if "surfaces" not in f:
         return []
     grp = f["surfaces"]
@@ -372,9 +385,19 @@ def _load_surfaces(f: h5py.File) -> list[Surface]:
             pts = np.column_stack([sg["x"][:], sg["y"][:], sg["z"][:]])
         else:
             continue
+        gi = None
+        if sg.attrs.get("is_grid", False):
+            gi = GridInfo(
+                origin=(float(sg.attrs["grid_origin_x"]), float(sg.attrs["grid_origin_y"])),
+                step_x=(float(sg.attrs["grid_step_x0"]), float(sg.attrs["grid_step_x1"])),
+                step_y=(float(sg.attrs["grid_step_y0"]), float(sg.attrs["grid_step_y1"])),
+                nx=int(sg.attrs["grid_nx"]),
+                ny=int(sg.attrs["grid_ny"]),
+            )
         surf = Surface(
             name=name, points=pts.astype(np.float64),
             crs_epsg=crs_epsg, z_domain=z_domain, z_units=z_units, kind=kind,
+            grid_info=gi,
         )
         result.append(surf)
     return result

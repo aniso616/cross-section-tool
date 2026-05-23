@@ -59,8 +59,152 @@ class Surface:
     _interpolator: object = field(default=None, repr=False, compare=False, init=False)
 
     # ------------------------------------------------------------------
+    # Classmethods
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_xyz(
+        cls,
+        x: list | np.ndarray,
+        y: list | np.ndarray,
+        z: list | np.ndarray,
+        *,
+        name: str = "",
+        crs_epsg: int = 0,
+        z_domain: str = "depth_m",
+        z_units: str = "m",
+        color: tuple = (255, 165, 0),
+        kind: str = "horizon",
+        **kwargs,
+    ) -> "Surface":
+        """Create a scattered Surface from separate x, y, z arrays.
+
+        Raises ValueError for fewer than 3 points or mismatched lengths.
+        """
+        x = np.asarray(x, dtype=float).ravel()
+        y = np.asarray(y, dtype=float).ravel()
+        z = np.asarray(z, dtype=float).ravel()
+        if not (len(x) == len(y) == len(z)):
+            raise ValueError(
+                f"x, y, z must have the same length (got {len(x)}, {len(y)}, {len(z)})"
+            )
+        if len(x) < 3:
+            raise ValueError(f"Surface requires at least 3 points, got {len(x)}")
+        points = np.column_stack([x, y, z])
+        return cls(
+            name=name,
+            points=points,
+            crs_epsg=crs_epsg,
+            z_domain=z_domain,
+            z_units=z_units,
+            color=color,
+            kind=kind,
+            **kwargs,
+        )
+
+    @classmethod
+    def from_grid(
+        cls,
+        xs: list | np.ndarray,
+        ys: list | np.ndarray,
+        z_grid: np.ndarray,
+        *,
+        name: str = "",
+        crs_epsg: int = 0,
+        z_domain: str = "depth_m",
+        z_units: str = "m",
+        color: tuple = (255, 165, 0),
+        kind: str = "horizon",
+        **kwargs,
+    ) -> "Surface":
+        """Create a Surface from 1-D coordinate axes and a 2-D Z array.
+
+        Parameters
+        ----------
+        xs : 1-D array of X coordinates (length nx)
+        ys : 1-D array of Y coordinates (length ny)
+        z_grid : 2-D array, shape (ny, nx)
+        """
+        xs = np.asarray(xs, dtype=float).ravel()
+        ys = np.asarray(ys, dtype=float).ravel()
+        z_grid = np.asarray(z_grid, dtype=float)
+        if z_grid.shape != (len(ys), len(xs)):
+            raise ValueError(
+                f"z_grid shape {z_grid.shape} does not match (len(ys)={len(ys)}, len(xs)={len(xs)})"
+            )
+        xx, yy = np.meshgrid(xs, ys)
+        points = np.column_stack([xx.ravel(), yy.ravel(), z_grid.ravel()])
+        gi = GridInfo(
+            origin=(float(xs[0]), float(ys[0])),
+            step_x=(float(xs[1] - xs[0]) if len(xs) > 1 else 1.0, 0.0),
+            step_y=(0.0, float(ys[1] - ys[0]) if len(ys) > 1 else 1.0),
+            nx=len(xs),
+            ny=len(ys),
+        )
+        return cls(
+            name=name,
+            points=points,
+            crs_epsg=crs_epsg,
+            z_domain=z_domain,
+            z_units=z_units,
+            color=color,
+            kind=kind,
+            grid_info=gi,
+            **kwargs,
+        )
+
+    # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def _is_grid(self) -> bool:
+        """True when the surface was created from a regular grid."""
+        return self.grid_info is not None
+
+    @property
+    def _x(self) -> np.ndarray:
+        return self.points[:, 0] if self.points is not None and len(self.points) else np.array([])
+
+    @property
+    def _y(self) -> np.ndarray:
+        return self.points[:, 1] if self.points is not None and len(self.points) else np.array([])
+
+    @property
+    def _z(self) -> np.ndarray:
+        return self.points[:, 2] if self.points is not None and len(self.points) else np.array([])
+
+    @property
+    def _grid_x(self) -> np.ndarray:
+        """Unique x-axis coordinates for grid surfaces (1-D)."""
+        if self.grid_info is not None:
+            gi = self.grid_info
+            return np.array([gi.origin[0] + i * gi.step_x[0] for i in range(gi.nx)])
+        return np.unique(self._x)
+
+    @property
+    def _grid_y(self) -> np.ndarray:
+        """Unique y-axis coordinates for grid surfaces (1-D)."""
+        if self.grid_info is not None:
+            gi = self.grid_info
+            return np.array([gi.origin[1] + j * gi.step_y[1] for j in range(gi.ny)])
+        return np.unique(self._y)
+
+    @property
+    def _grid_z(self) -> np.ndarray:
+        """2-D Z array, shape (ny, nx), for grid surfaces."""
+        gi = self.grid_info
+        if gi is None:
+            return self._z.reshape(-1, 1)
+        xs = self._grid_x
+        ys = self._grid_y
+        z_2d = np.full((gi.ny, gi.nx), np.nan)
+        for pt in self.points:
+            ix = int(np.round((pt[0] - xs[0]) / gi.step_x[0])) if gi.step_x[0] != 0 else 0
+            iy = int(np.round((pt[1] - ys[0]) / gi.step_y[1])) if gi.step_y[1] != 0 else 0
+            if 0 <= ix < gi.nx and 0 <= iy < gi.ny:
+                z_2d[iy, ix] = pt[2]
+        return z_2d
 
     @property
     def n_points(self) -> int:
@@ -109,8 +253,17 @@ class Surface:
         z  = self.points[:, 2]
         if self.interpolation == "nearest":
             self._interpolator = NearestNDInterpolator(xy, z)
-        else:
-            self._interpolator = LinearNDInterpolator(xy, z, fill_value=np.nan)
+            return
+        try:
+            interp = LinearNDInterpolator(xy, z, fill_value=np.nan)
+            # Probe the centroid to detect degenerate (collinear) point sets
+            centroid = np.array([[xy[:, 0].mean(), xy[:, 1].mean()]])
+            if not np.isfinite(interp(centroid)[0]):
+                self._interpolator = NearestNDInterpolator(xy, z)
+            else:
+                self._interpolator = interp
+        except Exception:
+            self._interpolator = NearestNDInterpolator(xy, z)
 
     def z_along_polyline(self, xy_points: np.ndarray) -> np.ndarray:
         """Interpolate Z at an (M, 2) array of (x, y) positions.
@@ -155,6 +308,8 @@ class Surface:
     def profile_along_section(
         self, section, n_samples: int = 200
     ) -> tuple[np.ndarray, np.ndarray]:
+        if n_samples < 2:
+            raise ValueError(f"n_samples must be ≥ 2, got {n_samples}")
         return self.intersect_section(section, n_samples)
 
     # ------------------------------------------------------------------
@@ -166,9 +321,10 @@ class Surface:
         self._interpolator = None
 
     def __repr__(self) -> str:
+        kind_str = "grid" if self._is_grid else "scattered"
         return (
             f"Surface(name={self.name!r}, n_points={self.n_points}, "
-            f"z_domain={self.z_domain!r}, visible={self.visible})"
+            f"kind={kind_str!r}, z_domain={self.z_domain!r}, visible={self.visible})"
         )
 
 

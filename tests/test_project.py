@@ -33,7 +33,7 @@ def _make_scattered_surface(**kw) -> Surface:
     x = rng.uniform(0, 100, 20)
     y = rng.uniform(0, 100, 20)
     z = x + y
-    return Surface(x, y, z, name=kw.get("name", "Surf"), kind="horizon", z_units="m")
+    return Surface.from_xyz(x, y, z, name=kw.get("name", "Surf"), kind="horizon", z_units="m")
 
 
 def _make_grid_surface(**kw) -> Surface:
@@ -257,13 +257,13 @@ class TestSurfaceRoundtrip:
 
     def test_surface_kind_preserved(self, tmp_path):
         p = Project()
-        surf = Surface([0, 1, 2], [0, 1, 2], [0, 1, 2], kind="fault")
+        surf = Surface.from_xyz([0, 1, 2], [0, 1, 2], [0, 1, 2], kind="fault")
         p.surfaces.append(surf)
         assert _roundtrip(p, tmp_path).surfaces[0].kind == "fault"
 
     def test_surface_z_units_preserved(self, tmp_path):
         p = Project()
-        surf = Surface([0, 1, 2], [0, 1, 2], [0, 1, 2], z_units="ft")
+        surf = Surface.from_xyz([0, 1, 2], [0, 1, 2], [0, 1, 2], z_units="ft")
         p.surfaces.append(surf)
         assert _roundtrip(p, tmp_path).surfaces[0].z_units == "ft"
 

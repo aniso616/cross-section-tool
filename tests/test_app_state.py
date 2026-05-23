@@ -45,7 +45,7 @@ def _sec(name="L1") -> Section:
 
 
 def _surf(name="S1") -> Surface:
-    return Surface([0, 1, 2], [0, 1, 2], [0, 1, 2], name=name)
+    return Surface.from_xyz([0, 1, 2], [0, 1, 2], [0, 1, 2], name=name)
 
 
 def _pick(name="P1") -> HorizonPick:

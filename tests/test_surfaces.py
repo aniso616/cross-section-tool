@@ -19,7 +19,7 @@ def tilted_plane_scattered(nx: int = 10, ny: int = 10) -> Surface:
     x = rng.uniform(0, 100, nx * ny)
     y = rng.uniform(0, 100, nx * ny)
     z = 2.0 * x + 3.0 * y
-    return Surface(x, y, z, name="plane_scattered")
+    return Surface.from_xyz(x, y, z, name="plane_scattered")
 
 
 def tilted_plane_grid(nx: int = 11, ny: int = 11) -> Surface:
@@ -47,25 +47,24 @@ def north_section(length: float = 100.0) -> Section:
 
 class TestSurfaceConstruction:
     def test_basic_construction(self):
-        surf = Surface([0, 1, 2], [0, 0, 0], [10, 20, 30])
-        assert surf.n_picks if hasattr(surf, 'n_picks') else True  # just alive
+        surf = Surface.from_xyz([0, 1, 2], [0, 0, 0], [10, 20, 30])
         assert repr(surf)  # doesn't crash
 
     def test_too_few_points(self):
         with pytest.raises(ValueError):
-            Surface([0, 1], [0, 1], [0, 1])
+            Surface.from_xyz([0, 1], [0, 1], [0, 1])
 
     def test_mismatched_lengths(self):
         with pytest.raises(ValueError):
-            Surface([0, 1, 2], [0, 1], [0, 1, 2])
+            Surface.from_xyz([0, 1, 2], [0, 1], [0, 1, 2])
 
     def test_metadata_defaults(self):
-        surf = Surface([0, 1, 2], [0, 1, 2], [0, 1, 2])
+        surf = Surface.from_xyz([0, 1, 2], [0, 1, 2], [0, 1, 2])
         assert surf.kind == "horizon"
         assert surf.z_units == "m"
 
     def test_metadata_custom(self):
-        surf = Surface(
+        surf = Surface.from_xyz(
             [0, 1, 2], [0, 1, 2], [0, 1, 2],
             name="Top Cretaceous",
             kind="unconformity",
@@ -101,7 +100,7 @@ class TestSurfaceConstruction:
 
 class TestSurfaceExtent:
     def test_extent_matches_data(self):
-        surf = Surface([10, 20, 30], [5, 15, 25], [0, 0, 0])
+        surf = Surface.from_xyz([10, 20, 30], [5, 15, 25], [0, 0, 0])
         xmin, xmax, ymin, ymax = surf.extent()
         assert xmin == 10.0
         assert xmax == 30.0
@@ -170,7 +169,7 @@ class TestSurfaceSampleGrid:
 class TestSurfaceSampleScattered:
     def test_sample_at_exact_point(self):
         # Three-point scattered surface: easy to reason about
-        surf = Surface([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 2.0, 3.0])
+        surf = Surface.from_xyz([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 2.0, 3.0])
         # At origin
         assert pytest.approx(surf.sample(0.0, 0.0), abs=1e-6) == 0.0
 
@@ -182,7 +181,7 @@ class TestSurfaceSampleScattered:
 
     def test_sample_outside_convex_hull_is_nan(self):
         # Tiny triangle; far-away point should be nan
-        surf = Surface([0.0, 1.0, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0])
+        surf = Surface.from_xyz([0.0, 1.0, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0])
         assert math.isnan(surf.sample(100.0, 100.0))
 
 

@@ -117,8 +117,11 @@ class _FakePick:
         self.name = name
         self.color = color
         self._section_names = np.array(snames, dtype=object)
-        self._distances = np.array(dists)
-        self._depths = np.array(depths)
+        self._distances = np.array(dists, dtype=float)
+        self._depths = np.array(depths, dtype=float)
+        n = len(dists)
+        self._map_x = np.full(n, np.nan)
+        self._map_y = np.full(n, np.nan)
         self.line_width = 1.5
         self.line_style = "solid"
         self.contact_type = "conformable"
