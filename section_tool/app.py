@@ -636,6 +636,9 @@ class MainWindow(QMainWindow):
         self._thermal_action = QAction("&Thermal Modeling…", self)
         self._thermal_action.triggered.connect(self._on_thermal_modeling)
         tools_menu.addAction(self._thermal_action)
+        self._balance_check_action = QAction("Check Section &Balance…", self)
+        self._balance_check_action.triggered.connect(self._on_balance_check)
+        tools_menu.addAction(self._balance_check_action)
         tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
@@ -1246,6 +1249,19 @@ class MainWindow(QMainWindow):
             )
             return
         dlg = ThermalModelingDialog(self._state, section, parent=self)
+        dlg.exec()
+
+    def _on_balance_check(self) -> None:
+        """Tools → Check Section Balance: open the balance check dialog."""
+        from section_tool.views.balance_check_dialog import BalanceCheckDialog
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(
+                self, "No active section",
+                "Select a section before running the balance check.",
+            )
+            return
+        dlg = BalanceCheckDialog(self._state, section, parent=self)
         dlg.exec()
 
     def _on_view_segy_header(self) -> None:
