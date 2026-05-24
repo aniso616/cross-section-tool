@@ -1142,7 +1142,9 @@ class SectionView(QWidget):
         x_range = xl[1] - xl[0]
         x_pos   = xl[0] + x_range * 0.005
         tick_len = x_range * 0.008
-        label_kw = dict(fontsize=7, color="#888888", va="center", ha="left", zorder=15)
+        label_kw = dict(fontsize=7, color="#cccccc", va="center", ha="left", zorder=15,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1014",
+                                  edgecolor="none", alpha=0.75))
         y = math.ceil(y_top / interval) * interval
         while y <= y_bot:
             self._overlay_artists.extend(
@@ -1165,7 +1167,9 @@ class SectionView(QWidget):
         y_range = abs(yl[0] - yl[1])
         y_pos    = y_bot - y_range * 0.005
         tick_len = y_range * 0.008
-        label_kw = dict(fontsize=7, color="#888888", va="top", ha="center", zorder=15)
+        label_kw = dict(fontsize=7, color="#cccccc", va="top", ha="center", zorder=15,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1014",
+                                  edgecolor="none", alpha=0.75))
         x = math.ceil(x_start / interval) * interval
         while x <= x_end:
             self._overlay_artists.extend(
