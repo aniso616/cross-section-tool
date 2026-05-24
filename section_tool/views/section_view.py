@@ -1747,12 +1747,16 @@ class SectionView(QWidget):
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
             if removed and hp.name and hp.name in removed:
                 continue
+            if not getattr(hp, "visible", True):
+                continue
             self._render_pick_object("Horizons", obj_idx, hp, section, "o", "solid")
 
     def _render_faults(self, section: Section) -> None:
         removed = self._get_removed_names()
         for obj_idx, fp in enumerate(self._state.project.fault_picks):
             if removed and fp.name and fp.name in removed:
+                continue
+            if not getattr(fp, "visible", True):
                 continue
             self._render_pick_object("Faults", obj_idx, fp, section, "D", "dashed")
 
@@ -2081,6 +2085,8 @@ class SectionView(QWidget):
         for poly in self._state.project.polygons:
             if removed and poly.name and poly.name in removed:
                 continue
+            if not getattr(poly, "visible", True):
+                continue
             # Only render polygons that belong to this section (or have no section tag)
             poly_sec = getattr(poly, "section_name", "")
             if poly_sec and poly_sec != section.name:
@@ -2239,6 +2245,8 @@ class SectionView(QWidget):
             tick_w = section.total_length() * 0.006
 
         for well in self._state.project.wells:
+            if not getattr(well, "visible", True):
+                continue
             collar_dist, perp = well.project_to_section(section)
             if abs(perp) > _WELL_MAX_PERP:
                 continue

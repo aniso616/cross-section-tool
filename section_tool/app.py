@@ -743,6 +743,8 @@ class MainWindow(QMainWindow):
         self._project_panel.object_color_changed.connect(self._on_panel_color)
         self._project_panel.object_line_width_changed.connect(self._on_panel_line_width)
         self._project_panel.object_line_style_changed.connect(self._on_panel_line_style)
+        self._project_panel.visibility_changed.connect(self._on_panel_visibility)
+        self._project_panel.object_selected.connect(self._on_panel_object_selected)
         self._project_panel.add_requested.connect(self._on_panel_add)
         self._project_panel.create_ew_section_through_well.connect(
             self._on_create_ew_section_through_well)
@@ -1924,6 +1926,32 @@ class MainWindow(QMainWindow):
                 self._state.update_fault_pick(index, pick)
         except Exception:
             pass
+
+    def _on_panel_visibility(self, category: str, index: int, visible: bool) -> None:
+        import copy
+        proj = self._state.project
+        try:
+            if category == "Horizons" and index < len(proj.horizon_picks):
+                pick = copy.deepcopy(proj.horizon_picks[index])
+                pick.visible = visible
+                self._state.update_horizon_pick(index, pick)
+            elif category == "Faults" and index < len(proj.fault_picks):
+                pick = copy.deepcopy(proj.fault_picks[index])
+                pick.visible = visible
+                self._state.update_fault_pick(index, pick)
+            elif category == "Polygons" and index < len(proj.polygons):
+                poly = copy.deepcopy(proj.polygons[index])
+                poly.visible = visible
+                self._state.update_polygon(index, poly)
+            elif category == "Wells" and index < len(proj.wells):
+                well = copy.deepcopy(proj.wells[index])
+                well.visible = visible
+                self._state.update_well(index, well)
+        except Exception:
+            pass
+
+    def _on_panel_object_selected(self, category: str, index: int) -> None:
+        self._properties_panel.set_selected_object(category, index)
 
     def _on_panel_add(self, category: str) -> None:
         if category == "Sections":

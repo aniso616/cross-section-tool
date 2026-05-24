@@ -106,6 +106,7 @@ class PropertiesPanel(QDockWidget):
         super().__init__("Properties", parent)
         self._state = state
         self._selected_node: tuple[str, int, int] | None = None
+        self._selected_object: tuple[str, int] | None = None
 
         self.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea
@@ -150,11 +151,16 @@ class PropertiesPanel(QDockWidget):
         s.horizon_pick_modified.connect(lambda *_: self._rebuild())
         s.fault_pick_modified.connect(lambda *_: self._rebuild())
         s.section_modified.connect(lambda *_: self._rebuild())
+        s.polygon_modified.connect(lambda *_: self._rebuild())
 
     def set_selected_node(
         self, node: tuple[str, int, int] | None
     ) -> None:
         self._selected_node = node
+        self._rebuild()
+
+    def set_selected_object(self, category: str, index: int) -> None:
+        self._selected_object = (category, index)
         self._rebuild()
 
     # ------------------------------------------------------------------
@@ -190,6 +196,16 @@ class PropertiesPanel(QDockWidget):
                 self._build_node(cat, oi, pi, picks[oi])
                 return
             self._selected_node = None
+
+        # Selected polygon (from tree click)
+        if self._selected_object is not None:
+            so_cat, so_idx = self._selected_object
+            if so_cat == "Polygons":
+                proj = self._state.project
+                if so_idx < len(proj.polygons):
+                    self._build_polygon(so_idx, proj.polygons[so_idx])
+                    return
+            self._selected_object = None
 
         # Active pick target (horizon/fault selected)
         cat = self._state.active_pick_category
@@ -353,6 +369,47 @@ class PropertiesPanel(QDockWidget):
 
         self._layout.addLayout(grid)
         self._layout.addStretch()
+
+    def _build_polygon(self, idx: int, poly) -> None:
+        self._layout.addWidget(_sep_label(f"Polygon: {poly.name or 'Unnamed'}"))
+        grid, ar = _grid()
+        ar("Vertices:", str(poly.n_vertices))
+        if getattr(poly, "formation", ""):
+            ar("Formation:", poly.formation)
+        self._layout.addLayout(grid)
+
+        self._layout.addWidget(_sep_label("Fill"))
+        fill_grid, far = _grid()
+
+        alpha_row = QWidget()
+        alpha_hb = QHBoxLayout(alpha_row)
+        alpha_hb.setContentsMargins(0, 0, 0, 0)
+        alpha_hb.setSpacing(6)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(round(poly.fill_alpha * 100))
+        alpha_lbl = QLabel(f"{round(poly.fill_alpha * 100)}%")
+        alpha_lbl.setFixedWidth(34)
+        alpha_lbl.setStyleSheet("color: #CCCCCC; font-size: 8pt;")
+
+        def _on_alpha(v: int) -> None:
+            alpha_lbl.setText(f"{v}%")
+            self._commit_polygon_alpha(idx, v / 100.0)
+
+        slider.valueChanged.connect(_on_alpha)
+        alpha_hb.addWidget(slider, 1)
+        alpha_hb.addWidget(alpha_lbl)
+        far("Alpha:", alpha_row)
+        self._layout.addLayout(fill_grid)
+        self._layout.addStretch()
+
+    def _commit_polygon_alpha(self, idx: int, alpha: float) -> None:
+        proj = self._state.project
+        if idx >= len(proj.polygons):
+            return
+        poly = copy.deepcopy(proj.polygons[idx])
+        poly.fill_alpha = float(np.clip(alpha, 0.0, 1.0))
+        self._state.update_polygon(idx, poly)
 
     def _build_node(self, cat: str, oi: int, pi: int, hp) -> None:
         self._layout.addWidget(_sep_label(f"Node: {hp.name or cat[:-1]}"))

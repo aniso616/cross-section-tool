@@ -216,6 +216,7 @@ class ProjectPanel(QDockWidget):
     """
 
     properties_requested      = Signal(str, int)   # Phase A/B/E
+    object_selected           = Signal(str, int)   # tree click → properties panel
     visibility_changed        = Signal(str, int, bool)
     object_color_changed      = Signal(str, int, str)
     object_line_width_changed = Signal(str, int, float)
@@ -523,6 +524,7 @@ class ProjectPanel(QDockWidget):
             proj = self._state.project
             if idx < len(proj.sections):
                 self._state.set_active_section(proj.sections[idx])
+        self.object_selected.emit(cat, idx)
 
     def _on_active_section_changed(self, *_) -> None:
         """Update active-section styling and tree selection without rebuilding."""
