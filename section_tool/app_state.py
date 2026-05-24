@@ -254,15 +254,17 @@ class AppState(QObject):
                          crs, geom_type: str) -> None:
         import os
         name = os.path.splitext(os.path.basename(filepath))[0]
-        self._vector_layers.append({
-            "name":     name,
-            "filepath": filepath,
-            "features": features,
-            "crs":      str(crs),
+        layer = {
+            "name":      name,
+            "filepath":  filepath,
+            "features":  features,
+            "crs":       str(crs),
             "geom_type": geom_type,
-            "color":    "#FFAA00",
-            "visible":  True,
-        })
+            "color":     "#FFAA00",
+            "visible":   True,
+        }
+        self._vector_layers.append(layer)
+        self._db_write(lambda lyr=layer: self._pm.db.upsert_vector_layer(lyr))
         self.project_changed.emit()
 
     def get_vector_layers(self) -> list[dict]:
@@ -370,6 +372,7 @@ class AppState(QObject):
         """
         path = str(path)
         self._pm.close()
+        self._vector_layers = []   # clear before load so stale layers don't linger
         if os.path.isdir(path):
             # SQLite folder-based project
             self._pm.open_project(path)
@@ -601,6 +604,12 @@ class AppState(QObject):
         # Restoration sequence
         proj.restoration_sequence = db.get_restoration_sequence()
 
+        # Vector layers (re-read features from source files on load)
+        try:
+            self._vector_layers = db.load_vector_layers()
+        except Exception:
+            self._vector_layers = []
+
         return proj
 
     def save_project(self) -> None:
@@ -633,6 +642,26 @@ class AppState(QObject):
             )
             for section in self._project.sections:
                 self._pm.db.upsert_section(section)
+            for hp in self._project.horizon_picks:
+                self._pm.db.upsert_horizon(hp)
+            for fp in self._project.fault_picks:
+                self._pm.db.upsert_fault(fp)
+            for w in self._project.wells:
+                self._pm.db.upsert_well(w)
+            for ref in self._project.seismic_refs:
+                self._pm.db.upsert_seismic(ref)
+            if self._project.polygons:
+                self._pm.db.replace_all_polygons(self._project.polygons)
+            if self._project.reference_lines:
+                self._pm.db.replace_all_reference_lines(self._project.reference_lines)
+            if self._project.annotations:
+                self._pm.db.replace_all_annotations(self._project.annotations)
+            if self._project.aoi is not None:
+                self._pm.db.upsert_aoi(self._project.aoi)
+            for surface in self._project.surfaces:
+                self._save_surface_to_db(surface)
+            for lyr in self._vector_layers:
+                self._pm.db.upsert_vector_layer(lyr)
             self._pm.save()
             self._project_path = new_path
         else:
