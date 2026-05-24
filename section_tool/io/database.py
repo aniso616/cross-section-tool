@@ -328,6 +328,16 @@ CREATE TABLE IF NOT EXISTS section_set_members (
     sort_index   INTEGER NOT NULL,
     UNIQUE(set_id, section_id)
 );
+
+CREATE TABLE IF NOT EXISTS vector_layers (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT    NOT NULL,
+    filepath  TEXT    NOT NULL,
+    crs       TEXT,
+    geom_type TEXT,
+    color     TEXT    DEFAULT '#FFAA00',
+    visible   INTEGER DEFAULT 1
+);
 """
 
 # ---------------------------------------------------------------------------
@@ -1347,6 +1357,53 @@ class ProjectDatabase:
     def get_aoi(self) -> dict | None:
         row = self.conn.execute("SELECT * FROM aoi WHERE id = 1").fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Vector layers
+    # ------------------------------------------------------------------
+
+    def upsert_vector_layer(self, layer: dict) -> int:
+        row = self.conn.execute(
+            "SELECT id FROM vector_layers WHERE filepath=?", (layer["filepath"],)
+        ).fetchone()
+        if row:
+            self.conn.execute(
+                """UPDATE vector_layers
+                   SET name=?, crs=?, geom_type=?, color=?, visible=?
+                   WHERE id=?""",
+                (layer["name"], layer.get("crs", ""), layer.get("geom_type", ""),
+                 layer.get("color", "#FFAA00"), int(layer.get("visible", True)),
+                 row["id"]),
+            )
+            lid = row["id"]
+        else:
+            cur = self.conn.execute(
+                """INSERT INTO vector_layers(name, filepath, crs, geom_type, color, visible)
+                   VALUES(?, ?, ?, ?, ?, ?)""",
+                (layer["name"], layer["filepath"], layer.get("crs", ""),
+                 layer.get("geom_type", ""), layer.get("color", "#FFAA00"),
+                 int(layer.get("visible", True))),
+            )
+            lid = cur.lastrowid
+        self.conn.commit()
+        return lid
+
+    def load_vector_layers(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT name, filepath, crs, geom_type, color, visible FROM vector_layers"
+        ).fetchall()
+        result = []
+        for r in rows:
+            layer = dict(r)
+            layer["visible"] = bool(layer["visible"])
+            try:
+                import fiona
+                with fiona.open(layer["filepath"]) as src:
+                    layer["features"] = [dict(f) for f in src]
+            except Exception:
+                layer["features"] = []
+            result.append(layer)
+        return result
 
     # ------------------------------------------------------------------
     # Surfaces
