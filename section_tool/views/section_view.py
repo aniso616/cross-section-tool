@@ -487,7 +487,7 @@ class SectionView(QWidget):
 
         # ── Row 2: seismic controls (hidden when no seismic) ────────────
         self._seismic_row = QWidget()
-        self._seismic_row.setFixedHeight(26)
+        self._seismic_row.setFixedHeight(28)
         self._seismic_row.setStyleSheet(
             "background: #eef2f5; border-bottom: 1px solid #ddd; color: #333333;")
         sl = QHBoxLayout(self._seismic_row)
@@ -536,6 +536,20 @@ class SectionView(QWidget):
         )
         self._fast_display_cb.setStyleSheet("color: #555555; font-size: 8pt;")
         sl.addWidget(self._fast_display_cb)
+
+        _cmap_lbl = QLabel("Color:")
+        _cmap_lbl.setStyleSheet("color: #555555; font-size: 8pt;")
+        sl.addWidget(_cmap_lbl)
+        self._seismic_cmap_combo = QComboBox()
+        self._seismic_cmap_combo.addItem("Gray (white pk)", "gray_r")
+        self._seismic_cmap_combo.addItem("Gray (black pk)", "gray")
+        self._seismic_cmap_combo.addItem("Seismic (R/B)",   "seismic")
+        self._seismic_cmap_combo.setFixedWidth(110)
+        self._seismic_cmap_combo.setStyleSheet("color: #333333; background: #ffffff;")
+        self._seismic_cmap_combo.setToolTip("Seismic amplitude color map")
+        self._seismic_cmap_combo.currentIndexChanged.connect(self._on_seismic_cmap_changed)
+        sl.addWidget(self._seismic_cmap_combo)
+
         sl.addStretch()
         self._seismic_row.hide()   # shown when seismic refs are present
 
@@ -1054,6 +1068,12 @@ class SectionView(QWidget):
         self._seismic_vel_spin.setValue(vel_val)
         self._seismic_vel_spin.blockSignals(False)
         self._seismic_vel_spin.setVisible(dom_idx == 0)
+        _cmap_keys = ["gray_r", "gray", "seismic"]
+        cmap_key = (sds.colormap if sds else _DEFAULT_CMAP)
+        cmap_idx = _cmap_keys.index(cmap_key) if cmap_key in _cmap_keys else 0
+        self._seismic_cmap_combo.blockSignals(True)
+        self._seismic_cmap_combo.setCurrentIndex(cmap_idx)
+        self._seismic_cmap_combo.blockSignals(False)
 
         has_seis = bool(self._state.project.seismic_refs
                         or self._state.get_seismic_for_section(section.name)[0] is not None)
@@ -2757,6 +2777,17 @@ class SectionView(QWidget):
             sds.constant_velocity = value
             section.seismic_display = sds
         self._ax_limits_set = False
+        self.request_render()
+
+    def _on_seismic_cmap_changed(self, _index: int = 0) -> None:
+        from section_tool.core.seismic_settings import SeismicDisplaySettings
+        cmap = self._seismic_cmap_combo.currentData()
+        section = self._state.active_section
+        if section is not None:
+            sds = getattr(section, "seismic_display", None) or SeismicDisplaySettings()
+            sds.colormap = cmap
+            section.seismic_display = sds
+        self._seismic_layer_key = None   # force LUT re-upload on next render
         self.request_render()
 
     # ------------------------------------------------------------------

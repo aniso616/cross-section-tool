@@ -24,19 +24,28 @@ pg.setConfigOption("antialias", False)
 pg.setConfigOption("background", "#0e1014")
 pg.setConfigOption("foreground", "#888888")
 
-# Grayscale LUTs — built once
+# LUTs — built once at import time
 _LUT_GRAY_R = None   # reversed: -clip → white, +clip → black  (default)
 _LUT_GRAY   = None   # normal:  -clip → black, +clip → white
+_LUT_SEIS   = None   # diverging: -clip → blue, 0 → white, +clip → red
 
 
 def _build_luts() -> None:
-    global _LUT_GRAY_R, _LUT_GRAY
+    global _LUT_GRAY_R, _LUT_GRAY, _LUT_SEIS
     _LUT_GRAY_R = np.empty((256, 3), dtype=np.uint8)
     _LUT_GRAY   = np.empty((256, 3), dtype=np.uint8)
+    _LUT_SEIS   = np.empty((256, 3), dtype=np.uint8)
     for i in range(256):
         v_r = 255 - i
         _LUT_GRAY_R[i] = [v_r, v_r, v_r]
         _LUT_GRAY  [i] = [i,   i,   i  ]
+        t = i / 255.0   # 0 = -vmax (trough), 1 = +vmax (peak)
+        if t < 0.5:
+            s = t * 2.0          # 0 → 1  (blue → white)
+            _LUT_SEIS[i] = [int(s * 255), int(s * 255), 255]
+        else:
+            s = (t - 0.5) * 2.0  # 0 → 1  (white → red)
+            _LUT_SEIS[i] = [255, int((1.0 - s) * 255), int((1.0 - s) * 255)]
 
 
 _build_luts()
@@ -121,7 +130,12 @@ class SeismicLayer(QWidget):
 
         # pyqtgraph ImageItem: axis 0 = x (traces), axis 1 = y (samples).
         # Data arrives as (n_samples, n_traces) — transpose to correct orientation.
-        lut = _LUT_GRAY if cmap_key == "gray" else _LUT_GRAY_R
+        if cmap_key == "gray":
+            lut = _LUT_GRAY
+        elif cmap_key == "seismic":
+            lut = _LUT_SEIS
+        else:
+            lut = _LUT_GRAY_R
         self._img = pg.ImageItem(image=np.ascontiguousarray(data.T),
                                   levels=(-vmax, vmax), lut=lut)
         # Disable pyqtgraph's own auto-levelling
