@@ -619,6 +619,22 @@ class AppState(QObject):
         if self._pm.is_open:
             self._pm.save_as(new_path)
             self._project_path = new_path
+        elif os.path.isdir(new_path) or not os.path.splitext(new_path)[1]:
+            # First-time save of an in-memory project to a folder.
+            # Initialize SQLite project manager and sync any existing sections.
+            self._pm.new_project(
+                new_path,
+                self._project.name,
+                self._project.crs_epsg,
+                depth_units=self._project.depth_units,
+                depth_domain=self._project.depth_domain,
+                default_depth_min=self._project.default_depth_min,
+                default_depth_max=self._project.default_depth_max,
+            )
+            for section in self._project.sections:
+                self._pm.db.upsert_section(section)
+            self._pm.save()
+            self._project_path = new_path
         else:
             self._project_path = new_path
             self._project.save(self._project_path)

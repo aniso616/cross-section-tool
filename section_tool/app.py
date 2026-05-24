@@ -2980,6 +2980,8 @@ class SectionMainWindow(MainWindow):
 
         self.v_splitter.addWidget(self.section_tile)
         self.v_splitter.addWidget(self.map_tile)
+        self.v_splitter.setStretchFactor(0, 3)   # section: 60%
+        self.v_splitter.setStretchFactor(1, 2)   # map: 40%
         # Bidirectional cursor: map tile hover → section vertical indicator
         self._map_view.cursor_map_pos.connect(self._on_map_cursor_pos)
         # Reproject picks when section geometry changes

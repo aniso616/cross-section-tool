@@ -130,7 +130,9 @@ class _CompositingCanvas(FigureCanvasQTAgg):
         size = self._seismic_ref.size()
         if size.isEmpty():
             return
-        pm = QPixmap(size)
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(round(size.width() * dpr), round(size.height() * dpr))
+        pm.setDevicePixelRatio(dpr)
         self._seismic_ref.render_to_pixmap(pm)
         self._seismic_bg = pm
 
@@ -581,6 +583,7 @@ class SectionView(QWidget):
         self._canvas.setParent(self._seismic_layer)
         self._canvas.setGeometry(self._seismic_layer.rect())
         self._canvas.raise_()
+        self._canvas.show()   # must be explicit — reparenting leaves the widget hidden
         layout.addWidget(self._seismic_layer, stretch=1)
         # Event filter on seismic_layer to resize canvas when layout changes
         self._seismic_layer.installEventFilter(self)
