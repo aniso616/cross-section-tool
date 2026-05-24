@@ -348,6 +348,12 @@ class ProjectPanel(QDockWidget):
         s.reference_line_added.connect(lambda _: self._rebuild())
         s.reference_line_removed.connect(lambda _: self._rebuild())
         s.reference_line_modified.connect(lambda *_: self._rebuild())
+        s.surface_added.connect(lambda _: self._rebuild())
+        s.surface_removed.connect(lambda _: self._rebuild())
+        s.surface_modified.connect(lambda *_: self._rebuild())
+        s.polygon_added.connect(lambda _: self._rebuild())
+        s.polygon_removed.connect(lambda _: self._rebuild())
+        s.polygon_modified.connect(lambda *_: self._rebuild())
         # Active section indicator + tree selection sync
         s.active_section_changed.connect(self._on_active_section_changed)
         # Pick-target selection: highlight the active horizon/fault row
