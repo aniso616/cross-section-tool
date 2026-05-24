@@ -145,6 +145,7 @@ class _CompositingCanvas(FigureCanvasQTAgg):
         from PySide6.QtCore import QPoint
 
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
         # 1. Seismic background from cached render (never call grab() here —
         #    that triggers recursive repaint which Qt detects and aborts).
