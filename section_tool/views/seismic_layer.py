@@ -138,6 +138,18 @@ class SeismicLayer(QWidget):
             self._plot.removeItem(self._img)
             self._img = None
 
+    def render_to_pixmap(self, pm: "QPixmap") -> None:
+        """Render only the pyqtgraph seismic scene to *pm* (no overlay children).
+
+        Uses QGraphicsView.render(QPainter) — renders the scene directly to the
+        pixmap without triggering the recursive child-widget paint issue.
+        """
+        from PySide6.QtGui import QPainter
+        pm.fill(Qt.GlobalColor.black)
+        painter = QPainter(pm)
+        self._gw.render(painter)
+        painter.end()
+
     def sync_view(
         self,
         xmin: float, xmax: float,

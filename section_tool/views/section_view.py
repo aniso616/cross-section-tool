@@ -97,6 +97,80 @@ _PP_SELECTED = (7,  "#ff7f0e", "white", 1.5)
 _PP_DRAG     = (7,  "red",     "white", 1.5)
 
 
+class _CompositingCanvas(FigureCanvasQTAgg):
+    """FigureCanvasQTAgg that explicitly composites seismic + matplotlib overlays.
+
+    Qt's WA_TranslucentBackground on child widgets composites against the parent
+    background, not against sibling widgets in the same QStackedLayout.  We work
+    around this by caching the seismic layer's rendered content (updated via
+    update_seismic_bg()) and drawing it as an opaque background in paintEvent,
+    then painting the matplotlib overlay on top.
+
+    update_seismic_bg() must be called from _full_render after sync_view() and
+    from pan/scroll handlers — never from inside paintEvent (that would cause Qt's
+    recursive-repaint detection to fire and discard our paint output).
+    """
+
+    def __init__(self, figure: "Figure") -> None:
+        super().__init__(figure)
+        self._seismic_ref: QWidget | None = None   # set after SeismicLayer is created
+        self._seismic_bg: "QPixmap | None" = None  # cached seismic background
+
+    def update_seismic_bg(self) -> None:
+        """Re-render the seismic layer to an off-screen pixmap and cache it.
+
+        Call this after sync_view() in every render path so paintEvent has
+        fresh seismic content without needing to grab() inside paintEvent.
+        Renders only the pyqtgraph layer (not the canvas child) so the seismic
+        image isn't covered by the canvas's own background.
+        """
+        if self._seismic_ref is None:
+            return
+        from PySide6.QtGui import QPixmap
+        size = self._seismic_ref.size()
+        if size.isEmpty():
+            return
+        pm = QPixmap(size)
+        self._seismic_ref.render_to_pixmap(pm)
+        self._seismic_bg = pm
+
+    def paintEvent(self, event) -> None:
+        self._draw_idle()
+        if not hasattr(self, "renderer"):
+            return
+
+        from PySide6.QtGui import QPainter, QImage
+        from PySide6.QtCore import QPoint
+
+        painter = QPainter(self)
+
+        # 1. Seismic background from cached render (never call grab() here —
+        #    that triggers recursive repaint which Qt detects and aborts).
+        if self._seismic_bg is not None:
+            painter.drawPixmap(self.rect(), self._seismic_bg)
+        else:
+            from PySide6.QtGui import QColor
+            painter.fillRect(self.rect(), QColor("#0e1014"))
+
+        # 2. Matplotlib overlay — draw RGBA buffer with SourceOver compositing
+        renderer = self.renderer
+        w, h = int(renderer.width), int(renderer.height)
+        qimage = QImage(
+            renderer.buffer_rgba(),
+            w,
+            h,
+            w * 4,
+            QImage.Format.Format_RGBA8888,
+        ).copy()
+        dpr = self.devicePixelRatioF()
+        qimage.setDevicePixelRatio(dpr)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.drawImage(QPoint(0, 0), qimage)
+
+        painter.end()
+
+
 class SectionViewState:
     """View-state adapter exposing axes extents and pan/zoom for WASDNavigator."""
 
@@ -336,7 +410,7 @@ class SectionView(QWidget):
         self._fig.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
         self._ax = self._fig.add_subplot(111)
         self._configure_axes(self._ax)
-        self._canvas = FigureCanvasQTAgg(self._fig)
+        self._canvas = _CompositingCanvas(self._fig)
 
         # Hidden toolbar — kept for zoom stack; NOT in the layout.
         self._toolbar = NavigationToolbar2QT(self._canvas, self)
@@ -493,21 +567,23 @@ class SectionView(QWidget):
         layout.addWidget(self._seismic_row)
         layout.addWidget(self._pick_banner)
 
-        # Layered canvas: pyqtgraph seismic (bottom) + matplotlib overlays (top)
-        from PySide6.QtWidgets import QStackedLayout as _SL
+        # Layered canvas: pyqtgraph seismic layer (in layout) + matplotlib canvas
+        # as an absolute-positioned child widget on top.  StackAll was abandoned
+        # because QGraphicsView (pyqtgraph) causes Qt's sibling-clipping to assign
+        # a zero-size clip to the canvas, so nothing we draw in paintEvent appears.
+        # Instead we make the canvas a child of seismic_layer so it is naturally
+        # above all of seismic_layer's own content without any sibling-clip issues.
         from section_tool.views.seismic_layer import SeismicLayer
         self._seismic_layer = SeismicLayer(self)
-        self._canvas_stack = QWidget(self)
-        _sl = _SL(self._canvas_stack)
-        _sl.setStackingMode(_SL.StackingMode.StackAll)
-        _sl.addWidget(self._seismic_layer)   # bottom — fast seismic
-        _sl.addWidget(self._canvas)          # top — matplotlib overlays
-        # Make matplotlib canvas transparent so seismic layer shows through
-        self._canvas.setStyleSheet("background: transparent;")
-        self._canvas.setAttribute(Qt.WA_NoSystemBackground, True)
-        self._canvas.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._canvas_stack.setAttribute(Qt.WA_TranslucentBackground, True)
-        layout.addWidget(self._canvas_stack, stretch=1)
+        self._canvas._seismic_ref = self._seismic_layer   # wire compositing
+        # Canvas is a direct child of the seismic layer, sized to cover it exactly.
+        # SeismicLayer.resizeEvent (installed event filter) keeps them in sync.
+        self._canvas.setParent(self._seismic_layer)
+        self._canvas.setGeometry(self._seismic_layer.rect())
+        self._canvas.raise_()
+        layout.addWidget(self._seismic_layer, stretch=1)
+        # Event filter on seismic_layer to resize canvas when layout changes
+        self._seismic_layer.installEventFilter(self)
         # Track which section's seismic is currently loaded in pyqtgraph
         self._seismic_layer_key: str | None = None
 
@@ -571,6 +647,13 @@ class SectionView(QWidget):
     @property
     def view_state(self) -> "SectionViewState":
         return SectionViewState(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        from PySide6.QtCore import QEvent
+        if watched is self._seismic_layer and event.type() == QEvent.Type.Resize:
+            self._canvas.setGeometry(self._seismic_layer.rect())
+            self._canvas.raise_()
+        return super().eventFilter(watched, event)
 
     def _blit_overlays(self) -> None:
         """Fast redraw for rubber-band / snap / polygon preview — no seismic re-render.
@@ -1030,6 +1113,8 @@ class SectionView(QWidget):
         xl = self._ax.get_xlim()
         yl = self._ax.get_ylim()   # yl[0] > yl[1] (inverted: deeper at index 0)
         self._seismic_layer.sync_view(xl[0], xl[1], min(yl), max(yl))
+        # Cache seismic background before draw_idle so paintEvent has fresh content
+        self._canvas.update_seismic_bg()
 
         self.view_changed.emit()
         _t_draw = time.perf_counter()
@@ -2896,6 +2981,9 @@ class SectionView(QWidget):
                 self._saved_xlim = new_xl   # persist pan position
                 self._saved_ylim = new_yl
                 self._user_has_zoomed = True
+                self._seismic_layer.sync_view(
+                    new_xl[0], new_xl[1], min(new_yl), max(new_yl))
+                self._canvas.update_seismic_bg()
             except Exception:
                 pass
             self._canvas.draw_idle()
