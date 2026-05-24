@@ -138,8 +138,10 @@ class SeismicLayer(QWidget):
             lut = _LUT_GRAY_R
         self._img = pg.ImageItem(image=np.ascontiguousarray(data.T),
                                   levels=(-vmax, vmax), lut=lut)
-        # Disable pyqtgraph's own auto-levelling
-        self._img.setAutoDownsample(True)
+        # Keep full image detail — let the compositing layer handle scaling.
+        # autoDownsample(True) would reduce traces to view-pixel resolution,
+        # which on HiDPI is only half the physical pixels and looks blurry.
+        self._img.setAutoDownsample(False)
 
         # Position the image in data space.
         # pyqtgraph ImageItem.setRect(x, y, w, h):
@@ -160,13 +162,20 @@ class SeismicLayer(QWidget):
     def render_to_pixmap(self, pm: "QPixmap") -> None:
         """Render only the pyqtgraph seismic scene to *pm* (no overlay children).
 
-        Uses QGraphicsView.render(QPainter) — renders the scene directly to the
-        pixmap without triggering the recursive child-widget paint issue.
+        Uses scene().render() with an explicit target rect so the scene is
+        sampled at the pixmap's full physical-pixel resolution rather than at
+        the view's logical resolution.
         """
         from PySide6.QtGui import QPainter
+        from PySide6.QtCore import QRectF
         pm.fill(Qt.GlobalColor.black)
         painter = QPainter(pm)
-        self._gw.render(painter)
+        dpr = pm.devicePixelRatioF()
+        # Painter coordinate space is logical pixels (pm.width()/dpr × pm.height()/dpr).
+        # Rendering into the full logical rect maps to the full physical pixmap.
+        logical_rect = QRectF(0, 0, pm.width() / dpr, pm.height() / dpr)
+        scene_rect = self._gw.mapToScene(self._gw.viewport().rect()).boundingRect()
+        self._gw.scene().render(painter, logical_rect, scene_rect)
         painter.end()
 
     def sync_view(
