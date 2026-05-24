@@ -52,9 +52,9 @@ def _grid():
     70px wide with no word-wrap so they never overlap the value column.
     """
     g = QGridLayout()
-    g.setContentsMargins(4, 2, 4, 2)
+    g.setContentsMargins(4, 4, 4, 4)
     g.setHorizontalSpacing(8)
-    g.setVerticalSpacing(3)
+    g.setVerticalSpacing(6)
     g.setColumnStretch(0, 0)          # label column — fixed
     g.setColumnStretch(1, 1)          # value column — expands
     g.setColumnMinimumWidth(0, 70)
@@ -127,8 +127,8 @@ class PropertiesPanel(QDockWidget):
         self._inner = QWidget()
         self._layout = QVBoxLayout(self._inner)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._layout.setSpacing(2)
-        self._layout.setContentsMargins(6, 4, 6, 4)
+        self._layout.setSpacing(6)
+        self._layout.setContentsMargins(6, 6, 6, 6)
         scroll.setWidget(self._inner)
         self.setWidget(scroll)
         self.setMinimumHeight(180)
