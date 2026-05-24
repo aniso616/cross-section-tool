@@ -177,6 +177,15 @@ class _ObjectRow(QWidget):
     def set_color(self, color: str) -> None:
         self._swatch.set_color(color)
 
+    def set_active(self, is_active: bool) -> None:
+        """Mark this row as the currently active/displayed object."""
+        font = self._label.font()
+        font.setBold(is_active)
+        self._label.setFont(font)
+        self._label.setStyleSheet(
+            "color: #5599ff; font-weight: bold;" if is_active else ""
+        )
+
 
 class ProjectPanel(QDockWidget):
     """Dockable 'Project' panel with a QTreeWidget listing all project objects.
@@ -339,6 +348,10 @@ class ProjectPanel(QDockWidget):
         s.reference_line_added.connect(lambda _: self._rebuild())
         s.reference_line_removed.connect(lambda _: self._rebuild())
         s.reference_line_modified.connect(lambda *_: self._rebuild())
+        # Active section indicator + tree selection sync
+        s.active_section_changed.connect(self._on_active_section_changed)
+        # Pick-target selection: highlight the active horizon/fault row
+        s.active_pick_target_changed.connect(self._on_pick_target_changed)
         # Update Add button label when active tool changes
         s.tool_changed.connect(self._update_add_btn_label)
         # Emit pick-target when user clicks a tree item
@@ -397,6 +410,13 @@ class ProjectPanel(QDockWidget):
                     )
                     self._tree.setItemWidget(child, 0, row)
                     self._row_widgets[(cat, idx)] = row
+                    # Mark active section immediately
+                    if cat == "Sections":
+                        active = self._state.active_section
+                        is_active = (active is not None and
+                                     idx < len(self._state.project.sections) and
+                                     self._state.project.sections[idx] is active)
+                        row.set_active(is_active)
 
                 cat_item.setExpanded(True)
 
@@ -497,6 +517,41 @@ class ProjectPanel(QDockWidget):
             proj = self._state.project
             if idx < len(proj.sections):
                 self._state.set_active_section(proj.sections[idx])
+
+    def _on_active_section_changed(self, *_) -> None:
+        """Update active-section styling and tree selection without rebuilding."""
+        proj = self._state.project
+        active = self._state.active_section
+        cat_item = getattr(self, "_category_items", {}).get("Sections")
+        if cat_item is None:
+            return
+        for i in range(cat_item.childCount()):
+            child = cat_item.child(i)
+            row = self._tree.itemWidget(child, 0)
+            if isinstance(row, _ObjectRow):
+                is_active = (active is not None and
+                             i < len(proj.sections) and
+                             proj.sections[i] is active)
+                row.set_active(is_active)
+        # Also select the active item in the tree
+        if active is not None:
+            try:
+                idx = proj.sections.index(active)
+                if idx < cat_item.childCount():
+                    self._tree.blockSignals(True)
+                    self._tree.setCurrentItem(cat_item.child(idx))
+                    self._tree.blockSignals(False)
+            except ValueError:
+                pass
+
+    def _on_pick_target_changed(self, category: str, idx: int) -> None:
+        """Highlight the active horizon/fault row when a pick target changes."""
+        cat_item = getattr(self, "_category_items", {}).get(category)
+        if cat_item is None or idx >= cat_item.childCount():
+            return
+        self._tree.blockSignals(True)
+        self._tree.setCurrentItem(cat_item.child(idx))
+        self._tree.blockSignals(False)
 
     def _on_context_menu(self, pos) -> None:
         item_at = self._tree.itemAt(pos)
