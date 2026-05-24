@@ -170,12 +170,11 @@ class SeismicLayer(QWidget):
         from PySide6.QtCore import QRectF
         pm.fill(Qt.GlobalColor.black)
         painter = QPainter(pm)
-        dpr = pm.devicePixelRatioF()
-        # Painter coordinate space is logical pixels (pm.width()/dpr × pm.height()/dpr).
-        # Rendering into the full logical rect maps to the full physical pixmap.
-        logical_rect = QRectF(0, 0, pm.width() / dpr, pm.height() / dpr)
+        # QPainter on QPixmap uses physical pixel coordinates regardless of DPR.
+        # Use the full physical dimensions so the scene fills every physical pixel.
+        phys_rect = QRectF(0, 0, pm.width(), pm.height())
         scene_rect = self._gw.mapToScene(self._gw.viewport().rect()).boundingRect()
-        self._gw.scene().render(painter, logical_rect, scene_rect)
+        self._gw.scene().render(painter, phys_rect, scene_rect)
         painter.end()
 
     def sync_view(
