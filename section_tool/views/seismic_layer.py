@@ -52,8 +52,12 @@ class SeismicLayer(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        # Events must reach the matplotlib canvas on top
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        # Do NOT set WA_TransparentForMouseEvents on self — that flag propagates
+        # to all children, so the matplotlib canvas (a child of this widget) would
+        # also become invisible to mouse events.  The canvas sits above _gw via
+        # raise_(), so it naturally receives events first.  _gw keeps its own
+        # WA_TransparentForMouseEvents so pyqtgraph doesn't steal events.
+        self.setMinimumSize(0, 0)   # don't let pyqtgraph's default minimum squeeze the splitter
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -61,6 +65,7 @@ class SeismicLayer(QWidget):
 
         self._gw = pg.GraphicsLayoutWidget(self)
         self._gw.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._gw.setMinimumSize(0, 0)
         self._gw.setBackground("#0e1014")
         layout.addWidget(self._gw)
 
