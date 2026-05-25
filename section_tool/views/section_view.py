@@ -3639,8 +3639,19 @@ class SectionView(QWidget):
                     self._cst_source = None
                     self._state.set_active_tool("select")
             elif sel is not None and tool == "extend":
-                # Entity already selected → constrain endpoint hit to selected entity
-                self._cst_first_click_on_selected(x, y)
+                # Entity already selected → jump straight to source_selected;
+                # _update_extend_preview() picks the closest endpoint dynamically.
+                cat, oi = sel
+                picks = (self._state.project.horizon_picks if cat == "Horizons"
+                         else self._state.project.fault_picks)
+                if oi < len(picks):
+                    self._cst_source = {"cat": cat, "idx": oi, "endpoint": "end"}
+                    self._cst_state = "source_selected"
+                    self._flash_hint(
+                        "Extend: hover near the end to extend, click to commit. "
+                        "Shift=15° · Ctrl=along segment · Shift+Ctrl=perpendicular. "
+                        "Right-click to exit."
+                    )
             else:
                 if sel is None and tool in ("extend", "trim", "parallel"):
                     # Prompt user to select an entity first
@@ -3773,8 +3784,17 @@ class SectionView(QWidget):
         z_sec = hp._depths[si_arr]
         cx, cy = self._cursor_data
         endpoint = src.get("endpoint", "end")
-        epx = float(d_sec[0])  if endpoint == "start" else float(d_sec[-1])
-        epz = float(z_sec[0])  if endpoint == "start" else float(z_sec[-1])
+        # Dynamic endpoint switching: whichever end is closer to cursor in screen px
+        d0, z0 = float(d_sec[0]),  float(z_sec[0])
+        d1, z1 = float(d_sec[-1]), float(z_sec[-1])
+        ex, ey   = self._to_screen_px_sv(cx, cy)
+        px0, py0 = self._to_screen_px_sv(d0, z0)
+        px1, py1 = self._to_screen_px_sv(d1, z1)
+        src["endpoint"] = "start" if (math.hypot(ex - px0, ey - py0)
+                                       <= math.hypot(ex - px1, ey - py1)) else "end"
+        endpoint = src["endpoint"]
+        epx = d0 if endpoint == "start" else d1
+        epz = z0 if endpoint == "start" else z1
 
         # Angle constraints via keyboard modifiers (computed in screen space)
         from PySide6.QtWidgets import QApplication
@@ -3889,14 +3909,18 @@ class SectionView(QWidget):
             return
 
         if tool == "extend":
-            hit = self._find_nearest_endpoint_px(x, y)
+            hit = self._find_nearest_pick_line(x, y)
             if hit is None:
-                self._flash_hint("Click near the endpoint of a line to extend")
+                self._flash_hint("Click on a line to extend (or select with V first)")
                 return
-            cat, oi, endpoint = hit
-            self._cst_source = {"cat": cat, "idx": oi, "endpoint": endpoint}
+            cat, oi = hit
+            self._cst_source = {"cat": cat, "idx": oi, "endpoint": "end"}
             self._cst_state = "source_selected"
-            self._flash_hint("Now click the target line to extend to")
+            self._flash_hint(
+                "Extend: hover near the end to extend, click to commit. "
+                "Shift=15° · Ctrl=along segment · Shift+Ctrl=perpendicular. "
+                "Right-click to exit."
+            )
 
         elif tool == "trim":
             hit_line = self._find_nearest_pick_line(x, y)
@@ -4320,7 +4344,7 @@ class SectionView(QWidget):
                 sel_name = picks[oi].name or f"{cat[:-1]} {oi + 1}"
         if sel_name:
             hints = {
-                "extend":          f"[Extend]  Selected: {sel_name}  → Click near an endpoint to extend",
+                "extend":          f"[Extend]  Selected: {sel_name}  → Hover near end, click to extend. Shift/Ctrl for angle snap.",
                 "trim":            f"[Trim]    Selected: {sel_name}  → Hover to set cut point, click to commit",
                 "parallel":        f"[Parallel] Selected: {sel_name}  → Click placement position",
                 "dip_constrained": f"[Dip]     Selected: {sel_name}  → Click anchor, then extent",
@@ -4328,7 +4352,7 @@ class SectionView(QWidget):
             }
         else:
             hints = {
-                "extend":          "[Extend]  Click near an endpoint to extend (or select entity first with V)",
+                "extend":          "[Extend]  Click a line, hover near end, click to extend. Shift/Ctrl for angle snap.",
                 "trim":            "[Trim]    Click a line to select it, then hover + click to cut (or select with V first)",
                 "parallel":        "[Parallel] Click reference line, then placement (or select first)",
                 "dip_constrained": "[Dip]     Click anchor point, then extent point",
