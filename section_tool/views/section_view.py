@@ -3250,6 +3250,8 @@ class SectionView(QWidget):
         if self._cst_state == "source_selected" and self._cursor_data is not None:
             if self._construct_tool == "trim":
                 self._update_trim_preview()
+            elif self._construct_tool == "extend":
+                self._update_extend_preview()
 
         # ---- Rubber band / snap / ref-line / polygon / construct preview ----
         if (self._picking_active or self._fault_picking
@@ -3745,6 +3747,71 @@ class SectionView(QWidget):
         keep = "before" if math.hypot(ex - bsx, ey - bsy) < math.hypot(ex - asx, ey - asy) else "after"
         self._cst_trim_pt = {"tx": tx, "tz": tz, "si": seg_i, "keep": keep}
 
+    def _update_extend_preview(self) -> None:
+        """Update angle-constrained cursor target for extend tool (Shift/Ctrl modifiers)."""
+        src = self._cst_source
+        if src is None or self._cursor_data is None:
+            self._cst_extend_target = None
+            return
+        section = self._state.active_section
+        if section is None:
+            self._cst_extend_target = None
+            return
+        sec_name = section.name
+        cat, oi = src["cat"], src["idx"]
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if oi >= len(picks):
+            self._cst_extend_target = None
+            return
+        hp = picks[oi]
+        si_arr = hp.section_indices(sec_name)
+        if len(si_arr) < 2:
+            self._cst_extend_target = None
+            return
+        d_sec = hp._distances[si_arr]
+        z_sec = hp._depths[si_arr]
+        cx, cy = self._cursor_data
+        endpoint = src.get("endpoint", "end")
+        epx = float(d_sec[0])  if endpoint == "start" else float(d_sec[-1])
+        epz = float(z_sec[0])  if endpoint == "start" else float(z_sec[-1])
+
+        # Angle constraints via keyboard modifiers (computed in screen space)
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt as _Qt
+        mods = QApplication.keyboardModifiers()
+        shift = bool(mods & _Qt.KeyboardModifier.ShiftModifier)
+        ctrl  = bool(mods & _Qt.KeyboardModifier.ControlModifier)
+
+        if ctrl or shift:
+            sx_ep, sy_ep = self._to_screen_px_sv(epx, epz)
+            csx, csy = self._to_screen_px_sv(cx, cy)
+            # Direction of last segment toward endpoint (screen px)
+            if endpoint == "start":
+                sxa, sya = self._to_screen_px_sv(float(d_sec[1]),  float(z_sec[1]))
+            else:
+                sxa, sya = self._to_screen_px_sv(float(d_sec[-2]), float(z_sec[-2]))
+            sdx, sdy = sx_ep - sxa, sy_ep - sya
+
+            if shift and ctrl:
+                tsx, tsy = self._project_onto_line_2d(sx_ep, sy_ep, -sdy, sdx, csx, csy)
+            elif ctrl:
+                tsx, tsy = self._project_onto_line_2d(sx_ep, sy_ep, sdx, sdy, csx, csy)
+            else:  # shift — 15° increments in screen space
+                dsx, dsy = csx - sx_ep, csy - sy_ep
+                angle = math.atan2(dsy, dsx)
+                snap_angle = round(angle / (math.pi / 12)) * (math.pi / 12)
+                dist = math.hypot(dsx, dsy)
+                tsx = sx_ep + dist * math.cos(snap_angle)
+                tsy = sy_ep + dist * math.sin(snap_angle)
+            try:
+                data_pt = self._ax.transData.inverted().transform([[tsx, tsy]])
+                self._cst_extend_target = (float(data_pt[0, 0]), float(data_pt[0, 1]))
+            except Exception:
+                self._cst_extend_target = (cx, cy)
+        else:
+            self._cst_extend_target = (cx, cy)
+
     def _project_cursor_onto_polyline_px(
         self, d_arr: np.ndarray, z_arr: np.ndarray, cx: float, cy: float
     ) -> tuple[float, float, int]:
@@ -3873,8 +3940,12 @@ class SectionView(QWidget):
             if len(si) < 2:
                 return False
 
-            # First try extend-to-entity (20px tolerance).
-            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi), threshold_px=20.0)
+            # Use angle-constrained target if available (Shift/Ctrl modifiers)
+            tx = self._cst_extend_target[0] if self._cst_extend_target is not None else x
+            tz = self._cst_extend_target[1] if self._cst_extend_target is not None else y
+
+            # First try extend-to-entity (20px tolerance at constrained position).
+            hit_line = self._find_nearest_pick_line(tx, tz, exclude=(cat, oi), threshold_px=20.0)
             if hit_line is not None:
                 tcat, toi = hit_line
                 tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
@@ -3890,15 +3961,15 @@ class SectionView(QWidget):
                     hit_line = None
 
             if hit_line is None:
-                # Free extend — add cursor as new endpoint.
+                # Free extend — add constrained cursor as new endpoint.
                 d_sec = hp._distances[si]
                 z_sec = hp._depths[si]
                 if endpoint == "start":
-                    d_new = np.concatenate([[x], d_sec])
-                    z_new = np.concatenate([[y], z_sec])
+                    d_new = np.concatenate([[tx], d_sec])
+                    z_new = np.concatenate([[tz], z_sec])
                 else:
-                    d_new = np.concatenate([d_sec, [x]])
-                    z_new = np.concatenate([z_sec, [y]])
+                    d_new = np.concatenate([d_sec, [tx]])
+                    z_new = np.concatenate([z_sec, [tz]])
                 hp2 = _replace_section_pts(hp, sec_name, d_new, z_new)
                 commit_label = f"Extend {hp_old.name}"
 
@@ -3919,6 +3990,7 @@ class SectionView(QWidget):
                 else:
                     self._state.update_fault_pick(_oi, copy.deepcopy(_new))
             self._state.record_command(commit_label, undo=_undo_extend, redo=_redo_extend)
+            self._cst_extend_target = None
             return True
 
         elif tool == "trim":
@@ -4192,16 +4264,20 @@ class SectionView(QWidget):
             self._overlay_artists.extend(
                 self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12))
 
-            if tool == "extend" and self._cursor_data is not None:
+            if tool == "extend":
                 endpoint = src.get("endpoint", "end")
-                cx, cy = self._cursor_data
-                if endpoint == "start":
-                    ox, oz = float(d_sec[0]), float(z_sec[0])
+                if self._cst_extend_target is not None:
+                    tx, tz = self._cst_extend_target
+                elif self._cursor_data is not None:
+                    tx, tz = self._cursor_data
                 else:
-                    ox, oz = float(d_sec[-1]), float(z_sec[-1])
-                self._overlay_artists.extend(
-                    self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
-                                  lw=1.5, alpha=0.7, zorder=12))
+                    tx, tz = None, None
+                if tx is not None:
+                    ox = float(d_sec[0]) if endpoint == "start" else float(d_sec[-1])
+                    oz = float(z_sec[0]) if endpoint == "start" else float(z_sec[-1])
+                    self._overlay_artists.extend(
+                        self._ax.plot([ox, tx], [oz, tz], "--", color=hp.color,
+                                      lw=1.5, alpha=0.7, zorder=12))
 
             elif tool == "parallel" and self._cursor_data is not None:
                 cx, cy = self._cursor_data
