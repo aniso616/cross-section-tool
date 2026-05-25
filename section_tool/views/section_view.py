@@ -3002,14 +3002,21 @@ class SectionView(QWidget):
             # Check for nearby pick node FIRST (any mode)
             hit_node = self._find_nearest_pick_px(x, y)
             if hit_node is not None:
-                self._pick_selected = hit_node
-                self._pick_drag     = False
-                self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
                 cat, oi, pi = hit_node
-                picks = (self._state.project.horizon_picks if cat == "Horizons"
-                         else self._state.project.fault_picks)
-                self._pick_copy = copy.deepcopy(picks[oi])
-                self._sv_mode = "edit_mode"
+                if tool == "node_edit" or self._sv_mode == "edit_mode":
+                    # Edit Nodes mode: full drag setup
+                    self._pick_selected = hit_node
+                    self._pick_drag     = False
+                    self._pick_press_px = (getattr(event, "x", x), getattr(event, "y", y))
+                    picks = (self._state.project.horizon_picks if cat == "Horizons"
+                             else self._state.project.fault_picks)
+                    self._pick_copy = copy.deepcopy(picks[oi])
+                    self._sv_mode = "edit_mode"
+                else:
+                    # Select tool: select entity only, no drag
+                    self._pick_selected = None
+                    self._pick_copy = None
+                    self._sv_mode = "object_selected"
                 self._set_selected_object((cat, oi))
                 self.node_selected.emit(cat, oi, pi)
                 self.render()
