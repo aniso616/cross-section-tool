@@ -3613,7 +3613,12 @@ class SectionView(QWidget):
                 self._cst_second_click(tool, x, y)
                 self._cst_state = "idle"
                 self._cst_source = None
-                self._state.set_active_tool("select")
+                if tool == "parallel":
+                    self._state.set_active_tool("select")
+                else:
+                    self._flash_hint(
+                        "Done — click to trim again, right-click to finish"
+                    )
             elif sel is not None and tool == "extend":
                 # Entity already selected → constrain endpoint hit to selected entity
                 self._cst_first_click_on_selected(x, y)
@@ -3631,9 +3636,18 @@ class SectionView(QWidget):
         elif self._cst_state == "source_selected":
             ok = self._cst_second_click(tool, x, y)
             if ok:
-                self._cst_state = "idle"
-                self._cst_source = None
-                self._state.set_active_tool("select")
+                if tool in ("extend", "trim"):
+                    # Continuous mode: stay in source_selected so the next click
+                    # keeps extending/trimming the same endpoint. Right-click exits.
+                    if tool == "trim":
+                        self._cst_source["click_x"] = x
+                    self._flash_hint(
+                        "Done — click to continue, right-click to finish"
+                    )
+                else:
+                    self._cst_state = "idle"
+                    self._cst_source = None
+                    self._state.set_active_tool("select")
         self.render()
 
     def _handle_dip_constrained_click(self, x: float, y: float) -> None:
