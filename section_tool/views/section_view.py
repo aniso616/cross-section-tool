@@ -341,6 +341,8 @@ class SectionView(QWidget):
         self._cst_state: str = "idle"   # "idle" | "source_selected"
         self._cst_source: dict | None = None  # {'cat': ..., 'idx': ..., 'endpoint': ...}
         self._cst_preview_line: tuple | None = None  # for parallel preview
+        self._cst_trim_pt: dict | None = None      # hover trim preview: {tx, tz, si, keep}
+        self._cst_extend_target: tuple[float, float] | None = None  # constrained extend cursor
         # Construction tool objects (hold per-tool click state)
         self._cst_dip_tool      = DipConstrainedTool()
         self._cst_parallel_tool = ParallelOffsetTool()
@@ -698,6 +700,8 @@ class SectionView(QWidget):
         if self._construct_tool:
             self._cst_state = "idle"
             self._cst_source = None
+            self._cst_trim_pt = None
+            self._cst_extend_target = None
             self._cst_dip_tool.reset()
             self._cst_kink_tool.reset()
             self._cst_parallel_tool.reset()
@@ -877,6 +881,8 @@ class SectionView(QWidget):
         self._aref_anchor    = None  # reset any in-progress A-Ref
         self._cst_state      = "idle"
         self._cst_source     = None
+        self._cst_trim_pt    = None
+        self._cst_extend_target = None
         if self._construct_tool is None:
             self._cst_dip_tool.reset()
             self._cst_parallel_tool.reset()
@@ -3240,6 +3246,11 @@ class SectionView(QWidget):
                     self.render()
                     return
 
+        # ---- Update construction tool hover previews ----
+        if self._cst_state == "source_selected" and self._cursor_data is not None:
+            if self._construct_tool == "trim":
+                self._update_trim_preview()
+
         # ---- Rubber band / snap / ref-line / polygon / construct preview ----
         if (self._picking_active or self._fault_picking
                 or self._snap_point is not None
@@ -3609,23 +3620,22 @@ class SectionView(QWidget):
         if self._cst_state == "idle":
             sel = self._selected_object
             if sel is not None and tool in ("trim", "parallel"):
-                # Entity already selected → skip source-pick, apply directly
+                # Entity already selected
                 cat, oi = sel
                 if tool == "trim":
-                    # click_x determines keep-side relative to the intersection
-                    self._cst_source = {"cat": cat, "idx": oi, "click_x": x, "click_y": y}
-                else:
+                    # Hover-based trim: enter source_selected; motion computes preview
                     self._cst_source = {"cat": cat, "idx": oi}
-                self._cst_state = "source_selected"
-                self._cst_second_click(tool, x, y)
-                self._cst_state = "idle"
-                self._cst_source = None
-                if tool == "parallel":
-                    self._state.set_active_tool("select")
-                else:
+                    self._cst_state = "source_selected"
                     self._flash_hint(
-                        "Done — click to trim again, right-click to finish"
-                    )
+                        "Trim: hover to pick cut point — white=keep, red=remove. Click to commit.")
+                else:
+                    # Parallel: apply immediately
+                    self._cst_source = {"cat": cat, "idx": oi}
+                    self._cst_state = "source_selected"
+                    self._cst_second_click(tool, x, y)
+                    self._cst_state = "idle"
+                    self._cst_source = None
+                    self._state.set_active_tool("select")
             elif sel is not None and tool == "extend":
                 # Entity already selected → constrain endpoint hit to selected entity
                 self._cst_first_click_on_selected(x, y)
@@ -3644,10 +3654,7 @@ class SectionView(QWidget):
             ok = self._cst_second_click(tool, x, y)
             if ok:
                 if tool in ("extend", "trim"):
-                    # Continuous mode: stay in source_selected so the next click
-                    # keeps extending/trimming the same endpoint. Right-click exits.
-                    if tool == "trim":
-                        self._cst_source["click_x"] = x
+                    # Continuous mode: stay in source_selected. Right-click exits.
                     self._flash_hint(
                         "Done — click to continue, right-click to finish"
                     )
@@ -3700,6 +3707,81 @@ class SectionView(QWidget):
                 from section_tool.core.commands import cmd_add_horizon_pick
                 self._state.execute_command(cmd_add_horizon_pick(self._state, hp_new))
                 self._state.set_active_tool("select")
+
+    def _update_trim_preview(self) -> None:
+        """Compute trim point and keep side from cursor; store in _cst_trim_pt."""
+        src = self._cst_source
+        if src is None or self._cursor_data is None:
+            self._cst_trim_pt = None
+            return
+        section = self._state.active_section
+        if section is None:
+            self._cst_trim_pt = None
+            return
+        sec_name = section.name
+        cat, oi = src["cat"], src["idx"]
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if oi >= len(picks):
+            self._cst_trim_pt = None
+            return
+        hp = picks[oi]
+        si_arr = hp.section_indices(sec_name)
+        if len(si_arr) < 2:
+            self._cst_trim_pt = None
+            return
+        d_sec = hp._distances[si_arr]
+        z_sec = hp._depths[si_arr]
+        cx, cy = self._cursor_data
+        tx, tz, seg_i = self._project_cursor_onto_polyline_px(d_sec, z_sec, cx, cy)
+        # Determine keep side: which half's centroid is closer to cursor in screen px?
+        bd = np.concatenate([d_sec[:seg_i + 1], [tx]])
+        bz = np.concatenate([z_sec[:seg_i + 1], [tz]])
+        ad = np.concatenate([[tx], d_sec[seg_i + 1:]])
+        az = np.concatenate([[tz], z_sec[seg_i + 1:]])
+        bsx, bsy = self._to_screen_px_sv(float(np.mean(bd)), float(np.mean(bz)))
+        asx, asy = self._to_screen_px_sv(float(np.mean(ad)), float(np.mean(az)))
+        ex, ey   = self._to_screen_px_sv(cx, cy)
+        keep = "before" if math.hypot(ex - bsx, ey - bsy) < math.hypot(ex - asx, ey - asy) else "after"
+        self._cst_trim_pt = {"tx": tx, "tz": tz, "si": seg_i, "keep": keep}
+
+    def _project_cursor_onto_polyline_px(
+        self, d_arr: np.ndarray, z_arr: np.ndarray, cx: float, cy: float
+    ) -> tuple[float, float, int]:
+        """Return (proj_d, proj_z, seg_idx): foot of perpendicular from cursor onto polyline.
+
+        Computed in screen-pixel space so the result is correct regardless of
+        data-space aspect ratio / vertical exaggeration.
+        """
+        ex, ey = self._to_screen_px_sv(cx, cy)
+        best_dist = float("inf")
+        best_d, best_z, best_seg = cx, cy, 0
+        for i in range(len(d_arr) - 1):
+            sx0, sy0 = self._to_screen_px_sv(float(d_arr[i]),     float(z_arr[i]))
+            sx1, sy1 = self._to_screen_px_sv(float(d_arr[i + 1]), float(z_arr[i + 1]))
+            sdx, sdy = sx1 - sx0, sy1 - sy0
+            seg_len2 = sdx * sdx + sdy * sdy
+            t = (((ex - sx0) * sdx + (ey - sy0) * sdy) / seg_len2
+                 if seg_len2 > 1e-6 else 0.0)
+            t = max(0.0, min(1.0, t))
+            dist = math.hypot(ex - (sx0 + t * sdx), ey - (sy0 + t * sdy))
+            if dist < best_dist:
+                best_dist = dist
+                best_d = float(d_arr[i]) + t * (float(d_arr[i + 1]) - float(d_arr[i]))
+                best_z = float(z_arr[i]) + t * (float(z_arr[i + 1]) - float(z_arr[i]))
+                best_seg = i
+        return best_d, best_z, best_seg
+
+    @staticmethod
+    def _project_onto_line_2d(
+        px: float, py: float, dx: float, dy: float, cx: float, cy: float
+    ) -> tuple[float, float]:
+        """Project point (cx, cy) onto line through (px, py) with direction (dx, dy)."""
+        norm2 = dx * dx + dy * dy
+        if norm2 < 1e-12:
+            return cx, cy
+        t = ((cx - px) * dx + (cy - py) * dy) / norm2
+        return px + t * dx, py + t * dy
 
     def _cst_first_click_on_selected(self, x: float, y: float) -> None:
         """For extend with selection: find nearest endpoint of selected entity."""
@@ -3755,9 +3837,10 @@ class SectionView(QWidget):
                 self._flash_hint("Click on a line to trim")
                 return
             cat, oi = hit_line
-            self._cst_source = {"cat": cat, "idx": oi, "click_x": x, "click_y": y}
+            self._cst_source = {"cat": cat, "idx": oi}
             self._cst_state = "source_selected"
-            self._flash_hint("Now click the cutting line")
+            self._flash_hint(
+                "Trim: hover to pick cut point — white=keep, red=remove. Click to commit.")
 
         elif tool == "parallel":
             hit_line = self._find_nearest_pick_line(x, y)
@@ -3839,52 +3922,38 @@ class SectionView(QWidget):
             return True
 
         elif tool == "trim":
+            # Use hover preview for trim point and keep side
+            tp = self._cst_trim_pt
+            if tp is None:
+                self._flash_hint("Move cursor over the line to set trim point")
+                return False
+            tx, tz, seg_i, keep_side = tp["tx"], tp["tz"], tp["si"], tp["keep"]
             src = self._cst_source
             cat, oi = src["cat"], src["idx"]
-            keep_side_x = src["click_x"]
             picks = (self._state.project.horizon_picks if cat == "Horizons"
                      else self._state.project.fault_picks)
             if oi >= len(picks):
                 return False
             hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
-            si = hp.section_indices(sec_name)
-            if len(si) < 2:
+            si_arr = hp.section_indices(sec_name)
+            if len(si_arr) < 2:
+                return False
+            d_sec = hp._distances[si_arr]
+            z_sec = hp._depths[si_arr]
+
+            if keep_side == "before":
+                d_new = np.append(d_sec[:seg_i + 1], tx)
+                z_new = np.append(z_sec[:seg_i + 1], tz)
+            else:
+                d_new = np.concatenate([[tx], d_sec[seg_i + 1:]])
+                z_new = np.concatenate([[tz], z_sec[seg_i + 1:]])
+
+            if len(d_new) < 2:
+                self._flash_hint("Nothing to keep on that side")
                 return False
 
-            # First try trim-to-entity (20px tolerance).
-            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi), threshold_px=20.0)
-            if hit_line is not None:
-                tcat, toi2 = hit_line
-                tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
-                          else self._state.project.fault_picks)
-                if toi2 < len(tpicks):
-                    try:
-                        hp3 = _trim_pick_at_entity(hp, tpicks[toi2], keep_side_x, sec_name)
-                    except ValueError as err:
-                        self._flash_hint(str(err))
-                        hit_line = None   # fall through to free trim
-                else:
-                    hit_line = None
-
-            if hit_line is None:
-                # Free trim — cut the pick at cursor x, interpolating depth.
-                d_sec = hp._distances[si]
-                z_sec = hp._depths[si]
-                z_at_x = float(np.interp(x, d_sec, z_sec,
-                                         left=float(z_sec[0]), right=float(z_sec[-1])))
-                keep_left = keep_side_x <= x
-                mask = d_sec <= x if keep_left else d_sec >= x
-                if keep_left:
-                    d_new = np.append(d_sec[mask], x)
-                    z_new = np.append(z_sec[mask], z_at_x)
-                else:
-                    d_new = np.concatenate([[x], d_sec[mask]])
-                    z_new = np.concatenate([[z_at_x], z_sec[mask]])
-                if len(d_new) < 2:
-                    self._flash_hint("Nothing to keep on that side")
-                    return False
-                hp3 = _replace_section_pts(hp, sec_name, d_new, z_new)
+            hp3 = _replace_section_pts(hp, sec_name, d_new, z_new)
             hp_new = copy.deepcopy(hp3)
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp3)
@@ -3903,6 +3972,7 @@ class SectionView(QWidget):
                     self._state.update_fault_pick(_oi, copy.deepcopy(_new))
             self._state.record_command(
                 f"Trim {hp_old.name}", undo=_undo_trim, redo=_redo_trim)
+            self._cst_trim_pt = None
             return True
 
         elif tool == "parallel":
@@ -4091,28 +4161,56 @@ class SectionView(QWidget):
         d_sec = hp._distances[sec_idxs]
         z_sec = hp._depths[sec_idxs]
 
-        self._overlay_artists.extend(
-            self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12))
-
-        if tool == "extend" and self._cursor_data is not None:
-            endpoint = src.get("endpoint", "end")
-            cx, cy = self._cursor_data
-            if endpoint == "start":
-                ox, oz = float(d_sec[0]), float(z_sec[0])
+        if tool == "trim":
+            # Hover-based trim: white=keep, red=remove, red-X at cut point
+            tp = self._cst_trim_pt
+            if tp is not None:
+                tx, tz, seg_i, keep = tp["tx"], tp["tz"], tp["si"], tp["keep"]
+                bd = np.concatenate([d_sec[:seg_i + 1], [tx]])
+                bz = np.concatenate([z_sec[:seg_i + 1], [tz]])
+                ad = np.concatenate([[tx], d_sec[seg_i + 1:]])
+                az = np.concatenate([[tz], z_sec[seg_i + 1:]])
+                keep_d, keep_z = (bd, bz) if keep == "before" else (ad, az)
+                rem_d,  rem_z  = (ad, az) if keep == "before" else (bd, bz)
+                if len(keep_d) >= 2:
+                    self._overlay_artists.extend(
+                        self._ax.plot(keep_d, keep_z, color="#FFFFFF", lw=4.0,
+                                      zorder=53, solid_capstyle="round"))
+                if len(rem_d) >= 2:
+                    self._overlay_artists.extend(
+                        self._ax.plot(rem_d, rem_z, color="#FF4444", lw=3.0,
+                                      alpha=0.5, zorder=53, solid_capstyle="round"))
+                self._overlay_artists.extend(
+                    self._ax.plot([tx], [tz], "x", color="#FF2222",
+                                  markersize=14, markeredgewidth=3, zorder=54))
             else:
-                ox, oz = float(d_sec[-1]), float(z_sec[-1])
-            self._overlay_artists.extend(
-                self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
-                              lw=1.5, alpha=0.7, zorder=12))
+                self._overlay_artists.extend(
+                    self._ax.plot(d_sec, z_sec, color=hp.color,
+                                  linewidth=3.0, alpha=0.4, zorder=12))
 
-        elif tool == "parallel" and self._cursor_data is not None:
-            cx, cy = self._cursor_data
-            z_at_cx = float(np.interp(cx, d_sec, z_sec,
-                                      left=float(z_sec[0]), right=float(z_sec[-1])))
-            offset = cy - z_at_cx
+        else:
             self._overlay_artists.extend(
-                self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
-                              lw=1.5, alpha=0.6, zorder=12))
+                self._ax.plot(d_sec, z_sec, color=hp.color, linewidth=3.0, alpha=0.4, zorder=12))
+
+            if tool == "extend" and self._cursor_data is not None:
+                endpoint = src.get("endpoint", "end")
+                cx, cy = self._cursor_data
+                if endpoint == "start":
+                    ox, oz = float(d_sec[0]), float(z_sec[0])
+                else:
+                    ox, oz = float(d_sec[-1]), float(z_sec[-1])
+                self._overlay_artists.extend(
+                    self._ax.plot([ox, cx], [oz, cy], "--", color=hp.color,
+                                  lw=1.5, alpha=0.7, zorder=12))
+
+            elif tool == "parallel" and self._cursor_data is not None:
+                cx, cy = self._cursor_data
+                z_at_cx = float(np.interp(cx, d_sec, z_sec,
+                                          left=float(z_sec[0]), right=float(z_sec[-1])))
+                offset = cy - z_at_cx
+                self._overlay_artists.extend(
+                    self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
+                                  lw=1.5, alpha=0.6, zorder=12))
 
     def _set_selected_object(self, obj: "tuple[str, int] | None") -> None:
         """Set _selected_object and notify AppState (for panel sync)."""
@@ -4147,7 +4245,7 @@ class SectionView(QWidget):
         if sel_name:
             hints = {
                 "extend":          f"[Extend]  Selected: {sel_name}  → Click near an endpoint to extend",
-                "trim":            f"[Trim]    Selected: {sel_name}  → Click the cutting line",
+                "trim":            f"[Trim]    Selected: {sel_name}  → Hover to set cut point, click to commit",
                 "parallel":        f"[Parallel] Selected: {sel_name}  → Click placement position",
                 "dip_constrained": f"[Dip]     Selected: {sel_name}  → Click anchor, then extent",
                 "kink_band":       f"[Kink]    Selected: {sel_name}  → Click axial trace position",
@@ -4155,7 +4253,7 @@ class SectionView(QWidget):
         else:
             hints = {
                 "extend":          "[Extend]  Click near an endpoint to extend (or select entity first with V)",
-                "trim":            "[Trim]    Click the line to trim, then the cutting line (or select first)",
+                "trim":            "[Trim]    Click a line to select it, then hover + click to cut (or select with V first)",
                 "parallel":        "[Parallel] Click reference line, then placement (or select first)",
                 "dip_constrained": "[Dip]     Click anchor point, then extent point",
                 "kink_band":       "[Kink]    Click backlimb horizon (or select it), then axial trace",
