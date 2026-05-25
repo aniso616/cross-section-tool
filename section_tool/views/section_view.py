@@ -602,6 +602,9 @@ class SectionView(QWidget):
         layout.addWidget(self._seismic_layer, stretch=1)
         # Event filter on seismic_layer to resize canvas when layout changes
         self._seismic_layer.installEventFilter(self)
+        # Qt-level filter on the canvas itself — catches right-click and release
+        # events that matplotlib's mpl_connect may miss in the composited setup.
+        self._canvas.installEventFilter(self)
         # Track which section's seismic is currently loaded in pyqtgraph
         self._seismic_layer_key: str | None = None
 
@@ -668,10 +671,67 @@ class SectionView(QWidget):
 
     def eventFilter(self, watched, event) -> bool:
         from PySide6.QtCore import QEvent
+        from PySide6.QtCore import Qt as _Qt
         if watched is self._seismic_layer and event.type() == QEvent.Type.Resize:
             self._canvas.setGeometry(self._seismic_layer.rect())
             self._canvas.raise_()
+        elif watched is self._canvas:
+            et = event.type()
+            if et == QEvent.Type.MouseButtonPress:
+                if event.button() == _Qt.MouseButton.RightButton:
+                    self._on_qt_right_press()
+                    # Don't consume — let matplotlib also see it
+            elif et == QEvent.Type.MouseButtonRelease:
+                btn = event.button()
+                if btn in (_Qt.MouseButton.LeftButton, _Qt.MouseButton.MiddleButton):
+                    self._qt_drag_release_guard()
         return super().eventFilter(watched, event)
+
+    def _on_qt_right_press(self) -> None:
+        """Qt-level right-click handler — cancels any active construction tool.
+
+        Called from eventFilter when the canvas receives a Qt RightButton press.
+        This fires even when matplotlib's mpl_connect button_press_event is delayed
+        or suppressed by the compositing setup.
+        """
+        if self._construct_tool:
+            self._cst_state = "idle"
+            self._cst_source = None
+            self._cst_dip_tool.reset()
+            self._cst_kink_tool.reset()
+            self._cst_parallel_tool.reset()
+            self._state.set_active_tool("select")
+            self.render()
+        elif self._picking_active or self._fault_picking:
+            self._end_pick_sequence()
+
+    def _qt_drag_release_guard(self) -> None:
+        """Qt-level mouse-release guard — finalises drags that matplotlib missed.
+
+        When a node or object drag ends with the cursor outside the axes,
+        matplotlib's button_release_event may not fire.  This Qt-level handler
+        ensures the drag state is always cleaned up.
+        """
+        if self._pick_drag and self._pick_selected is not None:
+            cat, oi, _ = self._pick_selected
+            if cat == "Horizons":
+                self._state.update_horizon_pick(oi, self._pick_copy)
+            else:
+                self._state.update_fault_pick(oi, self._pick_copy)
+            self._pick_drag     = False
+            self._pick_copy     = None
+            self._pick_press_px = None
+        if self._object_drag_active:
+            preview_data = getattr(self, "_object_drag_preview", None)
+            if preview_data is not None:
+                cat, oi, preview = preview_data
+                if cat == "Horizons":
+                    self._state.update_horizon_pick(oi, preview)
+                else:
+                    self._state.update_fault_pick(oi, preview)
+            self._object_drag_active  = False
+            self._object_drag_preview = None
+            self._object_drag_press_pt = None
 
     def _blit_overlays(self) -> None:
         """Fast redraw for rubber-band / snap / polygon preview — no seismic re-render.
@@ -2481,9 +2541,14 @@ class SectionView(QWidget):
         return best
 
     def _find_nearest_pick_line(
-        self, event_x: float, event_y: float
+        self, event_x: float, event_y: float,
+        exclude: tuple[str, int] | None = None,
     ) -> tuple[str, int] | None:
-        """Phase 2: Return (category, obj_idx) of the nearest pick LINE within tolerance."""
+        """Phase 2: Return (category, obj_idx) of the nearest pick LINE within tolerance.
+
+        exclude: (category, obj_idx) pair to skip — used so the source entity
+        is not matched as its own target during extend/trim.
+        """
         section = self._state.active_section
         if section is None:
             return None
@@ -2495,6 +2560,8 @@ class SectionView(QWidget):
         def _check(category, picks):
             nonlocal best_cat, best_idx, best_dist
             for oi, hp in enumerate(picks):
+                if exclude is not None and exclude == (category, oi):
+                    continue
                 sec_idxs = hp.section_indices(sec_name)
                 if len(sec_idxs) < 2:
                     continue
@@ -3690,14 +3757,11 @@ class SectionView(QWidget):
                 return False
             hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
-            hit_line = self._find_nearest_pick_line(x, y)
+            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi))
             if hit_line is None:
                 self._flash_hint("No target line found — click closer to a line")
                 return False
             tcat, toi = hit_line
-            if (tcat, toi) == (cat, oi):
-                self._flash_hint("Target must be a different line — click another horizon or fault")
-                return False
             tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
                       else self._state.project.fault_picks)
             if toi >= len(tpicks):
@@ -3737,7 +3801,7 @@ class SectionView(QWidget):
                 return False
             hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
-            hit_line = self._find_nearest_pick_line(x, y)
+            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi))
             if hit_line is None:
                 self._flash_hint("No cutting line found — click closer to a line")
                 return False
