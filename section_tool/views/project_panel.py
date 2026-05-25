@@ -483,6 +483,31 @@ class ProjectPanel(QDockWidget):
         return []
 
     # ------------------------------------------------------------------
+    # External selection sync
+    # ------------------------------------------------------------------
+
+    def select_entity(self, category: str, index: int) -> None:
+        """Highlight the tree row matching (category, index).
+
+        Called when section view or AppState reports a new selection.
+        Suppresses the itemClicked signal to avoid re-entrancy.
+        """
+        if not category or index < 0:
+            self._tree.blockSignals(True)
+            self._tree.clearSelection()
+            self._tree.blockSignals(False)
+            return
+        cat_item = self._category_items.get(category)
+        if cat_item is None:
+            return
+        if index < cat_item.childCount():
+            item = cat_item.child(index)
+            self._tree.blockSignals(True)
+            self._tree.setCurrentItem(item)
+            self._tree.blockSignals(False)
+            self._tree.scrollToItem(item)
+
+    # ------------------------------------------------------------------
     # Interaction
     # ------------------------------------------------------------------
 

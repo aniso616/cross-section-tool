@@ -814,10 +814,14 @@ class SectionView(QWidget):
         self._ref_line_tool  = tool_id if tool_id in ref_tools      else None
         self._construct_tool = tool_id if tool_id in construct_tools else None
         self._aref_anchor    = None  # reset any in-progress A-Ref
+        self._cst_state      = "idle"
+        self._cst_source     = None
         if self._construct_tool is None:
             self._cst_dip_tool.reset()
             self._cst_parallel_tool.reset()
             self._cst_kink_tool.reset()
+        else:
+            self._flash_construct_hint()
 
     def set_picking_active(self, active: bool) -> None:
         """Enable/disable horizon pick mode."""
@@ -1593,11 +1597,18 @@ class SectionView(QWidget):
         section: Section, marker: str, default_ls: str,
     ) -> None:
         """Shared renderer for horizons and faults."""
-        # Phase 3: use drag preview if available
+        # Phase 3: use drag preview if available (whole-object drag)
         preview = getattr(self, "_object_drag_preview", None)
         if (preview is not None
                 and preview[0] == category and preview[1] == obj_idx):
             hp = preview[2]
+        # Node drag: render in-progress copy so the pick tracks the cursor
+        elif (self._pick_drag
+                and self._pick_selected is not None
+                and self._pick_selected[0] == category
+                and self._pick_selected[1] == obj_idx
+                and self._pick_copy is not None):
+            hp = self._pick_copy
         # Phase 1: only picks belonging to this section (+ global picks)
         sec_idxs = hp.section_indices(section.name)
         d_raw = hp._distances[sec_idxs]
@@ -1640,10 +1651,24 @@ class SectionView(QWidget):
         zorder = base_z + 1 if (is_active or is_selected) else base_z
 
         if is_selected:
+            # White glow halo so it stands out regardless of entity colour
             self._overlay_artists.extend(
-                self._ax.plot(d_sec, z_sec, color=hp.color,
-                              linewidth=render_lw * 3, alpha=0.20,
+                self._ax.plot(d_sec, z_sec, color="#FFFFFF",
+                              linewidth=render_lw * 4, alpha=0.40,
                               zorder=zorder - 1, solid_capstyle="round"))
+            # Open circles at both endpoints
+            if len(d_sec) >= 1:
+                self._overlay_artists.extend(
+                    self._ax.plot(d_sec[0], z_sec[0], "o",
+                                  color="#FFFFFF", markersize=9,
+                                  markerfacecolor="none", markeredgewidth=1.8,
+                                  alpha=0.85, zorder=zorder + 3))
+            if len(d_sec) >= 2:
+                self._overlay_artists.extend(
+                    self._ax.plot(d_sec[-1], z_sec[-1], "o",
+                                  color="#FFFFFF", markersize=9,
+                                  markerfacecolor="none", markeredgewidth=1.8,
+                                  alpha=0.85, zorder=zorder + 3))
 
         if not decorated:
             self._overlay_artists.extend(
@@ -2843,6 +2868,17 @@ class SectionView(QWidget):
             self._end_pick_sequence()
             return
 
+        # ---- Right-click cancels any active construction tool ----
+        if event.button == 3 and self._construct_tool:
+            self._cst_state = "idle"
+            self._cst_source = None
+            self._cst_dip_tool.reset()
+            self._cst_kink_tool.reset()
+            self._cst_parallel_tool.reset()
+            self._state.set_active_tool("select")
+            self.render()
+            return
+
         # ---- Middle-click undoes last placed pick (Phase 4) ----
         if event.button == 2 and (self._picking_active or self._fault_picking):
             self._undo_last_pick()
@@ -2899,7 +2935,7 @@ class SectionView(QWidget):
                          else self._state.project.fault_picks)
                 self._pick_copy = copy.deepcopy(picks[oi])
                 self._sv_mode = "edit_mode"
-                self._selected_object = (cat, oi)
+                self._set_selected_object((cat, oi))
                 self.node_selected.emit(cat, oi, pi)
                 self.render()
                 return
@@ -2945,7 +2981,7 @@ class SectionView(QWidget):
             hit_line = self._find_nearest_pick_line(x, y)
             if hit_line is not None:
                 prev = self._selected_object
-                self._selected_object = hit_line
+                self._set_selected_object(hit_line)
                 self._sv_mode = "object_selected"
                 self._pick_selected = None
                 # Save state for potential object-drag
@@ -2962,7 +2998,7 @@ class SectionView(QWidget):
             # Click empty space → deselect
             if self._sv_mode != "idle" or self._selected_object is not None:
                 self._sv_mode = "idle"
-                self._selected_object = None
+                self._set_selected_object(None)
                 self._pick_selected = None
                 self._pick_copy = None
                 self._object_drag_active = False
@@ -3051,9 +3087,14 @@ class SectionView(QWidget):
             cat, oi, pi = self._pick_selected
             self._pick_copy._distances[pi] = x
             self._pick_copy._depths[pi]    = y
+            # Null map coords for dragged node: position is now in section space
+            for _mc in ("_map_x", "_map_y"):
+                mc_arr = getattr(self._pick_copy, _mc, None)
+                if mc_arr is not None and pi < len(mc_arr):
+                    mc_arr[pi] = float('nan')
             order = np.argsort(self._pick_copy._distances, kind="stable")
             for _attr in ("_distances", "_depths", "_section_names",
-                          "_confidence", "_quality", "_note"):
+                          "_confidence", "_quality", "_note", "_map_x", "_map_y"):
                 arr = getattr(self._pick_copy, _attr, None)
                 if arr is not None and len(arr) == len(order):
                     setattr(self._pick_copy, _attr, arr[order])
@@ -3219,7 +3260,7 @@ class SectionView(QWidget):
                 self.render()
             elif self._sv_mode == "object_selected":
                 self._sv_mode = "idle"
-                self._selected_object = None
+                self._set_selected_object(None)
                 self.render()
         elif event.key == "delete":
             if self._pick_selected is not None and not self._pick_drag:
@@ -3363,7 +3404,7 @@ class SectionView(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         self._sv_mode = "idle"
-        self._selected_object = None
+        self._set_selected_object(None)
         self._pick_selected = None
         self._pick_copy = None
         if cat == "Horizons":
@@ -3484,12 +3525,40 @@ class SectionView(QWidget):
             return
 
         if self._cst_state == "idle":
-            self._cst_first_click(tool, x, y)
+            sel = self._selected_object
+            if sel is not None and tool in ("trim", "parallel"):
+                # Entity already selected → skip source-pick, apply directly
+                cat, oi = sel
+                if tool == "trim":
+                    # click_x determines keep-side relative to the intersection
+                    self._cst_source = {"cat": cat, "idx": oi, "click_x": x, "click_y": y}
+                else:
+                    self._cst_source = {"cat": cat, "idx": oi}
+                self._cst_state = "source_selected"
+                self._cst_second_click(tool, x, y)
+                self._cst_state = "idle"
+                self._cst_source = None
+                self._state.set_active_tool("select")
+            elif sel is not None and tool == "extend":
+                # Entity already selected → constrain endpoint hit to selected entity
+                self._cst_first_click_on_selected(x, y)
+            else:
+                if sel is None and tool in ("extend", "trim", "parallel"):
+                    # Prompt user to select an entity first
+                    picks_h = self._state.project.horizon_picks
+                    picks_f = self._state.project.fault_picks
+                    if not picks_h and not picks_f:
+                        self._flash_hint("Create a horizon or fault first")
+                        return
+                    self._flash_hint(
+                        "Select an entity first (V → click entity), then press the tool key")
+                self._cst_first_click(tool, x, y)
         elif self._cst_state == "source_selected":
-            self._cst_second_click(tool, x, y)
-            self._cst_state = "idle"
-            self._cst_source = None
-            self._state.set_active_tool("select")
+            ok = self._cst_second_click(tool, x, y)
+            if ok:
+                self._cst_state = "idle"
+                self._cst_source = None
+                self._state.set_active_tool("select")
         self.render()
 
     def _handle_dip_constrained_click(self, x: float, y: float) -> None:
@@ -3501,7 +3570,8 @@ class SectionView(QWidget):
         if hp is None:
             self._flash_hint(self._cst_dip_tool.hint())
         else:
-            self._state.add_horizon_pick(hp)
+            from section_tool.core.commands import cmd_add_horizon_pick
+            self._state.execute_command(cmd_add_horizon_pick(self._state, hp))
             self._state.set_active_tool("select")
 
     def _handle_kink_band_click(self, x: float, y: float) -> None:
@@ -3510,6 +3580,15 @@ class SectionView(QWidget):
             return
         sec_name = section.name
         if self._cst_kink_tool.state == "idle":
+            sel = self._selected_object
+            if sel is not None:
+                cat, oi = sel
+                picks = (self._state.project.horizon_picks if cat == "Horizons"
+                         else self._state.project.fault_picks)
+                if oi < len(picks):
+                    self._cst_kink_tool.set_reference(picks[oi])
+                    self._flash_hint(self._cst_kink_tool.hint())
+                    return
             hit_line = self._find_nearest_pick_line(x, y)
             if hit_line is None:
                 self._flash_hint("Click on the backlimb horizon (Kink Band)")
@@ -3522,8 +3601,41 @@ class SectionView(QWidget):
         else:
             hp_new = self._cst_kink_tool.handle_axial_click(x, sec_name)
             if hp_new is not None:
-                self._state.add_horizon_pick(hp_new)
+                from section_tool.core.commands import cmd_add_horizon_pick
+                self._state.execute_command(cmd_add_horizon_pick(self._state, hp_new))
                 self._state.set_active_tool("select")
+
+    def _cst_first_click_on_selected(self, x: float, y: float) -> None:
+        """For extend with selection: find nearest endpoint of selected entity."""
+        sel = self._selected_object
+        if sel is None:
+            return
+        cat, oi = sel
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if oi >= len(picks):
+            return
+        section = self._state.active_section
+        if section is None:
+            return
+        sec_name = section.name
+        hp = picks[oi]
+        sec_idxs = hp.section_indices(sec_name)
+        if len(sec_idxs) < 1:
+            self._flash_hint(f"'{hp.name}' has no picks on this section")
+            return
+        ex, ey = self._to_screen_px_sv(x, y)
+        best_ep, best_dist = None, float("inf")
+        for ep, fi in [("start", sec_idxs[0]), ("end", sec_idxs[-1])]:
+            d = float(hp._distances[fi])
+            z = float(hp._depths[fi])
+            nx, ny = self._to_screen_px_sv(d, z)
+            dist = math.hypot(ex - nx, ey - ny)
+            if dist < best_dist:
+                best_dist, best_ep = dist, ep
+        self._cst_source = {"cat": cat, "idx": oi, "endpoint": best_ep}
+        self._cst_state = "source_selected"
+        self._flash_hint(f"Click the target line to extend '{hp.name}' ({best_ep} end)")
 
     def _cst_first_click(self, tool: str, x: float, y: float) -> None:
         """Select the source object for construct operation."""
@@ -3561,11 +3673,11 @@ class SectionView(QWidget):
             self._cst_state = "source_selected"
             self._flash_hint("Click to place the parallel line")
 
-    def _cst_second_click(self, tool: str, x: float, y: float) -> None:
-        """Apply the construct operation."""
+    def _cst_second_click(self, tool: str, x: float, y: float) -> bool:
+        """Apply the construct operation with undo support. Returns True on success."""
         section = self._state.active_section
         if section is None or self._cst_source is None:
-            return
+            return False
         sec_name = section.name
 
         if tool == "extend":
@@ -3575,26 +3687,45 @@ class SectionView(QWidget):
             picks = (self._state.project.horizon_picks if cat == "Horizons"
                      else self._state.project.fault_picks)
             if oi >= len(picks):
-                return
+                return False
+            hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
             hit_line = self._find_nearest_pick_line(x, y)
             if hit_line is None:
-                self._flash_hint("No target line found — extension cancelled")
-                return
+                self._flash_hint("No target line found — click closer to a line")
+                return False
             tcat, toi = hit_line
+            if (tcat, toi) == (cat, oi):
+                self._flash_hint("Target must be a different line — click another horizon or fault")
+                return False
             tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
                       else self._state.project.fault_picks)
             if toi >= len(tpicks):
-                return
+                return False
             try:
                 hp2 = _extend_pick_to_entity(hp, endpoint, tpicks[toi], sec_name)
             except ValueError as err:
                 self._flash_hint(str(err))
-                return
+                return False
+            hp_new = copy.deepcopy(hp2)
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp2)
             else:
                 self._state.update_fault_pick(oi, hp2)
+            _cat, _oi, _old, _new = cat, oi, hp_old, hp_new
+            def _undo_extend():
+                if _cat == "Horizons":
+                    self._state.update_horizon_pick(_oi, copy.deepcopy(_old))
+                else:
+                    self._state.update_fault_pick(_oi, copy.deepcopy(_old))
+            def _redo_extend():
+                if _cat == "Horizons":
+                    self._state.update_horizon_pick(_oi, copy.deepcopy(_new))
+                else:
+                    self._state.update_fault_pick(_oi, copy.deepcopy(_new))
+            self._state.record_command(
+                f"Extend {hp_old.name}", undo=_undo_extend, redo=_redo_extend)
+            return True
 
         elif tool == "trim":
             src = self._cst_source
@@ -3603,27 +3734,43 @@ class SectionView(QWidget):
             picks = (self._state.project.horizon_picks if cat == "Horizons"
                      else self._state.project.fault_picks)
             if oi >= len(picks):
-                return
+                return False
+            hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
             hit_line = self._find_nearest_pick_line(x, y)
             if hit_line is None:
-                self._flash_hint("No cutting line found — trim cancelled")
-                return
+                self._flash_hint("No cutting line found — click closer to a line")
+                return False
             tcat, toi = hit_line
             tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
                       else self._state.project.fault_picks)
             if toi >= len(tpicks):
-                return
+                return False
             cut_hp = tpicks[toi]
             try:
                 hp3 = _trim_pick_at_entity(hp, cut_hp, keep_side_x, sec_name)
             except ValueError as err:
                 self._flash_hint(str(err))
-                return
+                return False
+            hp_new = copy.deepcopy(hp3)
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp3)
             else:
                 self._state.update_fault_pick(oi, hp3)
+            _cat, _oi, _old, _new = cat, oi, hp_old, hp_new
+            def _undo_trim():
+                if _cat == "Horizons":
+                    self._state.update_horizon_pick(_oi, copy.deepcopy(_old))
+                else:
+                    self._state.update_fault_pick(_oi, copy.deepcopy(_old))
+            def _redo_trim():
+                if _cat == "Horizons":
+                    self._state.update_horizon_pick(_oi, copy.deepcopy(_new))
+                else:
+                    self._state.update_fault_pick(_oi, copy.deepcopy(_new))
+            self._state.record_command(
+                f"Trim {hp_old.name}", undo=_undo_trim, redo=_redo_trim)
+            return True
 
         elif tool == "parallel":
             src = self._cst_source
@@ -3631,11 +3778,11 @@ class SectionView(QWidget):
             picks = (self._state.project.horizon_picks if cat == "Horizons"
                      else self._state.project.fault_picks)
             if oi >= len(picks):
-                return
+                return False
             hp = picks[oi]
             sec_idxs = hp.section_indices(sec_name)
             if len(sec_idxs) < 2:
-                return
+                return False
             d_sec = hp._distances[sec_idxs]
             z_sec = hp._depths[sec_idxs]
 
@@ -3651,7 +3798,11 @@ class SectionView(QWidget):
                 color=hp.color,
                 section_names=[sec_name] * len(d_sec),
             )
-            self._state.add_horizon_pick(hp_new)
+            from section_tool.core.commands import cmd_add_horizon_pick
+            self._state.execute_command(cmd_add_horizon_pick(self._state, hp_new))
+            return True
+
+        return False
 
     def _find_nearest_endpoint_px(self, x: float, y: float) -> tuple | None:
         """Find the nearest START or END pick point within _PICK_HIT_PX * 1.5 pixels."""
@@ -3829,6 +3980,54 @@ class SectionView(QWidget):
             self._overlay_artists.extend(
                 self._ax.plot(d_sec, z_sec + offset, "--", color=hp.color,
                               lw=1.5, alpha=0.6, zorder=12))
+
+    def _set_selected_object(self, obj: "tuple[str, int] | None") -> None:
+        """Set _selected_object and notify AppState (for panel sync)."""
+        self._selected_object = obj
+        if obj is not None:
+            self._state.set_selected_entity(obj[0], obj[1])
+        else:
+            self._state.set_selected_entity("", -1)
+
+    def set_selected_from_panel(self, category: str, index: int) -> None:
+        """Called by app when user clicks an entity in the project panel."""
+        if category in ("Horizons", "Faults", "Polygons", "Wells"):
+            self._set_selected_object((category, index))
+            if category in ("Horizons", "Faults"):
+                self._sv_mode = "object_selected"
+            self.render()
+
+    def _flash_construct_hint(self) -> None:
+        """Show a contextual status hint when a construction tool is activated."""
+        tool = self._construct_tool
+        if tool is None:
+            return
+        sel = self._selected_object
+        sel_name = ""
+        if sel is not None:
+            cat, oi = sel
+            picks = (self._state.project.horizon_picks if cat == "Horizons"
+                     else self._state.project.fault_picks if cat == "Faults"
+                     else [])
+            if oi < len(picks):
+                sel_name = picks[oi].name or f"{cat[:-1]} {oi + 1}"
+        if sel_name:
+            hints = {
+                "extend":          f"[Extend]  Selected: {sel_name}  → Click near an endpoint to extend",
+                "trim":            f"[Trim]    Selected: {sel_name}  → Click the cutting line",
+                "parallel":        f"[Parallel] Selected: {sel_name}  → Click placement position",
+                "dip_constrained": f"[Dip]     Selected: {sel_name}  → Click anchor, then extent",
+                "kink_band":       f"[Kink]    Selected: {sel_name}  → Click axial trace position",
+            }
+        else:
+            hints = {
+                "extend":          "[Extend]  Click near an endpoint to extend (or select entity first with V)",
+                "trim":            "[Trim]    Click the line to trim, then the cutting line (or select first)",
+                "parallel":        "[Parallel] Click reference line, then placement (or select first)",
+                "dip_constrained": "[Dip]     Click anchor point, then extent point",
+                "kink_band":       "[Kink]    Click backlimb horizon (or select it), then axial trace",
+            }
+        self._flash_hint(hints.get(tool, ""))
 
     def _flash_hint(self, msg: str) -> None:
         """Show a brief status hint via the parent window's status bar."""

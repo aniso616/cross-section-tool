@@ -153,6 +153,10 @@ class MainWindow(QMainWindow):
         ("S",            "Section Draw",             "Interpretation"),
         ("R",            "Reference Line (cycle)",   "Construction"),
         ("M",            "Measure",                  "Construction"),
+        ("E",            "Extend Pick",              "Construction"),
+        ("T",            "Trim Pick",                "Construction"),
+        ("D",            "Dip-Constrained Pick",     "Construction"),
+        ("K",            "Kink Band",                "Construction"),
         ("Delete",       "Delete Selected",          "Editing"),
         ("Ctrl+Z",       "Undo",                     "Editing"),
         ("Ctrl+Shift+Z", "Redo",                     "Editing"),
@@ -626,6 +630,21 @@ class MainWindow(QMainWindow):
                 tools_menu.addSeparator()
 
         tools_menu.addSeparator()
+        construct_sub = QMenu("&Construction Tools", self)
+        for tid, label, key in [
+            ("extend",          "Extend Pick",          "E"),
+            ("trim",            "Trim Pick",            "T"),
+            ("parallel",        "Parallel Offset",      ""),
+            ("dip_constrained", "Dip-Constrained Pick", "D"),
+            ("kink_band",       "Kink Band",            "K"),
+        ]:
+            label_str = f"{label}\t{key}" if key else label
+            a = QAction(label_str, self)
+            a.triggered.connect(
+                lambda _checked, t=tid: self._tool_palette.set_active_tool(t))
+            construct_sub.addAction(a)
+        tools_menu.addMenu(construct_sub)
+        tools_menu.addSeparator()
         self._set_aoi_action = QAction("Set Area of Interest (AOI)…", self)
         self._set_aoi_action.triggered.connect(self._on_set_aoi)
         tools_menu.addAction(self._set_aoi_action)
@@ -746,6 +765,8 @@ class MainWindow(QMainWindow):
         self._project_panel.visibility_changed.connect(self._on_panel_visibility)
         self._project_panel.object_selected.connect(self._on_panel_object_selected)
         self._project_panel.add_requested.connect(self._on_panel_add)
+        # Bidirectional selection sync: section view → project panel
+        s.selected_entity_changed.connect(self._project_panel.select_entity)
         self._project_panel.create_ew_section_through_well.connect(
             self._on_create_ew_section_through_well)
         self._project_panel.create_ns_section_through_well.connect(
@@ -766,8 +787,9 @@ class MainWindow(QMainWindow):
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
         # Phase 3: wire node selection → properties panel
+        # node_selected emits (str, int, int) separately; pack into tuple for set_selected_node
         self._section_view.node_selected.connect(
-            self._properties_panel.set_selected_node)
+            lambda cat, oi, pi: self._properties_panel.set_selected_node((cat, oi, pi)))
         # Phase 3: deselect node in props when mode changes
         s.active_pick_target_changed.connect(
             lambda *_: self._properties_panel.set_selected_node(None))
@@ -1952,6 +1974,8 @@ class MainWindow(QMainWindow):
 
     def _on_panel_object_selected(self, category: str, index: int) -> None:
         self._properties_panel.set_selected_object(category, index)
+        # Also set selection in section view (panel → section sync)
+        self._section_view.set_selected_from_panel(category, index)
 
     def _on_panel_add(self, category: str) -> None:
         if category == "Sections":
@@ -2756,8 +2780,15 @@ class SectionMainWindow(MainWindow):
         _sc("F", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_F))
         _sc("G", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_G))
         _sc("M", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_M))
-        _sc("T", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_T))
         _sc("R", self._cycle_ref_line_tool)
+        # Construction tools — not in ToolManager key map, so route via _tool_palette directly
+        _sc("T", lambda: self._tool_palette.set_active_tool("trim"))
+        _sc("D", lambda: self._tool_palette.set_active_tool("dip_constrained"))
+        _sc("E", lambda: self._tool_palette.set_active_tool("extend"))
+        _sc("K", lambda: self._tool_palette.set_active_tool("kink_band"))
+        _sc("P", lambda: self._tool_palette.set_active_tool("parallel"))
+        _sc("Z", lambda: self._tool_palette.set_active_tool("zoom"))
+        _sc("S", lambda: self._tool_palette.set_active_tool("new_section"))
 
     # ------------------------------------------------------------------
     # Override: remove Space-bar temporary pan

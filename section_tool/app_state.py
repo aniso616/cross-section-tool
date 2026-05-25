@@ -155,6 +155,11 @@ class AppState(QObject):
     # Extracted seismic: emitted when new data is loaded for a section
     seismic_extracted = Signal(str)   # section_name
 
+    # Selection: which entity in the section view is highlighted
+    # category is "Horizons" / "Faults" / "Polygons" / "Wells" / "" (none)
+    # index is -1 when nothing is selected
+    selected_entity_changed = Signal(str, int)
+
     # ------------------------------------------------------------------
 
     def __init__(self, parent=None) -> None:
@@ -174,6 +179,9 @@ class AppState(QObject):
         # Extracted seismic per section: {section_name: (data, meta)}
         self._section_seismic: dict[str, tuple[np.ndarray, dict]] = {}
         self._vector_layers: list[dict] = []
+        # Selection state
+        self._selected_entity_cat: str = ""
+        self._selected_entity_idx: int = -1
         # SQLite project manager (None when working with legacy HDF5 projects)
         from section_tool.io.project_manager import ProjectManager
         self._pm: ProjectManager = ProjectManager()
@@ -225,6 +233,25 @@ class AppState(QObject):
     @property
     def command_stack(self) -> CommandStack:
         return self._cmd_stack
+
+    @property
+    def selected_entity_category(self) -> str:
+        return self._selected_entity_cat
+
+    @property
+    def selected_entity_index(self) -> int:
+        return self._selected_entity_idx
+
+    def set_selected_entity(self, category: str, index: int) -> None:
+        """Set the currently-selected entity by category and list index.
+
+        Pass category="" and index=-1 to clear the selection.
+        Emits selected_entity_changed only when the value actually changes.
+        """
+        if category != self._selected_entity_cat or index != self._selected_entity_idx:
+            self._selected_entity_cat = category
+            self._selected_entity_idx = index
+            self.selected_entity_changed.emit(category, index)
 
     # ------------------------------------------------------------------
     # Extracted seismic
