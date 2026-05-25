@@ -30,6 +30,7 @@ from section_tool.core.snap import (
     extend_pick_to_entity as _extend_pick_to_entity,
     find_snap as _find_snap,
     trim_pick_at_entity as _trim_pick_at_entity,
+    _replace_section_points as _replace_section_pts,
 )
 from section_tool.core.surfaces import HorizonPick
 from section_tool.io.project import SeismicRef
@@ -2543,11 +2544,13 @@ class SectionView(QWidget):
     def _find_nearest_pick_line(
         self, event_x: float, event_y: float,
         exclude: tuple[str, int] | None = None,
+        threshold_px: float = _LINE_HIT_PX,
     ) -> tuple[str, int] | None:
-        """Phase 2: Return (category, obj_idx) of the nearest pick LINE within tolerance.
+        """Return (category, obj_idx) of the nearest pick LINE within threshold_px.
 
         exclude: (category, obj_idx) pair to skip — used so the source entity
         is not matched as its own target during extend/trim.
+        threshold_px: hit-test radius in screen pixels (default _LINE_HIT_PX=8).
         """
         section = self._state.active_section
         if section is None:
@@ -2571,7 +2574,7 @@ class SectionView(QWidget):
                     ax2, ay2 = self._to_screen_px_sv(float(d_sec[i]),   float(z_sec[i]))
                     bx2, by2 = self._to_screen_px_sv(float(d_sec[i+1]), float(z_sec[i+1]))
                     d = _seg_dist(ex, ey, ax2, ay2, bx2, by2)
-                    if d <= _LINE_HIT_PX and d < best_dist:
+                    if d <= threshold_px and d < best_dist:
                         best_dist = d
                         best_cat, best_idx = category, oi
 
@@ -3762,20 +3765,39 @@ class SectionView(QWidget):
                 return False
             hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
-            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi))
+            si = hp.section_indices(sec_name)
+            if len(si) < 2:
+                return False
+
+            # First try extend-to-entity (20px tolerance).
+            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi), threshold_px=20.0)
+            if hit_line is not None:
+                tcat, toi = hit_line
+                tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
+                          else self._state.project.fault_picks)
+                if toi < len(tpicks):
+                    try:
+                        hp2 = _extend_pick_to_entity(hp, endpoint, tpicks[toi], sec_name)
+                        commit_label = f"Extend {hp_old.name} → {tpicks[toi].name}"
+                    except ValueError as err:
+                        self._flash_hint(str(err))
+                        hit_line = None   # fall through to free extend
+                else:
+                    hit_line = None
+
             if hit_line is None:
-                self._flash_hint("No target line found — click closer to a line")
-                return False
-            tcat, toi = hit_line
-            tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
-                      else self._state.project.fault_picks)
-            if toi >= len(tpicks):
-                return False
-            try:
-                hp2 = _extend_pick_to_entity(hp, endpoint, tpicks[toi], sec_name)
-            except ValueError as err:
-                self._flash_hint(str(err))
-                return False
+                # Free extend — add cursor as new endpoint.
+                d_sec = hp._distances[si]
+                z_sec = hp._depths[si]
+                if endpoint == "start":
+                    d_new = np.concatenate([[x], d_sec])
+                    z_new = np.concatenate([[y], z_sec])
+                else:
+                    d_new = np.concatenate([d_sec, [x]])
+                    z_new = np.concatenate([z_sec, [y]])
+                hp2 = _replace_section_pts(hp, sec_name, d_new, z_new)
+                commit_label = f"Extend {hp_old.name}"
+
             hp_new = copy.deepcopy(hp2)
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp2)
@@ -3792,8 +3814,7 @@ class SectionView(QWidget):
                     self._state.update_horizon_pick(_oi, copy.deepcopy(_new))
                 else:
                     self._state.update_fault_pick(_oi, copy.deepcopy(_new))
-            self._state.record_command(
-                f"Extend {hp_old.name}", undo=_undo_extend, redo=_redo_extend)
+            self._state.record_command(commit_label, undo=_undo_extend, redo=_redo_extend)
             return True
 
         elif tool == "trim":
@@ -3806,21 +3827,43 @@ class SectionView(QWidget):
                 return False
             hp_old = copy.deepcopy(picks[oi])
             hp = picks[oi]
-            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi))
+            si = hp.section_indices(sec_name)
+            if len(si) < 2:
+                return False
+
+            # First try trim-to-entity (20px tolerance).
+            hit_line = self._find_nearest_pick_line(x, y, exclude=(cat, oi), threshold_px=20.0)
+            if hit_line is not None:
+                tcat, toi2 = hit_line
+                tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
+                          else self._state.project.fault_picks)
+                if toi2 < len(tpicks):
+                    try:
+                        hp3 = _trim_pick_at_entity(hp, tpicks[toi2], keep_side_x, sec_name)
+                    except ValueError as err:
+                        self._flash_hint(str(err))
+                        hit_line = None   # fall through to free trim
+                else:
+                    hit_line = None
+
             if hit_line is None:
-                self._flash_hint("No cutting line found — click closer to a line")
-                return False
-            tcat, toi = hit_line
-            tpicks = (self._state.project.horizon_picks if tcat == "Horizons"
-                      else self._state.project.fault_picks)
-            if toi >= len(tpicks):
-                return False
-            cut_hp = tpicks[toi]
-            try:
-                hp3 = _trim_pick_at_entity(hp, cut_hp, keep_side_x, sec_name)
-            except ValueError as err:
-                self._flash_hint(str(err))
-                return False
+                # Free trim — cut the pick at cursor x, interpolating depth.
+                d_sec = hp._distances[si]
+                z_sec = hp._depths[si]
+                z_at_x = float(np.interp(x, d_sec, z_sec,
+                                         left=float(z_sec[0]), right=float(z_sec[-1])))
+                keep_left = keep_side_x <= x
+                mask = d_sec <= x if keep_left else d_sec >= x
+                if keep_left:
+                    d_new = np.append(d_sec[mask], x)
+                    z_new = np.append(z_sec[mask], z_at_x)
+                else:
+                    d_new = np.concatenate([[x], d_sec[mask]])
+                    z_new = np.concatenate([[z_at_x], z_sec[mask]])
+                if len(d_new) < 2:
+                    self._flash_hint("Nothing to keep on that side")
+                    return False
+                hp3 = _replace_section_pts(hp, sec_name, d_new, z_new)
             hp_new = copy.deepcopy(hp3)
             if cat == "Horizons":
                 self._state.update_horizon_pick(oi, hp3)
