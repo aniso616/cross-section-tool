@@ -2916,8 +2916,13 @@ class SectionView(QWidget):
             else:
                 return
 
-        # Apply snap (Phase 5)
-        if self._snap_point is not None:
+        # Apply snap (Phase 5) — but NOT for construction tool second clicks.
+        # On the second click the snap target is typically the source entity's own
+        # endpoint, which would redirect the click away from the intended target line.
+        # Skip snap so the user's raw click position reaches _find_nearest_pick_line.
+        if self._snap_point is not None and not (
+            self._construct_tool and self._cst_state == "source_selected"
+        ):
             x, y = self._snap_point
 
         tool = self._state.active_tool
