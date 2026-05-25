@@ -1303,8 +1303,9 @@ class SectionView(QWidget):
         total = section.total_length()
         ve    = section.vertical_exaggeration
 
-        # X axis
-        self._ax.set_xlim(0.0, max(total, 1.0))
+        # X axis — 3% padding left, 5% right so overhanging picks are reachable
+        _span = max(total, 1.0)
+        self._ax.set_xlim(-0.03 * _span, 1.05 * _span)
 
         # Y axis — depth down, inverted
         max_d = self._compute_max_depth(section)
@@ -3745,7 +3746,8 @@ class SectionView(QWidget):
             return
         d_sec = hp._distances[si_arr]
         z_sec = hp._depths[si_arr]
-        cx, cy = self._cursor_data
+        # Use snap-corrected position so the red X snaps exactly to endpoints/intersections
+        cx, cy = self._snap_point if self._snap_point is not None else self._cursor_data
         tx, tz, seg_i = self._project_cursor_onto_polyline_px(d_sec, z_sec, cx, cy)
         # Determine keep side: which half's centroid is closer to cursor in screen px?
         bd = np.concatenate([d_sec[:seg_i + 1], [tx]])
@@ -3782,7 +3784,8 @@ class SectionView(QWidget):
             return
         d_sec = hp._distances[si_arr]
         z_sec = hp._depths[si_arr]
-        cx, cy = self._cursor_data
+        # Use snap-corrected position so angle constraints apply from the snap target
+        cx, cy = self._snap_point if self._snap_point is not None else self._cursor_data
         endpoint = src.get("endpoint", "end")
         # Dynamic endpoint switching: whichever end is closer to cursor in screen px
         d0, z0 = float(d_sec[0]),  float(z_sec[0])

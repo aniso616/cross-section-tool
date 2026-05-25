@@ -210,8 +210,10 @@ class TestAxesState:
         state.set_active_section(state.project.sections[0])
         view.render()
         xmin, xmax = view.axes.get_xlim()
-        assert pytest.approx(xmin) == 0.0
-        assert pytest.approx(xmax) == 2500.0
+        # xlim has a small padding so overhanging picks are reachable:
+        # left = -3% * length, right = 105% * length
+        assert pytest.approx(xmin) == -0.03 * 2500.0
+        assert pytest.approx(xmax) == 1.05 * 2500.0
 
     def test_horizon_pick_adds_line(self, view, state):
         state.add_section(_east_section())
