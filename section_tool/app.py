@@ -695,6 +695,10 @@ class MainWindow(QMainWindow):
         self._attribute_table_action.triggered.connect(self._on_attribute_table)
         tools_menu.addAction(self._attribute_table_action)
         tools_menu.addSeparator()
+        self._topology_audit_action = QAction("&Topology Audit…", self)
+        self._topology_audit_action.triggered.connect(self._on_topology_audit)
+        tools_menu.addAction(self._topology_audit_action)
+        tools_menu.addSeparator()
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
         tools_menu.addAction(self._view_segy_hdr_action)
@@ -1297,6 +1301,12 @@ class MainWindow(QMainWindow):
         self._state.set_aoi(aoi)
         self._map_view.render()
         self._section_view.render()
+
+    def _on_topology_audit(self) -> None:
+        """Tools → Topology Audit: check interpretation hygiene for the active section."""
+        from section_tool.views.topology_audit_dialog import TopologyAuditDialog
+        dlg = TopologyAuditDialog(self._state, parent=self)
+        dlg.exec()
 
     def _on_thermal_modeling(self) -> None:
         """Tools → Thermal Modeling: open the thermal modeling dialog."""
