@@ -2596,30 +2596,30 @@ class MainWindow(QMainWindow):
             self._fault_properties(idx)
 
     def _ensure_pick_target(self, tool_id: str) -> None:
-        """Auto-select a pick target; auto-create one if none exist yet."""
+        """Set active pick target from selected entity; create new if none selected."""
         from section_tool.core.surfaces import HorizonPick as _HP
         cat = "Horizons" if tool_id == "horizon_pick" else "Faults"
-        cur_cat = self._state.active_pick_category
-        cur_idx = self._state.active_pick_index
         proj = self._state.project
         picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
 
-        if cur_cat == cat and cur_idx is not None and cur_idx < len(picks):
-            return  # already valid
+        # Selected entity takes priority as the pick target
+        sel_cat = self._state.selected_entity_category
+        sel_idx = self._state.selected_entity_index
+        if sel_cat == cat and 0 <= sel_idx < len(picks):
+            self._state.set_active_pick_target(cat, sel_idx)
+            return
 
-        if picks:
-            self._state.set_active_pick_target(cat, 0)
+        # No matching selection — create a new entity and start picking on it
+        kind = "Horizon" if cat == "Horizons" else "Fault"
+        default_color = self._next_horizon_color() if cat == "Horizons" else self._next_fault_color()
+        new_pick = _HP.empty(name=f"{kind} {len(picks) + 1}", color=default_color)
+        if cat == "Horizons":
+            self._state.add_horizon_pick(new_pick)
         else:
-            # No objects yet — auto-create an empty one so picking starts immediately.
-            # Reverting to "select" here breaks the HUD/ToolManager sync in the game UI.
-            kind = "horizon" if cat == "Horizons" else "fault"
-            default_color = "#2ca02c" if cat == "Horizons" else "#d62728"
-            new_pick = _HP.empty(name=f"{kind.title()} 1", color=default_color)
-            if cat == "Horizons":
-                self._state.add_horizon_pick(new_pick)
-            else:
-                self._state.add_fault_pick(new_pick)
-            self._state.set_active_pick_target(cat, 0)
+            self._state.add_fault_pick(new_pick)
+        new_idx = len(picks) - 1
+        self._state.set_active_pick_target(cat, new_idx)
+        self._state.set_selected_entity(cat, new_idx)
 
     def _update_pick_status(self) -> None:
         """Phase 2: show picking target + existing pick count in status bar."""
@@ -2634,12 +2634,14 @@ class MainWindow(QMainWindow):
         hp = picks[idx]
         sec = self._state.active_section
         n = hp.n_picks_for_section(sec.name) if sec else hp.n_picks
+        node_word = "node" if n == 1 else "nodes"
         self._status_label.setText(
-            f"Picking: {hp.name}  ({n} existing picks)  |  Right-click or Escape to end"
+            f"Picking {hp.name}  ·  {n} {node_word}  ·  Right-click or Escape to finish"
         )
 
     def _on_pick_target_selected(self, cat: str, idx: int) -> None:
-        """Clicking a horizon/fault in the panel also activates the matching tool."""
+        """Clicking a horizon/fault in the panel selects it and activates pick mode."""
+        self._state.set_selected_entity(cat, idx)
         self._state.set_active_pick_target(cat, idx)
         if cat == "Horizons":
             self._tool_palette.set_active_tool("horizon_pick")
@@ -2653,13 +2655,6 @@ class MainWindow(QMainWindow):
 
     def _on_tool_changed(self, tool_id: str) -> None:
         """Route palette tool activation to views and AppState."""
-        proj = self._state.project
-        if tool_id == "horizon_pick" and not proj.horizon_picks:
-            self._tool_palette.set_active_tool("select")
-            return
-        if tool_id == "fault_pick" and not proj.fault_picks:
-            self._tool_palette.set_active_tool("select")
-            return
         self._state.set_active_tool(tool_id)
         self._section_view.set_picking_active(tool_id == "horizon_pick")
         self._section_view.set_fault_picking(tool_id == "fault_pick")

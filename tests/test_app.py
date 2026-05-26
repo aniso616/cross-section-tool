@@ -347,11 +347,12 @@ class TestPickingWorkflow:
         win._pick_action.setChecked(False)
         assert win._tool_palette.active_tool == "select"
 
-    def test_pick_without_horizon_reverts_to_select(self, win):
-        # No horizon: activating pick tool should revert to select
+    def test_pick_without_horizon_creates_new(self, win, state):
+        # No horizon selected and none exist: pressing P auto-creates a new one
         win._tool_palette.set_active_tool("horizon_pick")
-        assert win._tool_palette.active_tool == "select"
-        assert not win._section_view._picking_active
+        assert win._tool_palette.active_tool == "horizon_pick"
+        assert win._section_view._picking_active
+        assert len(state.project.horizon_picks) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +464,7 @@ class TestPickChainGuard:
     def test_horizon_pick_activates_tool(self, win, state):
         hp = HorizonPick.empty(name="H1")
         state.add_horizon_pick(hp)
-        state.set_active_pick_target("Horizons", 0)
+        state.set_selected_entity("Horizons", 0)
         win._tool_palette.set_active_tool("horizon_pick")
         assert win._tool_palette.active_tool == "horizon_pick"
         assert win._section_view._picking_active
@@ -471,7 +472,7 @@ class TestPickChainGuard:
     def test_fault_pick_activates_tool(self, win, state):
         fp = HorizonPick.empty(name="F1")
         state.add_fault_pick(fp)
-        state.set_active_pick_target("Faults", 0)
+        state.set_selected_entity("Faults", 0)
         win._tool_palette.set_active_tool("fault_pick")
         assert win._tool_palette.active_tool == "fault_pick"
         assert win._section_view._fault_picking
@@ -479,7 +480,7 @@ class TestPickChainGuard:
     def test_full_horizon_pick_chain(self, win, state):
         hp = HorizonPick.empty(name="Top Formation", color="#2ca02c")
         state.add_horizon_pick(hp)
-        state.set_active_pick_target("Horizons", 0)
+        state.set_selected_entity("Horizons", 0)   # select → becomes pick target
         win._tool_palette.set_active_tool("horizon_pick")
         sec = Section([(0, 0), (1000, 0)], name="L1")
         state.add_section(sec)
@@ -491,7 +492,7 @@ class TestPickChainGuard:
     def test_full_fault_pick_chain(self, win, state):
         fp = HorizonPick.empty(name="Fault A", color="#d62728")
         state.add_fault_pick(fp)
-        state.set_active_pick_target("Faults", 0)
+        state.set_selected_entity("Faults", 0)   # select → becomes pick target
         win._tool_palette.set_active_tool("fault_pick")
         sec = Section([(0, 0), (1000, 0)], name="L1")
         state.add_section(sec)
@@ -499,10 +500,12 @@ class TestPickChainGuard:
         win._section_view._add_pick_to_active_target(300.0, 900.0)
         assert state.project.fault_picks[0].n_picks == 1
 
-    def test_no_horizon_reverts_pick_tool_to_select(self, win):
+    def test_no_horizon_reverts_pick_tool_to_select(self, win, state):
+        # No horizon selected and none exist → auto-creates a new one
         win._tool_palette.set_active_tool("horizon_pick")
-        assert win._tool_palette.active_tool == "select"
-        assert not win._section_view._picking_active
+        assert win._tool_palette.active_tool == "horizon_pick"
+        assert win._section_view._picking_active
+        assert len(state.project.horizon_picks) == 1
 
     def test_panel_add_requested_connected(self, win):
         # add_requested must be wired to app — verify by checking the handler exists
