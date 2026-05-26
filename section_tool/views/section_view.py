@@ -1058,16 +1058,17 @@ class SectionView(QWidget):
     def on_theme_changed(self, theme_name: str) -> None:
         """Slot: re-apply figure/axes colors when the theme switches."""
         t = get_theme()
-        if t.name == "print":
-            self._fig.patch.set_facecolor(t.background)
-            self._fig.patch.set_alpha(1.0)
-            self._ax.set_facecolor(t.background)
-        else:
-            self._fig.patch.set_facecolor(t.background)
-            self._fig.patch.set_alpha(0.0)
-            self._ax.set_facecolor((0.0, 0.0, 0.0, 0.0))
+        # Keep matplotlib figure/axes transparent for all themes — the pyqtgraph
+        # layer behind them provides the canvas background color. _configure_axes
+        # resets ax facecolor to transparent on every render anyway, so setting it
+        # here for the print branch has no lasting effect.
+        self._fig.patch.set_facecolor(t.background)
+        self._fig.patch.set_alpha(0.0)
         if self._strat_ax is not None:
             self._strat_ax.set_facecolor(t.background)
+        # Drive pyqtgraph background — this is what actually changes the canvas color.
+        self._seismic_layer.apply_theme(t)
+        self._seismic_layer.update()
         self._canvas._seismic_bg = None
         self.request_render()
 

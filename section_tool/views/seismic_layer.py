@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 import pyqtgraph as pg
+from section_tool.style.theme import get_theme
 
 # Suppress pyqtgraph startup message
 pg.setConfigOption("antialias", False)
@@ -75,7 +76,7 @@ class SeismicLayer(QWidget):
         self._gw = pg.GraphicsLayoutWidget(self)
         self._gw.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._gw.setMinimumSize(0, 0)
-        self._gw.setBackground("#0e1014")
+        self._gw.setBackground(get_theme().background)
         layout.addWidget(self._gw)
 
         self._plot = self._gw.addPlot()
@@ -93,6 +94,10 @@ class SeismicLayer(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def apply_theme(self, theme) -> None:
+        """Update pyqtgraph background to match *theme*."""
+        self._gw.setBackground(theme.background)
 
     def set_data(
         self,
@@ -166,9 +171,9 @@ class SeismicLayer(QWidget):
         sampled at the pixmap's full physical-pixel resolution rather than at
         the view's logical resolution.
         """
-        from PySide6.QtGui import QPainter
+        from PySide6.QtGui import QPainter, QColor
         from PySide6.QtCore import QRectF
-        pm.fill(Qt.GlobalColor.black)
+        pm.fill(QColor(get_theme().background))
         painter = QPainter(pm)
         # QPainter on QPixmap uses physical pixel coordinates regardless of DPR.
         # Use the full physical dimensions so the scene fills every physical pixel.
