@@ -2652,7 +2652,12 @@ class SectionView(QWidget):
         return (best_cat, best_idx) if best_cat is not None else None
 
     def _compute_snap(self, x: float, y: float) -> tuple[float, float] | None:
-        """Return nearest snap target within threshold, or None."""
+        """Return nearest snap target within threshold, or None.
+
+        Section-edge snap is suppressed during active picking: picks are
+        geologically valid at any distance and should not be dragged to
+        the section boundary when the user clicks near (or past) the ends.
+        """
         if not self._snap_active:
             return None
         section = self._state.active_section
@@ -2665,6 +2670,11 @@ class SectionView(QWidget):
             if topo is not None and topo.section_name == sec_name
             else []
         )
+        # Suppress section-edge snap during active picking — picks extend past
+        # section ends and the 20px horizontal snap zone creates phantom nodes.
+        in_pick_mode = self._picking_active or self._fault_picking
+        edges = (0.0, 0.0) if in_pick_mode else (0.0, section.total_length())
+
         result = _find_snap(
             cursor=(x, y),
             picks_by_cat={
@@ -2673,7 +2683,7 @@ class SectionView(QWidget):
             },
             threshold_px=float(_SNAP_THRESHOLD),
             to_screen=self._to_screen_px_sv,
-            section_edges=(0.0, section.total_length()),
+            section_edges=edges,
             topology_pts=topo_pts,
             sec_name=sec_name,
         )

@@ -429,6 +429,58 @@ class TestSeismicCache:
         assert "/also_missing.segy" not in view._seismic_cache
 
 
+class TestSnapSuppressDuringPicking:
+    """Section-edge snap must not fire during active pick mode.
+
+    Regression: clicking near (or past) a section endpoint while picking
+    created a phantom node at the section boundary because the 20px
+    horizontal edge-snap zone overrode the click position.
+    """
+
+    def test_section_edge_snap_suppressed_when_picking_active(self, view, state):
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1")
+        state.add_section(sec)
+        state.set_active_section(sec)
+        hp = HorizonPick.empty(name="H1")
+        state.add_horizon_pick(hp)
+        state.set_selected_entity("Horizons", 0)
+
+        view.set_picking_active(True)
+        assert view._picking_active is True
+
+        # Simulate a cursor position 50 units past the section end (x=1050)
+        # In picking mode, _compute_snap should NOT snap to section_end=1000.
+        # Mock to_screen_px_sv so pixel distance is computable (flat projection).
+        def mock_to_screen(d, z):
+            # 1 unit = 1 pixel (simple identity for testing)
+            return (d, z)
+
+        view._to_screen_px_sv = mock_to_screen
+        result = view._compute_snap(1050.0, 200.0)
+        # With no pick nodes on the section, there are no snap targets.
+        # Section-edge snap (at x=1000) would have fired without the fix.
+        assert result is None
+
+    def test_section_edge_snap_active_when_not_picking(self, view, state):
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L2")
+        state2 = AppState()
+        state2.add_section(sec)
+        state2.set_active_section(sec)
+        view2 = SectionView(state2)
+        view2.set_picking_active(False)
+        assert view2._picking_active is False
+
+        def mock_to_screen(d, z):
+            return (d, z)
+
+        view2._to_screen_px_sv = mock_to_screen
+        # Cursor at x=1005 — 5 units past section end, within 20px zone
+        result = view2._compute_snap(1005.0, 200.0)
+        # Should snap to (1000.0, 200.0) in non-pick mode
+        assert result is not None
+        assert abs(result[0] - 1000.0) < 1.0
+
+
 # ---------------------------------------------------------------------------
 # Wiggle rendering helper
 # ---------------------------------------------------------------------------
