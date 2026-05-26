@@ -468,12 +468,13 @@ class MainWindow(QMainWindow):
 
         # Export submenu
         export_menu = QMenu("&Export", self)
-        self._export_img_action = QAction("Section Image (PNG/SVG/PDF)…", self)
+        self._export_section_action = QAction("&Export Section…\tCtrl+E", self)
+        self._export_section_action.triggered.connect(self._on_export_section_dialog)
+        export_menu.addAction(self._export_section_action)
+        export_menu.addSeparator()
+        self._export_img_action = QAction("Quick Image (PNG/SVG/PDF)…", self)
         self._export_img_action.triggered.connect(self._on_export_section_image)
         export_menu.addAction(self._export_img_action)
-        self._export_print_action = QAction("Section Image with &Print Theme…", self)
-        self._export_print_action.triggered.connect(self._on_export_with_print_theme)
-        export_menu.addAction(self._export_print_action)
         self._export_csv_action = QAction("Horizons to CSV…", self)
         self._export_csv_action.triggered.connect(self._on_export_horizons_csv)
         export_menu.addAction(self._export_csv_action)
@@ -1862,28 +1863,15 @@ class MainWindow(QMainWindow):
         QSettings("Geoscience", "CrossSectionTool").setValue("view/theme", theme_id)
         self._state.theme_changed.emit(theme_id)
 
-    def _on_export_with_print_theme(self) -> None:
-        """Export section image with print theme, without changing the working theme."""
-        if self._state.active_section is None:
-            QMessageBox.information(self, "No Section", "Activate a section first.")
+    def _on_export_section_dialog(self) -> None:
+        """Open the Export Section dialog with live preview and print parameters."""
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(self, "Export", "Activate a section first.")
             return
-        from section_tool.style import get_theme, set_theme
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export with Print Theme", "",
-            "PNG Image (*.png);;SVG Vector (*.svg);;PDF Document (*.pdf)"
-        )
-        if not path:
-            return
-        prior_theme = get_theme().name
-        try:
-            set_theme("print")
-            fig = self._section_view.render_to_figure(12.0, 7.0, 200)
-            fig.savefig(path, bbox_inches="tight", facecolor="white")
-            QMessageBox.information(self, "Export OK", f"Saved (print theme) to:\n{path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
-        finally:
-            set_theme(prior_theme)
+        from section_tool.export.print_dialog import PrintExportDialog
+        dlg = PrintExportDialog(self._state, section, self)
+        dlg.exec()
 
     def _on_export_section_image(self) -> None:
         """Phase 8: render section to PNG/SVG/PDF."""
@@ -2562,6 +2550,7 @@ class MainWindow(QMainWindow):
         _sc("Ctrl+N", self._on_new)
         _sc("Ctrl+O", self._on_open)
         _sc("Ctrl+S", self._on_save)
+        _sc("Ctrl+E", self._on_export_section_dialog)
 
         # ── View ──────────────────────────────────────────────────────────
         _sc("Ctrl+0", self._zoom_to_fit)
