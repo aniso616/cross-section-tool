@@ -3220,7 +3220,6 @@ class SectionMainWindow(MainWindow):
         map_action.setCheckable(True)
         map_action.setChecked(True)
         map_action.triggered.connect(lambda checked: self.map_tile.setVisible(checked))
-        self.map_tile.visibilityChanged.connect(map_action.setChecked)
 
         # Section: connect to section_tile
         try:
@@ -3230,7 +3229,6 @@ class SectionMainWindow(MainWindow):
         sec_action.setCheckable(True)
         sec_action.setChecked(True)
         sec_action.triggered.connect(lambda checked: self.section_tile.setVisible(checked))
-        self.section_tile.visibilityChanged.connect(sec_action.setChecked)
 
         # 3D: not in tiled layout — disable
         d3_action.setEnabled(False)
