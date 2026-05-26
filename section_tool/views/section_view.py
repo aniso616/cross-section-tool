@@ -316,7 +316,8 @@ class SectionView(QWidget):
         self._image_overlays: list[tuple[str, str, tuple, tuple]] = []
         # ---- FPS tracking ----
         self._show_fps: bool = False
-        self._strat_col_visible: bool = True  # kept for API compat; not used internally
+        self._strat_col_visible: bool = True
+        self._strat_ax = None   # separate matplotlib Axes for strat column (or None)
         self._show_grid: bool = False
         # ---- display toggles ----
         self._show_sea_level: bool = True
@@ -782,6 +783,34 @@ class SectionView(QWidget):
         ax.set_facecolor((0.0, 0.0, 0.0, 0.0))
         ax.figure.patch.set_alpha(0.0)
 
+    # Strat column layout constants (figure fractions)
+    _STRAT_W   = 0.040   # strat column width
+    _STRAT_GAP = 0.004   # gap between strat column and main axes
+
+    def _layout_section_axes(self) -> None:
+        """Adjust main axes position; create/show/hide the strat column axes."""
+        t = get_theme()
+        if self._strat_col_visible:
+            left = self._STRAT_W + self._STRAT_GAP
+            self._ax.set_position([left, 0.0, 1.0 - left, 1.0])
+            if self._strat_ax is None:
+                self._strat_ax = self._fig.add_axes(
+                    [0.0, 0.0, self._STRAT_W, 1.0])
+            else:
+                self._strat_ax.set_position(
+                    [0.0, 0.0, self._STRAT_W, 1.0])
+            for spine in self._strat_ax.spines.values():
+                spine.set_visible(False)
+            self._strat_ax.set_xticks([])
+            self._strat_ax.set_yticks([])
+            self._strat_ax.set_facecolor(t.background)
+            self._strat_ax.set_xlim(0, 1)
+            self._strat_ax.set_visible(True)
+        else:
+            self._ax.set_position([0.0, 0.0, 1.0, 1.0])
+            if self._strat_ax is not None:
+                self._strat_ax.set_visible(False)
+
     def set_game_mode(self, enabled: bool) -> None:
         """Switch to game UI mode: hide all chrome, suppress pick banner."""
         self._game_mode = enabled
@@ -1015,8 +1044,8 @@ class SectionView(QWidget):
 
     def set_strat_column_visible(self, visible: bool) -> None:
         self._strat_col_visible = visible
-        # Formation strip is now a HUD widget; visibility is controlled externally.
-        self.render()
+        self._layout_section_axes()
+        self.request_render()
 
     def set_sea_level_visible(self, visible: bool) -> None:
         self._show_sea_level = visible
@@ -1037,6 +1066,8 @@ class SectionView(QWidget):
             self._fig.patch.set_facecolor(t.background)
             self._fig.patch.set_alpha(0.0)
             self._ax.set_facecolor((0.0, 0.0, 0.0, 0.0))
+        if self._strat_ax is not None:
+            self._strat_ax.set_facecolor(t.background)
         self._canvas._seismic_bg = None
         self.request_render()
 
@@ -1181,6 +1212,7 @@ class SectionView(QWidget):
         self._overlay_artists.clear()
         self._ax.clear()
         self._configure_axes(self._ax)
+        self._layout_section_axes()   # adjust main ax + strat ax positions
         self._setup_axes(section)   # sets default xlim/ylim
         self._render_image_overlays(section)
         # Load seismic into pyqtgraph layer (only when data actually changes)
@@ -2531,26 +2563,35 @@ class SectionView(QWidget):
                                    where=(norm >= 0.5),
                                    color="#B0B0B0", alpha=0.35, zorder=9))
 
-    # Formation strip HUD widget replaces the old matplotlib _strat_ax.
-    # A thin matplotlib-based chaser column is rendered INSIDE the axes at the left edge.
-
     def _render_strat_column_chaser(self, section: Section) -> None:
-        """Render a thin strat column at the left edge of the section axes."""
+        """Render formation-depth strip into the dedicated strat column axes."""
+        if self._strat_ax is None:
+            return
+        self._strat_ax.cla()
+        for spine in self._strat_ax.spines.values():
+            spine.set_visible(False)
+        self._strat_ax.set_xticks([])
+        self._strat_ax.set_yticks([])
+        t = get_theme()
+        self._strat_ax.set_facecolor(t.background)
+        self._strat_ax.set_xlim(0, 1)
+        # Sync depth range with main axes
+        self._strat_ax.set_ylim(self._ax.get_ylim())
+
         if not self._strat_col_visible:
             return
-        from matplotlib.patches import Rectangle as _Rect
+
         polygons = [p for p in self._state.project.polygons
                     if not p.section_name or p.section_name == section.name]
         if not polygons:
             return
 
-        # Compute depth range per formation from polygon vertices
         fm_depths: dict[str, tuple[float, float]] = {}
         fm_color:  dict[str, str] = {}
         for poly in polygons:
             name = poly.formation or poly.name or ""
             base = name.rsplit(" (", 1)[0]
-            verts = poly._vertices  # (N, 2) of (distance, depth)
+            verts = poly._vertices
             if len(verts) == 0:
                 continue
             depths = verts[:, 1]
@@ -2565,40 +2606,33 @@ class SectionView(QWidget):
         if not fm_depths:
             return
 
-        xl    = self._ax.get_xlim()
-        x_range = xl[1] - xl[0]
-        col_w = x_range * 0.028          # 2.8% wide
-        col_l = xl[0] + x_range * 0.032  # 3.2% gap clears depth-scale labels
+        from matplotlib.patches import Rectangle as _Rect
+        from section_tool.style.theme import _hex_to_hls
+        yl  = self._ax.get_ylim()
+        vis = abs(yl[0] - yl[1])
 
-        for name, (d_top, d_bot) in sorted(fm_depths.items(), key=lambda t: t[1][0]):
+        for name, (d_top, d_bot) in sorted(fm_depths.items(), key=lambda kv: kv[1][0]):
             hex_col = fm_color.get(name, "#777777")
             rect = _Rect(
-                (col_l, d_top), col_w, d_bot - d_top,
-                facecolor=hex_col, alpha=0.80,
-                edgecolor="#444444", linewidth=0.4,
-                zorder=15, clip_on=True,
+                (0, d_top), 1.0, d_bot - d_top,
+                facecolor=hex_col, alpha=0.85,
+                edgecolor="#444444", linewidth=0.3,
+                zorder=5, clip_on=True,
             )
-            self._ax.add_patch(rect)
-            self._overlay_artists.append(rect)
+            self._strat_ax.add_patch(rect)
 
-            # Label if tall enough relative to visible range; contrast-aware color
-            yl   = self._ax.get_ylim()
-            vis  = abs(yl[0] - yl[1])
             if abs(d_bot - d_top) > vis * 0.06:
                 try:
-                    from section_tool.style.theme import _hex_to_hls
                     _h, lum, _s = _hex_to_hls(hex_col)
                     lbl_color = "black" if lum > 0.55 else "white"
                 except Exception:
                     lbl_color = "white"
-                short = name[:10]
-                lbl = self._ax.text(
-                    col_l + col_w / 2, (d_top + d_bot) / 2, short,
+                self._strat_ax.text(
+                    0.5, (d_top + d_bot) / 2, name[:10],
                     ha="center", va="center",
                     fontsize=5, color=lbl_color, fontweight="bold",
-                    rotation=90, zorder=16, clip_on=True,
+                    rotation=90, zorder=6, clip_on=True,
                 )
-                self._overlay_artists.append(lbl)
 
     # ------------------------------------------------------------------
     # Pick-node interaction helpers

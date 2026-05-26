@@ -2980,9 +2980,13 @@ class SectionMainWindow(MainWindow):
 
         # 13. Panel toggle shortcuts.
         QShortcut(QKeySequence("Ctrl+1"), self, self._toggle_map_tile)
+        QShortcut(QKeySequence("Ctrl+2"), self, self._toggle_section_tile)
         QShortcut(QKeySequence("Ctrl+4"), self, self._toggle_project_panel)
         QShortcut(QKeySequence("Ctrl+5"), self, self._toggle_properties_panel)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
+
+        # 16. Re-wire inherited view-menu panel actions to tiled widgets.
+        self._rewire_view_menu_for_tiles()
 
         # 14. Belt-and-suspenders: any state change re-renders all views.
         # Individual object signals already connect to view renders, but
@@ -3193,11 +3197,44 @@ class SectionMainWindow(MainWindow):
     def _toggle_map_tile(self) -> None:
         self.map_tile.setVisible(not self.map_tile.isVisible())
 
+    def _toggle_section_tile(self) -> None:
+        self.section_tile.setVisible(not self.section_tile.isVisible())
+
     def _toggle_project_panel(self) -> None:
         self._project_panel.setVisible(not self._project_panel.isVisible())
 
     def _toggle_properties_panel(self) -> None:
         self._properties_panel.setVisible(not self._properties_panel.isVisible())
+
+    def _rewire_view_menu_for_tiles(self) -> None:
+        """Replace dock-based view menu toggles with tile-visibility actions."""
+        map_action = self._map_dock.toggleViewAction()
+        sec_action = self._section_dock.toggleViewAction()
+        d3_action  = self._view3d_dock.toggleViewAction()
+
+        # Map: disconnect dock, connect to tile
+        try:
+            map_action.triggered.disconnect()
+        except RuntimeError:
+            pass
+        map_action.setCheckable(True)
+        map_action.setChecked(True)
+        map_action.triggered.connect(lambda checked: self.map_tile.setVisible(checked))
+        self.map_tile.visibilityChanged.connect(map_action.setChecked)
+
+        # Section: connect to section_tile
+        try:
+            sec_action.triggered.disconnect()
+        except RuntimeError:
+            pass
+        sec_action.setCheckable(True)
+        sec_action.setChecked(True)
+        sec_action.triggered.connect(lambda checked: self.section_tile.setVisible(checked))
+        self.section_tile.visibilityChanged.connect(sec_action.setChecked)
+
+        # 3D: not in tiled layout — disable
+        d3_action.setEnabled(False)
+        d3_action.setChecked(False)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

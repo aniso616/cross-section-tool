@@ -575,6 +575,7 @@ class AppState(QObject):
                 fill_color=prow.get("fill_color", "#9467bd"),
                 fill_alpha=float(prow.get("fill_opacity", 0.6)),
                 formation=prow.get("formation_name", ""),
+                section_name=prow.get("section_name", ""),
             )
             _restore_construction_rule(poly, prow.get("construction_rule_json"))
             proj.polygons.append(poly)

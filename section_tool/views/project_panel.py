@@ -276,8 +276,7 @@ class ProjectPanel(QDockWidget):
         self._tree.setColumnCount(1)
         self._tree.setIndentation(12)
         self._tree.setUniformRowHeights(True)
-        self._tree.setStyleSheet(
-            "QTreeWidget::item { min-height: 22px; padding: 1px 2px; }")
+        self._apply_tree_style("dark")
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemDoubleClicked.connect(self._on_double_click)
@@ -330,9 +329,34 @@ class ProjectPanel(QDockWidget):
         """)
         self._mode_label.setText(label)
 
+    def _apply_tree_style(self, theme_name: str) -> None:
+        if theme_name == "print":
+            self._tree.setStyleSheet("""
+                QTreeWidget { border: none; background: transparent; }
+                QTreeWidget::item { min-height: 22px; padding: 1px 2px; }
+                QTreeWidget::item:selected { background: rgba(85,119,170,0.20); color: #222222; }
+                QTreeWidget::indicator { width: 12px; height: 12px;
+                    border: 1px solid #999999; border-radius: 2px; background: transparent; }
+                QTreeWidget::indicator:checked { background: #5577aa; border-color: #5577aa; }
+                QTreeWidget::indicator:unchecked { background: transparent; }
+            """)
+        else:
+            self._tree.setStyleSheet("""
+                QTreeWidget { border: none; background: transparent; }
+                QTreeWidget::item { min-height: 22px; padding: 1px 2px; }
+                QTreeWidget::item:selected { background: rgba(80,130,200,0.18); color: #d8dce4; }
+                QTreeWidget::indicator { width: 12px; height: 12px;
+                    border: 1px solid #4a5160; border-radius: 2px; background: transparent; }
+                QTreeWidget::indicator:hover { border-color: #6a7180; }
+                QTreeWidget::indicator:checked { background: #3a6090; border-color: #4a78b0; }
+                QTreeWidget::indicator:checked:hover { background: #4a78b0; }
+                QTreeWidget::indicator:unchecked { background: transparent; }
+            """)
+
     def _connect_state_signals(self) -> None:
         s = self._state
         s.tool_changed.connect(self.set_mode)
+        s.theme_changed.connect(self._apply_tree_style)
         s.project_changed.connect(self._rebuild)
         s.section_added.connect(lambda _: self._rebuild())
         s.section_removed.connect(lambda _: self._rebuild())
