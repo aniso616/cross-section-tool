@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Signal
 from section_tool.core.annotation import Annotation
 from section_tool.core.commands import Command, CommandStack
 from section_tool.core.intersection import FaultHorizonIntersection
-from section_tool.core.polygons import SectionPolygon
+from section_tool.core.polygons import PolygonBoundary, SectionPolygon
 from section_tool.core.reference_line import ReferenceLine
 from section_tool.core.section import Section
 from section_tool.core.surfaces import HorizonPick, Surface
@@ -831,6 +831,34 @@ class AppState(QObject):
         self.topology_changed.emit(sec_name)
 
     # ------------------------------------------------------------------
+    # Polygon-bounds cascade
+    # ------------------------------------------------------------------
+
+    def _recompute_polygon_bounds(self, category: str, entity_idx: int) -> None:
+        """Refresh cached vertices of any polygon referencing the changed entity.
+
+        Called automatically by update_horizon_pick / update_fault_pick so that
+        reference-based polygons stay in sync with their bounding entities.
+        The updated _vertices are ready before the next render triggered by the
+        horizon_pick_modified / fault_pick_modified signal.
+        """
+        sec = self._active_section
+        sec_name = sec.name if sec is not None else ""
+        proj = self._project
+        for poly_idx, poly in enumerate(proj.polygons):
+            if not poly.bounds:
+                continue
+            for b in poly.bounds:
+                if b.category == category and b.index == entity_idx:
+                    try:
+                        new_verts = poly.compute_polygon_points(proj, sec_name)
+                        poly._vertices = new_verts
+                        poly.free_points = new_verts
+                    except Exception:
+                        pass
+                    break
+
+    # ------------------------------------------------------------------
     # Surfaces
     # ------------------------------------------------------------------
 
@@ -929,6 +957,7 @@ class AppState(QObject):
         self._project.horizon_picks[index] = pick
         self._set_modified()
         self._db_write(lambda: self._pm.db.upsert_horizon(pick))
+        self._recompute_polygon_bounds("Horizons", index)
         self.horizon_pick_modified.emit(index, pick)
         self._rebuild_topology()
 
@@ -1007,6 +1036,7 @@ class AppState(QObject):
         self._project.fault_picks[index] = pick
         self._set_modified()
         self._db_write(lambda: self._pm.db.upsert_fault(pick))
+        self._recompute_polygon_bounds("Faults", index)
         self.fault_pick_modified.emit(index, pick)
         self._rebuild_topology()
 
