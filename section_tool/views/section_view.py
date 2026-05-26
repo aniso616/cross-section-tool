@@ -1430,14 +1430,18 @@ class SectionView(QWidget):
             return
         yl = self._ax.get_ylim()
         if min(yl) <= 0.0 <= max(yl):
+            t = get_theme()
+            sl = t.sea_level
+            _ls = (0, list(sl.dash)) if sl.dash else "-"
             self._overlay_artists.append(
-                self._ax.axhline(0.0, color="#4682B4", linewidth=1.5,
-                                 linestyle="-", zorder=2.5, alpha=0.85))
+                self._ax.axhline(0.0, color=sl.color, linewidth=sl.width,
+                                 linestyle=_ls, zorder=2.5, alpha=sl.alpha))
             xl = self._ax.get_xlim()
             self._overlay_artists.append(
-                self._ax.text(xl[1], 0.0, "  Sea Level", fontsize=7,
-                              color="#4682B4", va="bottom", ha="right",
-                              zorder=2.5, alpha=0.85))
+                self._ax.text(xl[1], 0.0, "  Sea Level",
+                              fontsize=t.annotation_size,
+                              color=sl.color, va="bottom", ha="right",
+                              zorder=2.5, alpha=sl.alpha))
 
     def _render_topography(self, section: Section) -> None:
         topo_data = self._topography.get(section.name)
@@ -1647,7 +1651,15 @@ class SectionView(QWidget):
         if self._snap_point is None:
             return
         sx, sy = self._snap_point
-        r = 8  # radius in pixels
+        t = get_theme()
+        # Pick snap style by kind
+        kind = getattr(self, "_snap_kind", "endpoint")
+        snap_style = {
+            "endpoint":     t.snap_endpoint,
+            "midpoint":     t.snap_midpoint,
+            "intersection": t.snap_intersection,
+        }.get(kind, t.snap_node)
+        r = snap_style.size_px
         try:
             inv = self._ax.transData.inverted()
             p0 = inv.transform([0.0, 0.0])
@@ -1656,7 +1668,8 @@ class SectionView(QWidget):
             rdy = abs(float(pr[1]) - float(p0[1]))
         except Exception:
             return
-        kw = dict(color="#00FF88", lw=1.5, zorder=13)
+        color = snap_style.edge
+        kw = dict(color=color, lw=snap_style.edge_width * 1.5, zorder=13)
         n_seg = 12
         xs = [sx + rdx * math.cos(2 * math.pi * i / n_seg) for i in range(n_seg + 1)]
         ys = [sy + rdy * math.sin(2 * math.pi * i / n_seg) for i in range(n_seg + 1)]
@@ -1765,12 +1778,14 @@ class SectionView(QWidget):
             self._render_line_decoration(hp, d_sec, z_sec, category, lw)
 
         if is_edit:
+            from section_tool.style.theme import _SHAPE_TO_MARKER
+            node_marker = _SHAPE_TO_MARKER.get(get_theme().node.shape, "s")
             for local_i, fi_full in enumerate(sec_idxs):
                 d = float(d_sec[local_i])
                 z = float(hp._depths[fi_full])
                 ms, fc, ec, ew = self._pick_point_style(category, obj_idx, fi_full)
                 self._overlay_artists.extend(
-                    self._ax.plot(d, z, marker,
+                    self._ax.plot(d, z, node_marker,
                                   markersize=ms, markerfacecolor=fc,
                                   markeredgecolor=ec, markeredgewidth=ew, zorder=11))
 
@@ -1933,14 +1948,17 @@ class SectionView(QWidget):
     def _pick_point_style(
         self, category: str, obj_idx: int, pt_idx: int
     ) -> tuple:
+        """Return (markersize, facecolor, edgecolor, edgewidth) for a node in edit mode."""
+        t = get_theme()
         ref = (category, obj_idx, pt_idx)
         if self._pick_drag and self._pick_selected == ref:
-            return _PP_DRAG
+            return (t.edit_node_handle.size_px, "red", "white", 1.5)
         if self._pick_selected == ref:
-            return _PP_SELECTED
+            return (t.edit_node_handle.size_px, "#ff7f0e", "white", 1.5)
         if self._pick_hover == ref:
-            return _PP_HOVER
-        return _PP_NORMAL
+            return (t.edit_node_handle.size_px, "#ffffaa", t.edit_node_handle.edge, 0.8)
+        return (t.node.size_px, "none" if t.node.fill is None else t.node.fill,
+                t.node.edge, t.node.edge_width)
 
     def _render_image_overlays(self, section: Section) -> None:
         """Render registered raster image overlays at zorder=0."""
@@ -2295,47 +2313,9 @@ class SectionView(QWidget):
                 self._overlay_artists.append(hatch_patch)
                 self._ax.add_patch(hatch_patch)
 
-            # Phase 5: formation label inside polygon
-            label = getattr(poly, "formation", "") or poly.name
-            if label:
-                # Representative point (inside polygon, not just centroid)
-                cx, cy = float(verts[:, 0].mean()), float(verts[:, 1].mean())
-                try:
-                    from shapely.geometry import Polygon as _SPoly
-                    shp = _SPoly(verts)
-                    if shp.is_valid:
-                        pt = shp.representative_point()
-                        cx, cy = float(pt.x), float(pt.y)
-                except Exception:
-                    pass
-
-                # Font size based on polygon screen area
-                try:
-                    pts_s = self._ax.transData.transform(verts)
-                    xs_s, ys_s = pts_s[:, 0], pts_s[:, 1]
-                    n = len(xs_s)
-                    scr_area = abs(sum(
-                        xs_s[i] * ys_s[(i+1) % n] - xs_s[(i+1) % n] * ys_s[i]
-                        for i in range(n)
-                    )) * 0.5
-                    fontsize = max(7, min(14, 7 + scr_area / 6000))
-                except Exception:
-                    fontsize = 8
-
-                # Auto-contrast text color
-                try:
-                    from matplotlib.colors import to_rgb as _to_rgb
-                    r, g, b = _to_rgb(poly.fill_color)
-                    lum = r * 0.299 + g * 0.587 + b * 0.114
-                    text_color = "black" if lum > 0.55 else "white"
-                except Exception:
-                    text_color = "black"
-
-                self._overlay_artists.append(
-                    self._ax.text(cx, cy, label,
-                                  fontsize=fontsize, color=text_color,
-                                  ha="center", va="center",
-                                  clip_on=True, zorder=5))
+            # Labels shown in hover tooltip, not burned into the section
+            # (removed to preserve visual hierarchy — text inside fills competes
+            # with horizon lines and makes the section read like a dashboard)
 
     def _render_polygon_in_progress(self) -> None:
         if not self._polygon_drawing or not self._polygon_vertices:
