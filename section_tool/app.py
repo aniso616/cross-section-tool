@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         self._state = state or AppState()
         self._setup_ui()
         self._build_menus()
+        self._sync_theme_actions()
         self._build_toolbar()
         self._connect_signals()
         self._update_title()
@@ -198,6 +199,13 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(_geom)
         if _state is not None:
             self.restoreState(_state)
+        # Restore saved theme
+        from section_tool.style import set_theme
+        _saved_theme = _s.value("view/theme", "dark")
+        try:
+            set_theme(_saved_theme)
+        except Exception:
+            set_theme("dark")
 
     # ------------------------------------------------------------------
     # Setup
@@ -463,6 +471,9 @@ class MainWindow(QMainWindow):
         self._export_img_action = QAction("Section Image (PNG/SVG/PDF)…", self)
         self._export_img_action.triggered.connect(self._on_export_section_image)
         export_menu.addAction(self._export_img_action)
+        self._export_print_action = QAction("Section Image with &Print Theme…", self)
+        self._export_print_action.triggered.connect(self._on_export_with_print_theme)
+        export_menu.addAction(self._export_print_action)
         self._export_csv_action = QAction("Horizons to CSV…", self)
         self._export_csv_action.triggered.connect(self._on_export_horizons_csv)
         export_menu.addAction(self._export_csv_action)
@@ -549,6 +560,19 @@ class MainWindow(QMainWindow):
             lambda v: self._section_view.set_cross_section_ghosts_visible(v))
         view_menu.addAction(self._cross_sec_ghosts_action)
         view_menu.addSeparator()
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu as _QMenu
+        theme_menu = _QMenu("&Theme", self)
+        self._theme_action_group = QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        for _tid, _tlabel in [("dark", "Dark (on-screen)"), ("print", "Print (white)")]:
+            _ta = QAction(_tlabel, self)
+            _ta.setCheckable(True)
+            _ta.setData(_tid)
+            self._theme_action_group.addAction(_ta)
+            theme_menu.addAction(_ta)
+        self._theme_action_group.triggered.connect(self._on_theme_changed)
+        view_menu.addMenu(theme_menu)
         self._fps_action = QAction("Show &FPS", self)
         self._fps_action.setCheckable(True)
         self._fps_action.setChecked(False)
@@ -1810,6 +1834,45 @@ class MainWindow(QMainWindow):
                 name=f"Horizon {len(picks) + 1}",
             )
             self._state.add_horizon_pick(pick)
+
+    def _sync_theme_actions(self) -> None:
+        from section_tool.style import get_theme
+        current = get_theme().name
+        for action in self._theme_action_group.actions():
+            action.setChecked(action.data() == current)
+
+    def _on_theme_changed(self, action) -> None:
+        from section_tool.style import set_theme
+        theme_id = action.data()
+        try:
+            set_theme(theme_id)
+        except Exception:
+            return
+        QSettings("Geoscience", "CrossSectionTool").setValue("view/theme", theme_id)
+        self._section_view.request_render()
+
+    def _on_export_with_print_theme(self) -> None:
+        """Export section image with print theme, without changing the working theme."""
+        if self._state.active_section is None:
+            QMessageBox.information(self, "No Section", "Activate a section first.")
+            return
+        from section_tool.style import get_theme, set_theme
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export with Print Theme", "",
+            "PNG Image (*.png);;SVG Vector (*.svg);;PDF Document (*.pdf)"
+        )
+        if not path:
+            return
+        prior_theme = get_theme().name
+        try:
+            set_theme("print")
+            fig = self._section_view.render_to_figure(12.0, 7.0, 200)
+            fig.savefig(path, bbox_inches="tight", facecolor="white")
+            QMessageBox.information(self, "Export OK", f"Saved (print theme) to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+        finally:
+            set_theme(prior_theme)
 
     def _on_export_section_image(self) -> None:
         """Phase 8: render section to PNG/SVG/PDF."""

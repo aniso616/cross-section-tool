@@ -35,6 +35,7 @@ from section_tool.core.snap import (
 from section_tool.core.surfaces import HorizonPick
 from section_tool.io.project import SeismicRef
 from section_tool.io.segy import SeismicDataset
+from section_tool.style.theme import adapt_entity_color, get_theme, marker_kwargs
 from section_tool.tools.construction_tools import (
     DipConstrainedTool,
     KinkBandTool,
@@ -1537,8 +1538,9 @@ class SectionView(QWidget):
         total = section.total_length()
         yl    = self._ax.get_ylim()
         ylo, yhi = min(yl), max(yl)
-        kw = dict(color="#666666", linewidth=1.5, alpha=0.7, zorder=2,
-                  solid_capstyle="butt")
+        t = get_theme()
+        kw = dict(color=t.section_line.color, linewidth=t.section_line.width,
+                  alpha=0.7, zorder=2, solid_capstyle="butt")
         self._overlay_artists.extend(self._ax.plot([0, 0],         [ylo, yhi], **kw))
         self._overlay_artists.extend(self._ax.plot([total, total], [ylo, yhi], **kw))
 
@@ -1546,17 +1548,23 @@ class SectionView(QWidget):
         xl = self._ax.get_xlim()
         yl = self._ax.get_ylim()
         ylo, yhi = min(yl), max(yl)
-        kw = dict(color="#aaaaaa", linewidth=0.8, linestyle=(0, (6, 4)), zorder=1)
+        t = get_theme()
+        rl_s = t.reference_line
+        _ls = (0, list(rl_s.dash)) if rl_s.dash else "-"
+        kw = dict(color=rl_s.color, linewidth=rl_s.width, linestyle=_ls,
+                  alpha=rl_s.alpha, zorder=1)
         for rl in self._state.project.reference_lines:
             if not rl.visible:
                 continue
             label = rl.name or ""
+            lc = t.axis_tick
             if rl.kind == "horizontal":
                 self._overlay_artists.append(self._ax.axhline(rl.value, **kw))
                 if label:
                     self._overlay_artists.append(
-                        self._ax.text(xl[1], rl.value, f" {label}", fontsize=6,
-                                      color="#999", va="center", ha="right", zorder=1))
+                        self._ax.text(xl[1], rl.value, f" {label}",
+                                      fontsize=t.annotation_size,
+                                      color=lc, va="center", ha="right", zorder=1))
             elif rl.kind == "vertical":
                 if rl.map_x is not None and rl.map_y is not None:
                     # Always reproject from map coordinates — stays correct after node moves
@@ -1570,8 +1578,9 @@ class SectionView(QWidget):
                 self._overlay_artists.append(self._ax.axvline(dist, **kw))
                 if label:
                     self._overlay_artists.append(
-                        self._ax.text(dist, ylo, f" {label}", fontsize=6,
-                                      color="#999", va="bottom", ha="left",
+                        self._ax.text(dist, ylo, f" {label}",
+                                      fontsize=t.annotation_size,
+                                      color=lc, va="bottom", ha="left",
                                       rotation=90, zorder=1))
             elif rl.kind == "angled":
                 ang = math.radians(rl.angle_deg)
@@ -1586,7 +1595,8 @@ class SectionView(QWidget):
                 if label:
                     self._overlay_artists.append(
                         self._ax.text(rl.anchor_x, rl.anchor_y, f" {label}",
-                                      fontsize=6, color="#999", zorder=1))
+                                      fontsize=t.annotation_size,
+                                      color=lc, zorder=1))
 
         # A-Ref rubber band (anchor set, cursor pending)
         if self._ref_line_tool == "a_ref" and self._aref_anchor and self._cursor_data:
@@ -1623,12 +1633,15 @@ class SectionView(QWidget):
             sx, sy = pt.x, pt.y
             if not (xl <= sx <= xr and y_lo <= sy <= y_hi):
                 continue
+            _it = get_theme().intersection
             self._overlay_artists.extend(
                 self._ax.plot([sx - hw, sx + hw], [sy, sy],
-                              color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round"))
+                              color=_it.edge, linewidth=_it.edge_width * 1.5,
+                              zorder=10, solid_capstyle="round"))
             self._overlay_artists.extend(
                 self._ax.plot([sx, sx], [sy - hh, sy + hh],
-                              color="#00CCCC", linewidth=1.8, zorder=10, solid_capstyle="round"))
+                              color=_it.edge, linewidth=_it.edge_width * 1.5,
+                              zorder=10, solid_capstyle="round"))
 
     def _render_snap_indicator(self) -> None:
         if self._snap_point is None:
@@ -1725,24 +1738,23 @@ class SectionView(QWidget):
         zorder = base_z + 1 if (is_active or is_selected) else base_z
 
         if is_selected:
-            # White glow halo so it stands out regardless of entity colour
+            t = get_theme()
+            # Thin offset stroke halo — restrained, not a fuzzy glow
             self._overlay_artists.extend(
-                self._ax.plot(d_sec, z_sec, color="#FFFFFF",
-                              linewidth=render_lw * 4, alpha=0.40,
+                self._ax.plot(d_sec, z_sec,
+                              color=t.selection_halo_color,
+                              linewidth=render_lw + t.selection_halo_width,
+                              alpha=t.selection_halo_alpha,
                               zorder=zorder - 1, solid_capstyle="round"))
-            # Open circles at both endpoints
+            # Endpoint diamonds when selected
+            ep_kw = marker_kwargs(t.endpoint)
+            ep_kw.update(alpha=0.85, zorder=zorder + 3)
             if len(d_sec) >= 1:
                 self._overlay_artists.extend(
-                    self._ax.plot(d_sec[0], z_sec[0], "o",
-                                  color="#FFFFFF", markersize=9,
-                                  markerfacecolor="none", markeredgewidth=1.8,
-                                  alpha=0.85, zorder=zorder + 3))
+                    self._ax.plot([d_sec[0]], [z_sec[0]], **ep_kw))
             if len(d_sec) >= 2:
                 self._overlay_artists.extend(
-                    self._ax.plot(d_sec[-1], z_sec[-1], "o",
-                                  color="#FFFFFF", markersize=9,
-                                  markerfacecolor="none", markeredgewidth=1.8,
-                                  alpha=0.85, zorder=zorder + 3))
+                    self._ax.plot([d_sec[-1]], [z_sec[-1]], **ep_kw))
 
         if not decorated:
             self._overlay_artists.extend(
@@ -1895,19 +1907,13 @@ class SectionView(QWidget):
                 # Only show the ghost if this section doesn't already have a pick
                 # at that location — i.e. always show for awareness
                 color = getattr(hp, "color", "#aaaaaa") or "#aaaaaa"
+                t = get_theme()
+                ghost_style = t.cross_section_ghost
+                mkw = marker_kwargs(ghost_style, entity_color=color)
+                mkw.update(alpha=0.55, zorder=11)
 
                 self._overlay_artists.extend(
-                    self._ax.plot(
-                        [s_here], [other_depth],
-                        marker="o",
-                        markersize=8,
-                        markerfacecolor="none",
-                        markeredgecolor=color,
-                        markeredgewidth=1.5,
-                        alpha=0.55,
-                        linestyle="none",
-                        zorder=11,
-                    )
+                    self._ax.plot([s_here], [other_depth], **mkw)
                 )
                 label = f"← {other_sec.name}"
                 self._overlay_artists.append(
@@ -1916,7 +1922,7 @@ class SectionView(QWidget):
                         xy=(s_here, other_depth),
                         xytext=(8, 0),
                         textcoords="offset points",
-                        fontsize=7,
+                        fontsize=t.annotation_size,
                         color=color,
                         alpha=0.75,
                         va="center",
@@ -2270,9 +2276,14 @@ class SectionView(QWidget):
                         reps = max(1, round(1.0 / max(fm.pattern_scale, 0.1)))
                         hatch = raw_hatch * reps
 
+            t = get_theme()
+            fc = adapt_entity_color(poly.fill_color, t)
+            ec = adapt_entity_color(poly.edge_color, t)
+            effective_alpha = poly.fill_alpha * t.polygon_fill_alpha / 0.6
+            outline_lw = t.polygon_outline.width
             patch = MplPolygon(verts, closed=True,
-                               facecolor=poly.fill_color, alpha=poly.fill_alpha,
-                               edgecolor=poly.edge_color, linewidth=poly.edge_width,
+                               facecolor=fc, alpha=effective_alpha,
+                               edgecolor=ec, linewidth=outline_lw,
                                hatch=hatch, zorder=4)
             self._overlay_artists.append(patch)
             self._ax.add_patch(patch)
