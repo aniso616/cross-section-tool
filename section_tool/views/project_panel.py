@@ -394,14 +394,14 @@ class ProjectPanel(QDockWidget):
 
                 objects = self._objects_for_category(cat)
                 show_stroke = cat in ("Horizons", "Faults")
-                for idx, (name, color, lw, ls) in enumerate(objects):
+                for idx, (name, color, lw, ls, vis) in enumerate(objects):
                     child = QTreeWidgetItem()
                     child.setFlags(
                         Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                     )
                     cat_item.addChild(child)
 
-                    row = _ObjectRow(name, color, line_width=lw, line_style=ls,
+                    row = _ObjectRow(name, color, visible=vis, line_width=lw, line_style=ls,
                                      show_stroke=show_stroke)
                     row.visibility_changed.connect(
                         lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v)
@@ -448,37 +448,42 @@ class ProjectPanel(QDockWidget):
 
     def _objects_for_category(
         self, category: str
-    ) -> list[tuple[str, str, float, str]]:
-        """Return (name, color, line_width, line_style) tuples for a category."""
+    ) -> list[tuple[str, str, float, str, bool]]:
+        """Return (name, color, line_width, line_style, visible) tuples for a category."""
         proj = self._state.project
         _dw, _ds = 1.5, "solid"
         if category == "Sections":
-            return [(s.name or f"Section {i+1}", _DEFAULT_COLORS["Sections"], _dw, _ds)
+            return [(s.name or f"Section {i+1}", _DEFAULT_COLORS["Sections"], _dw, _ds, True)
                     for i, s in enumerate(proj.sections)]
         if category == "Horizons":
             return [(h.name or f"Horizon {i+1}", h.color,
-                     getattr(h, "line_width", _dw), getattr(h, "line_style", _ds))
+                     getattr(h, "line_width", _dw), getattr(h, "line_style", _ds),
+                     getattr(h, "visible", True))
                     for i, h in enumerate(proj.horizon_picks)]
         if category == "Faults":
             return [(f.name or f"Fault {i+1}", f.color,
-                     getattr(f, "line_width", _dw), getattr(f, "line_style", _ds))
+                     getattr(f, "line_width", _dw), getattr(f, "line_style", _ds),
+                     getattr(f, "visible", True))
                     for i, f in enumerate(proj.fault_picks)]
         if category == "Reference Lines":
             return [(rl.name or f"{'H' if rl.kind == 'horizontal' else 'V'} {rl.value}",
-                     rl.color, _dw, _ds)
+                     rl.color, _dw, _ds, getattr(rl, "visible", True))
                     for rl in proj.reference_lines]
         if category == "Polygons":
-            return [(p.name or f"Polygon {i+1}", p.fill_color, 1.5, "solid")
+            return [(p.name or f"Polygon {i+1}", p.fill_color, 1.5, "solid",
+                     getattr(p, "visible", True))
                     for i, p in enumerate(proj.polygons)]
         if category == "Wells":
             return [(w.name or f"Well {i+1}",
-                     getattr(w, "color", _DEFAULT_COLORS["Wells"]), _dw, _ds)
+                     getattr(w, "color", _DEFAULT_COLORS["Wells"]), _dw, _ds,
+                     getattr(w, "visible", True))
                     for i, w in enumerate(proj.wells)]
         if category == "Surfaces":
             surfs = proj.surfaces if hasattr(proj, "surfaces") else []
             return [(s.name or f"Surface {i+1}",
                      s.display_color if hasattr(s, "display_color") else _DEFAULT_COLORS["Surfaces"],
-                     float(getattr(s, "line_width", _dw)), _ds)
+                     float(getattr(s, "line_width", _dw)), _ds,
+                     getattr(s, "visible", True))
                     for i, s in enumerate(surfs)]
         return []
 

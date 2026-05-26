@@ -155,7 +155,7 @@ class _CompositingCanvas(FigureCanvasQTAgg):
             painter.drawPixmap(self.rect(), self._seismic_bg)
         else:
             from PySide6.QtGui import QColor
-            painter.fillRect(self.rect(), QColor("#0e1014"))
+            painter.fillRect(self.rect(), QColor(get_theme().background))
 
         # 2. Matplotlib overlay — draw RGBA buffer with SourceOver compositing
         renderer = self.renderer
@@ -1026,6 +1026,20 @@ class SectionView(QWidget):
         self._state.show_cross_section_ghosts = visible
         self.request_render()
 
+    def on_theme_changed(self, theme_name: str) -> None:
+        """Slot: re-apply figure/axes colors when the theme switches."""
+        t = get_theme()
+        if t.name == "print":
+            self._fig.patch.set_facecolor(t.background)
+            self._fig.patch.set_alpha(1.0)
+            self._ax.set_facecolor(t.background)
+        else:
+            self._fig.patch.set_facecolor(t.background)
+            self._fig.patch.set_alpha(0.0)
+            self._ax.set_facecolor((0.0, 0.0, 0.0, 0.0))
+        self._canvas._seismic_bg = None
+        self.request_render()
+
     def set_topography(self, section_name: str,
                        distances: "np.ndarray", elevations: "np.ndarray") -> None:
         """Register a topography profile for *section_name* and redraw."""
@@ -1238,9 +1252,10 @@ class SectionView(QWidget):
         x_range = xl[1] - xl[0]
         x_pos   = xl[0] + x_range * 0.005
         tick_len = x_range * 0.008
-        label_kw = dict(fontsize=7, color="#cccccc", va="center", ha="left", zorder=15,
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1014",
-                                  edgecolor="none", alpha=0.75))
+        t = get_theme()
+        label_kw = dict(fontsize=7, color=t.axis_tick, va="center", ha="left", zorder=15,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=t.label_background,
+                                  edgecolor="none", alpha=t.label_background_alpha))
         y = math.ceil(y_top / interval) * interval
         while y <= y_bot:
             self._overlay_artists.extend(
@@ -1263,9 +1278,10 @@ class SectionView(QWidget):
         y_range = abs(yl[0] - yl[1])
         y_pos    = y_bot - y_range * 0.005
         tick_len = y_range * 0.008
-        label_kw = dict(fontsize=7, color="#cccccc", va="top", ha="center", zorder=15,
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor="#0e1014",
-                                  edgecolor="none", alpha=0.75))
+        t = get_theme()
+        label_kw = dict(fontsize=7, color=t.axis_tick, va="top", ha="center", zorder=15,
+                        bbox=dict(boxstyle="round,pad=0.2", facecolor=t.label_background,
+                                  edgecolor="none", alpha=t.label_background_alpha))
         x = math.ceil(x_start / interval) * interval
         while x <= x_end:
             self._overlay_artists.extend(
@@ -2520,6 +2536,8 @@ class SectionView(QWidget):
 
     def _render_strat_column_chaser(self, section: Section) -> None:
         """Render a thin strat column at the left edge of the section axes."""
+        if not self._strat_col_visible:
+            return
         from matplotlib.patches import Rectangle as _Rect
         polygons = [p for p in self._state.project.polygons
                     if not p.section_name or p.section_name == section.name]
@@ -2547,9 +2565,10 @@ class SectionView(QWidget):
         if not fm_depths:
             return
 
-        xl   = self._ax.get_xlim()
-        col_w = (xl[1] - xl[0]) * 0.025   # 2.5% of visible width
-        col_l = xl[0]                       # flush with left edge
+        xl    = self._ax.get_xlim()
+        x_range = xl[1] - xl[0]
+        col_w = x_range * 0.028          # 2.8% wide
+        col_l = xl[0] + x_range * 0.032  # 3.2% gap clears depth-scale labels
 
         for name, (d_top, d_bot) in sorted(fm_depths.items(), key=lambda t: t[1][0]):
             hex_col = fm_color.get(name, "#777777")
@@ -2562,15 +2581,21 @@ class SectionView(QWidget):
             self._ax.add_patch(rect)
             self._overlay_artists.append(rect)
 
-            # Label if tall enough relative to visible range
+            # Label if tall enough relative to visible range; contrast-aware color
             yl   = self._ax.get_ylim()
             vis  = abs(yl[0] - yl[1])
             if abs(d_bot - d_top) > vis * 0.06:
+                try:
+                    from section_tool.style.theme import _hex_to_hls
+                    _h, lum, _s = _hex_to_hls(hex_col)
+                    lbl_color = "black" if lum > 0.55 else "white"
+                except Exception:
+                    lbl_color = "white"
                 short = name[:10]
                 lbl = self._ax.text(
                     col_l + col_w / 2, (d_top + d_bot) / 2, short,
                     ha="center", va="center",
-                    fontsize=5, color="white", fontweight="bold",
+                    fontsize=5, color=lbl_color, fontweight="bold",
                     rotation=90, zorder=16, clip_on=True,
                 )
                 self._overlay_artists.append(lbl)

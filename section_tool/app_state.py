@@ -152,6 +152,9 @@ class AppState(QObject):
     # Active tool (mirrors ToolPalette; stored here so views can read it)
     tool_changed = Signal(str)
 
+    # Theme switch — emitted after set_theme() is called
+    theme_changed = Signal(str)   # new theme name
+
     # Extracted seismic: emitted when new data is loaded for a section
     seismic_extracted = Signal(str)   # section_name
 

@@ -820,6 +820,7 @@ class MainWindow(QMainWindow):
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
+        s.theme_changed.connect(self._section_view.on_theme_changed)
         # Phase 3: wire node selection → properties panel
         # node_selected emits (str, int, int) separately; pack into tuple for set_selected_node
         self._section_view.node_selected.connect(
@@ -1859,7 +1860,7 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         QSettings("Geoscience", "CrossSectionTool").setValue("view/theme", theme_id)
-        self._section_view.request_render()
+        self._state.theme_changed.emit(theme_id)
 
     def _on_export_with_print_theme(self) -> None:
         """Export section image with print theme, without changing the working theme."""
@@ -2273,6 +2274,25 @@ class MainWindow(QMainWindow):
                 fill_alpha=0.45,
                 section_name=section.name,
             ))
+
+        # Remove any existing polygons already generated for this section
+        existing_sec = [p for p in self._state.project.polygons
+                        if getattr(p, "section_name", "") == section.name]
+        if existing_sec:
+            replace = QMessageBox.question(
+                self, "Replace Existing Polygons",
+                f"{len(existing_sec)} polygon(s) already exist for this section.\n"
+                "Replace them with the newly generated set?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if replace == QMessageBox.StandardButton.Yes:
+                self._state.blockSignals(True)
+                try:
+                    for p in list(existing_sec):
+                        self._state.remove_polygon(p)
+                finally:
+                    self._state.blockSignals(False)
+            # If No, fall through and append alongside existing
 
         self._state.blockSignals(True)
         try:
