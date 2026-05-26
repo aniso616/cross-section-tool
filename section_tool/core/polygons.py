@@ -104,6 +104,14 @@ class SectionPolygon:
     def n_vertices(self) -> int:
         return len(self._vertices)
 
+    def is_bound(self) -> bool:
+        """True if this polygon is defined by entity boundary references."""
+        return len(self.bounds) > 0
+
+    def is_free(self) -> bool:
+        """True if this polygon is defined by an explicit vertex array."""
+        return self.free_points is not None and not self.is_bound()
+
     @property
     def area(self) -> float:
         """Signed area in section-space units² (Shoelace formula).

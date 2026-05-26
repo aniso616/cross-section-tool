@@ -1021,6 +1021,10 @@ class SectionView(QWidget):
         self._show_sea_level = visible
         self.render()
 
+    def set_cross_section_ghosts_visible(self, visible: bool) -> None:
+        self._state.show_cross_section_ghosts = visible
+        self.request_render()
+
     def set_topography(self, section_name: str,
                        distances: "np.ndarray", elevations: "np.ndarray") -> None:
         """Register a topography profile for *section_name* and redraw."""
@@ -1284,6 +1288,8 @@ class SectionView(QWidget):
         self._render_surfaces(section)
         self._render_faults(section)
         self._render_horizons(section)
+        if self._state.show_cross_section_ghosts:
+            self._render_cross_section_ghost_picks(section)
         self._render_wells(section)
         self._render_intersections(section)
         self._render_construct_preview()
@@ -1852,6 +1858,71 @@ class SectionView(QWidget):
             if not getattr(fp, "visible", True):
                 continue
             self._render_pick_object("Faults", obj_idx, fp, section, "D", "dashed")
+
+    def _render_cross_section_ghost_picks(self, section: Section) -> None:
+        """Render ghost markers where other sections' horizon picks cross this section.
+
+        For each other section that intersects the current one, for each horizon
+        that has picks on both sections (matched by name), renders an open circle
+        at (intersection_distance, other_section_depth) with a small label.
+        """
+        from section_tool.core.geometry import find_section_intersection, sample_pick_at_distance
+
+        proj = self._state.project
+        other_sections = [s for s in proj.sections if s.name != section.name]
+        if not other_sections:
+            return
+
+        horizon_picks = proj.horizon_picks
+        removed = self._get_removed_names()
+
+        for other_sec in other_sections:
+            result = find_section_intersection(section, other_sec)
+            if result is None:
+                continue
+            s_here, s_other = result
+
+            for hp in horizon_picks:
+                if not getattr(hp, "visible", True):
+                    continue
+                if removed and hp.name and hp.name in removed:
+                    continue
+
+                # Need at least one pick on each section
+                other_depth = sample_pick_at_distance(hp, s_other, other_sec.name)
+                if other_depth is None:
+                    continue
+                # Only show the ghost if this section doesn't already have a pick
+                # at that location — i.e. always show for awareness
+                color = getattr(hp, "color", "#aaaaaa") or "#aaaaaa"
+
+                self._overlay_artists.extend(
+                    self._ax.plot(
+                        [s_here], [other_depth],
+                        marker="o",
+                        markersize=8,
+                        markerfacecolor="none",
+                        markeredgecolor=color,
+                        markeredgewidth=1.5,
+                        alpha=0.55,
+                        linestyle="none",
+                        zorder=11,
+                    )
+                )
+                label = f"← {other_sec.name}"
+                self._overlay_artists.append(
+                    self._ax.annotate(
+                        label,
+                        xy=(s_here, other_depth),
+                        xytext=(8, 0),
+                        textcoords="offset points",
+                        fontsize=7,
+                        color=color,
+                        alpha=0.75,
+                        va="center",
+                        zorder=11,
+                    )
+                )
 
     def _pick_point_style(
         self, category: str, obj_idx: int, pt_idx: int

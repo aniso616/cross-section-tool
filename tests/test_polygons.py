@@ -518,3 +518,23 @@ class TestPolygonBoundsCascade:
         state.update_horizon_pick(0, hp2)
 
         np.testing.assert_array_equal(state.project.polygons[0]._vertices, original_verts)
+
+
+class TestPolygonIsBoundIsFree:
+    def test_free_polygon_is_free(self):
+        poly = _rect_poly()
+        assert poly.is_free() is True
+        assert poly.is_bound() is False
+
+    def test_bound_polygon_is_bound(self):
+        b = PolygonBoundary("Horizons", 0)
+        poly = SectionPolygon([(0, 0), (100, 0), (100, 100)], bounds=[b])
+        assert poly.is_bound() is True
+        assert poly.is_free() is False
+
+    def test_adding_bounds_after_construction_flips_helpers(self):
+        poly = _rect_poly()
+        assert poly.is_free() is True
+        poly.bounds.append(PolygonBoundary("Faults", 0))
+        assert poly.is_bound() is True
+        assert poly.is_free() is False

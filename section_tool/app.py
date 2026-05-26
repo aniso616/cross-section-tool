@@ -542,6 +542,12 @@ class MainWindow(QMainWindow):
         self._sea_level_action.toggled.connect(
             lambda v: self._section_view.set_sea_level_visible(v))
         view_menu.addAction(self._sea_level_action)
+        self._cross_sec_ghosts_action = QAction("Show &Cross-Section Picks", self)
+        self._cross_sec_ghosts_action.setCheckable(True)
+        self._cross_sec_ghosts_action.setChecked(True)
+        self._cross_sec_ghosts_action.toggled.connect(
+            lambda v: self._section_view.set_cross_section_ghosts_visible(v))
+        view_menu.addAction(self._cross_sec_ghosts_action)
         view_menu.addSeparator()
         self._fps_action = QAction("Show &FPS", self)
         self._fps_action.setCheckable(True)

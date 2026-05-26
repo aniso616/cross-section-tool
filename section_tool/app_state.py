@@ -182,6 +182,8 @@ class AppState(QObject):
         # Selection state
         self._selected_entity_cat: str = ""
         self._selected_entity_idx: int = -1
+        # Cross-section ghost markers visibility
+        self.show_cross_section_ghosts: bool = True
         # SQLite project manager (None when working with legacy HDF5 projects)
         from section_tool.io.project_manager import ProjectManager
         self._pm: ProjectManager = ProjectManager()
