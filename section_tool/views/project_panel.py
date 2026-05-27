@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QColorDialog,
     QComboBox,
     QDockWidget,
@@ -276,6 +277,7 @@ class ProjectPanel(QDockWidget):
         self._tree.setColumnCount(1)
         self._tree.setIndentation(12)
         self._tree.setUniformRowHeights(True)
+        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._apply_tree_style("dark")
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -442,7 +444,7 @@ class ProjectPanel(QDockWidget):
                     row = _ObjectRow(name, color, visible=vis, line_width=lw, line_style=ls,
                                      show_stroke=show_stroke)
                     row.visibility_changed.connect(
-                        lambda v, c=cat, i=idx: self.visibility_changed.emit(c, i, v)
+                        lambda v, c=cat, i=idx: self._on_row_visibility_changed(c, i, v)
                     )
                     row.color_changed.connect(
                         lambda col, c=cat, i=idx: self.object_color_changed.emit(c, i, col)
@@ -1026,6 +1028,49 @@ class ProjectPanel(QDockWidget):
 
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Visibility helpers
+    # ------------------------------------------------------------------
+
+    def _on_row_visibility_changed(self, cat: str, idx: int, visible: bool) -> None:
+        """Handle a row's visibility toggle, propagating to all selected rows."""
+        # Always emit for the triggering item
+        self.visibility_changed.emit(cat, idx, visible)
+
+        # If multiple items are selected, propagate the same state to all
+        selected_items = self._tree.selectedItems()
+        if len(selected_items) <= 1:
+            return
+
+        self._tree.blockSignals(True)
+        try:
+            for item in selected_items:
+                parent = item.parent()
+                if parent is None:
+                    continue
+                item_cat = parent.text(0)
+                item_idx = parent.indexOfChild(item)
+                if item_cat == cat and item_idx == idx:
+                    continue   # already emitted above
+                row = self._row_widgets.get((item_cat, item_idx))
+                if row is None:
+                    continue
+                # Suppress the row's own signal to avoid recursion
+                row._check.blockSignals(True)
+                row._check.setChecked(visible)
+                row._check.blockSignals(False)
+                self.visibility_changed.emit(item_cat, item_idx, visible)
+        finally:
+            self._tree.blockSignals(False)
+
+    def _apply_visibility(self, cat: str, idx: int, visible: bool) -> None:
+        """Directly update a row's visible checkbox without emitting signals."""
+        row = self._row_widgets.get((cat, idx))
+        if row is not None:
+            row._check.blockSignals(True)
+            row._check.setChecked(visible)
+            row._check.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Quick actions
