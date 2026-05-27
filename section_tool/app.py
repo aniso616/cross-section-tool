@@ -1950,6 +1950,10 @@ class MainWindow(QMainWindow):
                 self._state.remove_reference_line(proj.reference_lines[index])
             elif category == "Wells" and index < len(proj.wells):
                 self._state.remove_well(proj.wells[index])
+            elif category == "Polygons" and index < len(proj.polygons):
+                self._state.remove_polygon(proj.polygons[index])
+            elif category == "Surfaces" and index < len(proj.surfaces if hasattr(proj, "surfaces") else []):
+                self._state.remove_surface(proj.surfaces[index])
         except Exception:
             pass
 

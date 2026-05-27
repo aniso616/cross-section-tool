@@ -280,6 +280,20 @@ class ProjectPanel(QDockWidget):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.itemDoubleClicked.connect(self._on_double_click)
+
+        # Install keyPressEvent on the tree for Delete-key deletion
+        _tree_ref = self._tree
+        _panel_ref = self
+
+        def _tree_key_press(event):
+            from PySide6.QtCore import Qt as _Qt
+            if event.key() == _Qt.Key.Key_Delete:
+                _panel_ref._delete_selected_items()
+            else:
+                QTreeWidget.keyPressEvent(_tree_ref, event)
+
+        self._tree.keyPressEvent = _tree_key_press
+
         vbox.addWidget(self._tree)
 
         # + button at the bottom
@@ -1042,6 +1056,63 @@ class ProjectPanel(QDockWidget):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            self.object_deleted.emit(cat, idx)
+
+    # ------------------------------------------------------------------
+    # Delete-key support
+    # ------------------------------------------------------------------
+
+    def _delete_selected_items(self) -> None:
+        """Delete all selected object rows, with confirmation."""
+        from PySide6.QtWidgets import QMessageBox
+
+        items = self._tree.selectedItems()
+        # Filter to leaf (object) items only — skip category headers
+        obj_items = [it for it in items if it.parent() is not None]
+        if not obj_items:
+            return
+
+        # Build (cat, idx) pairs
+        targets = []
+        for it in obj_items:
+            parent = it.parent()
+            cat = parent.text(0)
+            idx = parent.indexOfChild(it)
+            targets.append((cat, idx))
+
+        # Ask confirmation when multiple items or any section is selected
+        needs_confirm = (
+            len(targets) > 1
+            or any(cat == "Sections" for cat, _ in targets)
+        )
+        if needs_confirm:
+            names = []
+            for cat, idx in targets:
+                data = self._get_object_data(cat, idx)
+                names.append(data.get("name", f"{cat} {idx}"))
+            reply = QMessageBox.question(
+                self, "Delete",
+                f"Delete {len(targets)} item(s)?\n" + "\n".join(f"  • {n}" for n in names),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        elif len(targets) == 1:
+            cat, idx = targets[0]
+            data = self._get_object_data(cat, idx)
+            name = data.get("name", f"{cat} {idx}")
+            reply = QMessageBox.question(
+                self, "Delete",
+                f"Delete {cat.rstrip('s').lower()} '{name}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        # Emit deletion signals in reverse-index order to avoid index shift issues
+        for cat, idx in sorted(targets, key=lambda t: t[1], reverse=True):
             self.object_deleted.emit(cat, idx)
 
     # ------------------------------------------------------------------
