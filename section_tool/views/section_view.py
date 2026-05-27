@@ -2711,6 +2711,45 @@ class SectionView(QWidget):
         _check("Faults",   self._state.project.fault_picks)
         return (best_cat, best_idx) if best_cat is not None else None
 
+    def _find_polygon_at(self, x: float, y: float) -> tuple[str, int] | None:
+        """Return ("Polygons", idx) if (x, y) is inside a visible polygon, else None.
+
+        Uses a simple ray-casting point-in-polygon test.  Only polygons for the
+        active section (or with no section tag) are checked.
+        """
+        section = self._state.active_section
+        sec_name = section.name if section is not None else ""
+        best_idx = None
+
+        for idx, poly in enumerate(self._state.project.polygons):
+            if not getattr(poly, "visible", True):
+                continue
+            poly_sec = getattr(poly, "section_name", "")
+            if poly_sec and poly_sec != sec_name:
+                continue
+            verts = poly.vertices
+            if len(verts) < 3:
+                continue
+            if self._point_in_polygon(x, y, verts):
+                best_idx = idx   # last polygon wins (topmost drawn)
+
+        if best_idx is not None:
+            return ("Polygons", best_idx)
+        return None
+
+    @staticmethod
+    def _point_in_polygon(x: float, y: float, verts) -> bool:
+        """Ray-casting point-in-polygon test."""
+        n = len(verts)
+        inside = False
+        xi, yi = float(verts[0][0]), float(verts[0][1])
+        for j in range(1, n + 1):
+            xj, yj = float(verts[j % n][0]), float(verts[j % n][1])
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
+                inside = not inside
+            xi, yi = xj, yj
+        return inside
+
     def _compute_snap(self, x: float, y: float) -> tuple[float, float] | None:
         """Return nearest snap target within threshold, or None.
 
@@ -3213,6 +3252,18 @@ class SectionView(QWidget):
                 self._object_drag_origin = copy.deepcopy(picks[oi])
                 self._object_drag_active = False
                 if prev != hit_line:
+                    self.render()
+                return
+
+            # Check if click is inside a polygon
+            hit_poly = self._find_polygon_at(x, y)
+            if hit_poly is not None:
+                prev = self._selected_object
+                self._set_selected_object(hit_poly)
+                self._sv_mode = "object_selected"
+                self._pick_selected = None
+                self._object_drag_active = False
+                if prev != hit_poly:
                     self.render()
                 return
 
