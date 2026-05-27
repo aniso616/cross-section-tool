@@ -2747,6 +2747,24 @@ class MainWindow(QMainWindow):
 
     def _on_tool_changed(self, tool_id: str) -> None:
         """Route palette tool activation to views and AppState."""
+        # Guard: block Edit Nodes on bound polygons — their shape is controlled
+        # by horizon/fault picks, not by dragging nodes directly.
+        if tool_id == "node_edit":
+            sel_cat = self._state.selected_entity_category
+            sel_idx = self._state.selected_entity_index
+            if sel_cat == "Polygons" and sel_idx >= 0:
+                proj = self._state.project
+                if sel_idx < len(proj.polygons):
+                    poly = proj.polygons[sel_idx]
+                    if hasattr(poly, "is_bound") and poly.is_bound():
+                        self._flash_status(
+                            "Bound polygon — edit its bounding horizons/faults to change shape. "
+                            "(Select a horizon and press A instead.)"
+                        )
+                        # Revert to select tool
+                        self._tool_palette.set_active_tool("select")
+                        return
+
         self._state.set_active_tool(tool_id)
         self._section_view.set_picking_active(tool_id == "horizon_pick")
         self._section_view.set_fault_picking(tool_id == "fault_pick")
