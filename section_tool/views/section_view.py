@@ -630,6 +630,7 @@ class SectionView(QWidget):
         s.active_pick_target_changed.connect(self._on_data_changed)
         s.active_pick_target_changed.connect(lambda *_: self._update_pick_banner())
         s.project_changed.connect(self.request_render)
+        s.project_settings_changed.connect(self._on_project_settings_changed)
         s.horizon_pick_added.connect(self._on_data_changed)
         s.horizon_pick_removed.connect(self._on_data_changed)
         s.horizon_pick_modified.connect(self._on_data_changed)
@@ -653,6 +654,12 @@ class SectionView(QWidget):
         s.reference_line_modified.connect(self._on_data_changed)
         # Topology: redraw intersection markers when graph updates
         s.topology_changed.connect(self._on_data_changed)
+
+    def _on_project_settings_changed(self) -> None:
+        """Project-level settings changed (name, depth range, units, domain).
+        Reset saved axis limits so the next render re-applies the new defaults."""
+        self._saved_ylim = None
+        self.request_render()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1431,7 +1438,8 @@ class SectionView(QWidget):
 
     def _compute_max_depth(self, section: Section) -> float:
         """Best estimate of maximum depth from loaded data."""
-        candidates = [_DEFAULT_DEPTH]
+        proj_default = getattr(self._state.project, "default_depth_max", _DEFAULT_DEPTH)
+        candidates = [max(proj_default, _DEFAULT_DEPTH)]
         for hp in self._state.project.horizon_picks:
             v = hp.depths[~np.isnan(hp.depths)]
             if len(v):

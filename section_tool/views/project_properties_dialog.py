@@ -69,21 +69,23 @@ class ProjectPropertiesDialog(QDialog):
         depth_fl.addRow("Depth units:", self._depth_units_combo)
 
         self._domain_combo = QComboBox()
-        self._domain_combo.addItems(["md", "twt"])
+        self._domain_combo.addItems(["depth", "time"])
         dom_idx = self._domain_combo.findText(proj.depth_domain)
         if dom_idx >= 0:
             self._domain_combo.setCurrentIndex(dom_idx)
         depth_fl.addRow("Depth domain:", self._domain_combo)
 
         self._depth_min_spin = QDoubleSpinBox()
-        self._depth_min_spin.setRange(-10000, 50000)
+        self._depth_min_spin.setRange(-50000, 50000)
         self._depth_min_spin.setDecimals(0)
+        self._depth_min_spin.setSingleStep(10)
         self._depth_min_spin.setValue(proj.default_depth_min)
         depth_fl.addRow("Default depth min:", self._depth_min_spin)
 
         self._depth_max_spin = QDoubleSpinBox()
-        self._depth_max_spin.setRange(-10000, 50000)
+        self._depth_max_spin.setRange(-50000, 50000)
         self._depth_max_spin.setDecimals(0)
+        self._depth_max_spin.setSingleStep(10)
         self._depth_max_spin.setValue(proj.default_depth_max)
         depth_fl.addRow("Default depth max:", self._depth_max_spin)
 

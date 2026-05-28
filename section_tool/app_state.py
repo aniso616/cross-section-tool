@@ -17,6 +17,14 @@ from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
 
+_DOMAIN_MIGRATION = {"md": "depth", "twt": "time"}
+
+
+def _migrate_domain(value: str) -> str:
+    """Silently migrate legacy depth-domain strings to current values."""
+    return _DOMAIN_MIGRATION.get(value, value)
+
+
 def _restore_construction_rule(obj, json_str: str | None) -> None:
     """Attach a deserialized ConstructionRule to *obj* (in-place, silent on error)."""
     if not json_str:
@@ -87,6 +95,7 @@ class AppState(QObject):
 
     # Project-level
     project_changed = Signal()
+    project_settings_changed = Signal()  # emitted only by set_project_properties
     project_path_changed = Signal(str)   # "" means no file
     project_modified_changed = Signal(bool)
 
@@ -364,7 +373,7 @@ class AppState(QObject):
         name: str = "",
         crs_epsg: int = 32632,
         depth_units: str = "m",
-        depth_domain: str = "md",
+        depth_domain: str = "depth",
         default_depth_min: float = 0.0,
         default_depth_max: float = 5000.0,
         folder_path: str | None = None,
@@ -435,7 +444,7 @@ class AppState(QObject):
             name=meta.get("name", ""),
             crs_epsg=int(meta.get("crs_epsg", 32632)),
             depth_units=meta.get("depth_units", "m"),
-            depth_domain=meta.get("depth_domain", "md"),
+            depth_domain=_migrate_domain(meta.get("depth_domain", "depth")),
             default_depth_min=float(meta.get("default_depth_min", 0.0)),
             default_depth_max=float(meta.get("default_depth_max", 5000.0)),
         )
@@ -446,7 +455,7 @@ class AppState(QObject):
             sec = Section(
                 nodes,
                 name=row["name"],
-                depth_domain=row.get("depth_domain", "md"),
+                depth_domain=_migrate_domain(row.get("depth_domain", "depth")),
                 depth_units=row.get("depth_units", "m"),
                 vertical_exaggeration=float(row.get("vertical_exaggeration", 1.0)),
                 crs_epsg=int(row.get("crs_epsg", 32632)),
@@ -1178,6 +1187,7 @@ class AppState(QObject):
                 default_depth_max=proj.default_depth_max,
             )
         )
+        self.project_settings_changed.emit()
         self.project_changed.emit()
 
     # ------------------------------------------------------------------

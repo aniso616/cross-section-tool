@@ -1006,7 +1006,7 @@ class MainWindow(QMainWindow):
         name: str = "",
         crs_epsg: int = 32632,
         depth_units: str = "m",
-        depth_domain: str = "md",
+        depth_domain: str = "depth",
         default_depth_min: float = 0.0,
         default_depth_max: float = 5000.0,
         folder_path: str | None = None,
