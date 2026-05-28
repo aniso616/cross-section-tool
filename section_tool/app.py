@@ -73,6 +73,54 @@ _FAULT_COLORS = [
 
 
 # ---------------------------------------------------------------------------
+# CRS reprojection helper for vector features
+# ---------------------------------------------------------------------------
+
+def _reproject_features(features, src_epsg: int, dst_epsg: int) -> list:
+    """Return *features* with all geometry coordinates reprojected from
+    *src_epsg* to *dst_epsg*.  Supports Point, LineString, Polygon,
+    MultiPoint, MultiLineString, MultiPolygon geometry types."""
+    from section_tool.core.crs import reproject_xy
+
+    def _reproject_coord(xy):
+        x, y = reproject_xy(xy[0], xy[1], src_epsg, dst_epsg)
+        return (x, y) + tuple(xy[2:])  # preserve Z if present
+
+    def _reproject_ring(ring):
+        return [_reproject_coord(c) for c in ring]
+
+    def _reproject_geometry(geom):
+        if geom is None:
+            return geom
+        gtype = geom.get("type", "")
+        coords = geom.get("coordinates")
+        if coords is None:
+            return geom
+        if gtype == "Point":
+            new_coords = _reproject_coord(coords)
+        elif gtype in ("LineString", "MultiPoint"):
+            new_coords = _reproject_ring(coords)
+        elif gtype in ("Polygon", "MultiLineString"):
+            new_coords = [_reproject_ring(ring) for ring in coords]
+        elif gtype == "MultiPolygon":
+            new_coords = [[_reproject_ring(ring) for ring in poly]
+                          for poly in coords]
+        else:
+            return geom  # unknown type — leave unchanged
+        result = dict(geom)
+        result["coordinates"] = new_coords
+        return result
+
+    out = []
+    for feat in features:
+        f2 = dict(feat)
+        if "geometry" in f2 and f2["geometry"] is not None:
+            f2["geometry"] = _reproject_geometry(dict(f2["geometry"]))
+        out.append(f2)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Collapse-strip widget (Phase 2)
 # ---------------------------------------------------------------------------
 
@@ -1239,18 +1287,47 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        crs = self._state.project_crs_epsg
+        project_crs = self._state.project.crs_epsg
         try:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            surf = read_surface(path, crs_epsg=crs)
+            # Load with crs_epsg=0 so we can detect/ask about source CRS
+            surf = read_surface(path, crs_epsg=0)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        # Ask user about source CRS if unknown, then reproject if needed
+        src_epsg = surf.crs_epsg  # 0 means unknown
+        if not src_epsg:
+            from section_tool.views.source_crs_dialog import SourceCRSDialog
+            from PySide6.QtWidgets import QDialog as _QDialog
+            dlg = SourceCRSDialog(project_crs, os.path.basename(path), self)
+            if dlg.exec() == _QDialog.Accepted:
+                src_epsg = dlg.source_epsg()
+            else:
+                return  # user cancelled
+
+        if src_epsg and src_epsg != project_crs:
+            from section_tool.core.crs import reproject_points_xy
+            import numpy as np
+            xs, ys = reproject_points_xy(
+                surf.points[:, 0], surf.points[:, 1], src_epsg, project_crs
+            )
+            surf.points[:, 0] = xs
+            surf.points[:, 1] = ys
+
+        surf.crs_epsg = project_crs
+        surf._interpolator = None  # invalidate any cached interpolator
+
+        try:
             self._state.add_surface(surf)
             b = surf.bounds()
             zr = surf.z_range()
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
             return
-        finally:
-            QApplication.restoreOverrideCursor()
 
         # Show info THEN render — QMessageBox blocks the event loop, so draw_idle()
         # calls inside render() would never paint until after the dialog anyway.
@@ -1628,11 +1705,26 @@ class MainWindow(QMainWindow):
             return
         try:
             import fiona
+            from PySide6.QtWidgets import QDialog as _QDialog
             with _wait_cursor():
                 with fiona.open(path) as src:
                     geom_type = src.schema["geometry"]
                     crs       = src.crs
                     features  = [dict(f) for f in src]
+
+            from section_tool.core.crs import epsg_from_fiona_crs
+            project_crs = self._state.project.crs_epsg
+            src_epsg = epsg_from_fiona_crs(crs)
+            if src_epsg is None:
+                from section_tool.views.source_crs_dialog import SourceCRSDialog
+                dlg = SourceCRSDialog(project_crs, os.path.basename(path), self)
+                if dlg.exec() == _QDialog.Accepted:
+                    src_epsg = dlg.source_epsg()
+                else:
+                    return  # user cancelled
+            if src_epsg and src_epsg != project_crs:
+                features = _reproject_features(features, src_epsg, project_crs)
+
             self._state.add_vector_layer(path, features, crs, geom_type)
             n = len(features)
             if hasattr(self, "status_strip"):
