@@ -73,13 +73,26 @@ def _decode_text_header(raw_bytes: bytes) -> str:
     """Decode a SEG-Y 3200-byte text header, trying EBCDIC then ASCII.
 
     SEG-Y Rev 1 mandates EBCDIC (cp500), but many modern writers use ASCII.
-    Returns the best-quality decoding found.
+    Uses segyio's canonical decoder when available; falls back to a manual
+    heuristic that checks ASCII-range character density (not just isprintable,
+    which is too permissive for cp500 — nearly all 256 code points pass it).
     """
+    try:
+        import segyio
+        return segyio.tools.wrap(raw_bytes)
+    except Exception:
+        pass
+
+    def _ascii_ratio(s: str) -> float:
+        if not s:
+            return 0.0
+        n = sum(1 for c in s if 0x20 <= ord(c) <= 0x7E or c in "\n\r\t")
+        return n / len(s)
+
     for encoding in ("cp500", "cp037"):   # EBCDIC variants
         try:
             text = raw_bytes.decode(encoding)
-            printable = sum(1 for c in text if c.isprintable() or c in "\n\r\t")
-            if printable / max(len(text), 1) > 0.7:
+            if _ascii_ratio(text) > 0.7:
                 return text
         except Exception:
             pass
