@@ -5,9 +5,12 @@ import pytest
 
 from section_tool.core.crs import (
     CRSInfo,
+    epsg_from_fiona_crs,
     get_crs_info,
     is_projected,
     linear_units,
+    reproject_points_xy,
+    reproject_xy,
     transform_points,
     transform_section,
     units_are_feet,
@@ -305,3 +308,41 @@ class TestTransformSection:
         via_33 = transform_section(sec, UTM_33N)
         back = transform_section(via_33, UTM_32N)
         np.testing.assert_allclose(back.nodes, nodes, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# reproject_xy / reproject_points_xy / epsg_from_fiona_crs (new wrappers)
+# ---------------------------------------------------------------------------
+
+def test_reproject_identity_when_same_epsg():
+    assert reproject_xy(100, 200, 32631, 32631) == (100, 200)
+
+
+def test_reproject_identity_when_zero_epsg():
+    assert reproject_xy(500, 600, 0, 32631) == (500, 600)
+
+
+def test_reproject_wgs84_to_utm31n_roundtrip():
+    x, y = reproject_xy(3.0, 56.0, 4326, 32631)
+    lon, lat = reproject_xy(x, y, 32631, 4326)
+    assert abs(lon - 3.0) < 1e-6 and abs(lat - 56.0) < 1e-6
+
+
+def test_epsg_from_fiona_crs_string():
+    assert epsg_from_fiona_crs("EPSG:32631") == 32631
+
+
+def test_epsg_from_fiona_crs_none_on_bad_input():
+    assert epsg_from_fiona_crs("not_a_crs_xyz_invalid") is None
+
+
+def test_reproject_points_vectorized():
+    rx, ry = reproject_points_xy(np.array([3.0, 4.0]), np.array([56.0, 56.0]), 4326, 32631)
+    assert len(rx) == 2 and rx[1] > rx[0]
+
+
+def test_reproject_points_identity():
+    xs, ys = np.array([100.0, 200.0]), np.array([300.0, 400.0])
+    rx, ry = reproject_points_xy(xs, ys, 32631, 32631)
+    np.testing.assert_array_equal(rx, xs)
+    np.testing.assert_array_equal(ry, ys)

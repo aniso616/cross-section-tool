@@ -118,6 +118,41 @@ def transform_points(
     return np.asarray(tx, dtype=float), np.asarray(ty, dtype=float)
 
 
+# ---------------------------------------------------------------------------
+# Convenience wrappers used by import paths
+# ---------------------------------------------------------------------------
+
+def reproject_xy(x, y, src_epsg: int, dst_epsg: int):
+    """Reproject a single (x, y) pair.  Returns (x, y) unchanged when CRS is
+    missing or identical."""
+    if not src_epsg or not dst_epsg or src_epsg == dst_epsg:
+        return x, y
+    return _get_transformer(src_epsg, dst_epsg).transform(x, y)
+
+
+def reproject_points_xy(xs, ys, src_epsg: int, dst_epsg: int):
+    """Reproject parallel coordinate arrays.  Returns inputs unchanged when CRS
+    is missing or identical."""
+    if not src_epsg or not dst_epsg or src_epsg == dst_epsg:
+        return xs, ys
+    return _get_transformer(src_epsg, dst_epsg).transform(xs, ys)
+
+
+def epsg_from_fiona_crs(fiona_crs) -> int | None:
+    """Extract an integer EPSG code from a fiona CRS object (dict or WKT string).
+
+    Returns None if the CRS cannot be parsed or has no known EPSG code.
+    """
+    try:
+        crs = CRS.from_user_input(
+            dict(fiona_crs) if hasattr(fiona_crs, "keys") else fiona_crs
+        )
+        code = crs.to_epsg()
+        return int(code) if code else None
+    except Exception:
+        return None
+
+
 def transform_section(section, to_epsg: int):
     """Return a new Section with nodes reprojected from section.crs_epsg to *to_epsg*.
 
