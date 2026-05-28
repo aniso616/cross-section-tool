@@ -177,15 +177,23 @@ class PropertiesPanel(QDockWidget):
         finally:
             self._rebuilding = False
 
-    def _do_rebuild(self) -> None:
-        # Clear — block signals on every widget before deleting to prevent
-        # focus-lost/editingFinished firing into a dead widget
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                w = item.widget()
+    def _clear_layout(self, layout) -> None:
+        """Recursively remove and schedule deletion of all items in *layout*."""
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
                 w.blockSignals(True)   # prevent editingFinished on focus loss
                 w.deleteLater()
+            else:
+                child = item.layout()
+                if child is not None:
+                    self._clear_layout(child)
+
+    def _do_rebuild(self) -> None:
+        # Clear — recursively remove widgets AND child layouts so that grids
+        # added via addLayout() are also cleaned up (not just top-level widgets).
+        self._clear_layout(self._layout)
 
         # Selected node has highest priority
         if self._selected_node is not None:
