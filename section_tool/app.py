@@ -464,6 +464,9 @@ class MainWindow(QMainWindow):
         self._import_surface_action = QAction("Surface / Horizon Grid (XYZ)…", self)
         self._import_surface_action.triggered.connect(self._on_import_surface)
         import_menu.addAction(self._import_surface_action)
+        self._gen_surface_action = QAction("Generate Surface from Horizon…", self)
+        self._gen_surface_action.triggered.connect(self._on_generate_surface)
+        import_menu.addAction(self._gen_surface_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -1249,6 +1252,19 @@ class MainWindow(QMainWindow):
         )
         self._section_view.render()
         self._map_view.render()
+
+    def _on_generate_surface(self) -> None:
+        """Import → Generate Surface from Horizon: interpolate picks to a grid."""
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        from section_tool.views.generate_surface_dialog import GenerateSurfaceDialog
+        if not self._state.project.horizon_picks:
+            _QMB.information(
+                self, "Generate Surface",
+                "No horizon picks available. Pick a horizon on at least one "
+                "section first.",
+            )
+            return
+        GenerateSurfaceDialog(self._state, self).exec()
 
     def _on_set_aoi(self) -> None:
         """Tools → Set AOI: define a rectangular area of interest."""
