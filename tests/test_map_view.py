@@ -187,10 +187,11 @@ class TestAxesState:
         view.render()
         assert "Northing" in view.axes.get_ylabel()
 
-    def test_aspect_auto(self, view, state):
+    def test_aspect_equal(self, view, state):
         state.add_section(_sec())
         view.render()
-        assert view.axes.get_aspect() == "auto"  # equal aspect was removed to avoid flat-map display
+        # matplotlib returns 1.0 (numeric) after set_aspect("equal") is applied
+        assert view.axes.get_aspect() in ("equal", 1.0)
 
     def test_section_produces_lines(self, view, state):
         state.add_section(_sec())
