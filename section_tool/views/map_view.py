@@ -71,6 +71,7 @@ class MapView(QWidget):
         self._press_px:      tuple[float, float] | None = None
         self._drag_active:   bool                   = False
         self._drag_section_copy: Section | None     = None
+        self._drag_origin:   tuple[float, float] | None = None
 
         # ---- Phase 1: undo for node deletion ----
         self._last_delete_for_undo: dict | None = None
@@ -297,6 +298,9 @@ class MapView(QWidget):
         ax.tick_params(colors="#AAAAAA", which="both", labelsize=7)
         ax.xaxis.label.set_color("#CCCCCC")
         ax.yaxis.label.set_color("#CCCCCC")
+        # Equal aspect: easting/northing must be 1:1 or geometry is distorted.
+        # adjustable='box' letterboxes the axes rather than changing the data range.
+        ax.set_aspect("equal", adjustable="box")
 
     def _render_impl(self) -> None:
         """Internal render body — called only from render() with re-entry guard held."""
@@ -313,8 +317,8 @@ class MapView(QWidget):
         self._render_wells()
         self._render_new_section_preview()
 
-        # Set limits from data bounding box with 15% padding per axis independently.
-        # No equal-aspect forced — the map fills its panel naturally.
+        # Set limits from data bounding box with 15% padding per axis.
+        # Equal aspect is enforced in _configure_axes; set_aspect letterboxes as needed.
         self._apply_map_limits()
 
         self._render_graticule()
@@ -818,6 +822,20 @@ class MapView(QWidget):
                     if math.hypot(float(px) - ppx, float(py) - ppy) < _DRAG_MIN_PX:
                         return
                 self._drag_active = True
+                self._drag_origin = (x, y)
+
+            # Shift: constrain movement to H / V / 45° increments
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt as _Qt
+            if (self._drag_origin is not None
+                    and QApplication.keyboardModifiers() & _Qt.ShiftModifier):
+                ox, oy = self._drag_origin
+                dx, dy = x - ox, y - oy
+                angle = math.atan2(dy, dx)
+                snap  = round(angle / (math.pi / 4)) * (math.pi / 4)
+                dist  = math.hypot(dx, dy)
+                x = ox + dist * math.cos(snap)
+                y = oy + dist * math.sin(snap)
 
             self._drag_section_copy.move_node(self._selected_node[1], x, y)
             self.status_message.emit(f"E: {x:.0f}  N: {y:.0f}")
@@ -859,6 +877,7 @@ class MapView(QWidget):
 
                 self._drag_active       = False
                 self._drag_section_copy = None
+                self._drag_origin       = None
                 self.status_message.emit("")
 
                 self._state.update_section(sec_idx, sec_copy)
@@ -1130,6 +1149,7 @@ class MapView(QWidget):
             if self._drag_active:
                 self._drag_active       = False
                 self._drag_section_copy = None
+                self._drag_origin       = None
                 self.status_message.emit("")
             self._selected_node = None
             self._hover_node    = None
