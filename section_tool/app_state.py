@@ -1149,6 +1149,38 @@ class AppState(QObject):
         return new_ints
 
     # ------------------------------------------------------------------
+    # Project properties
+    # ------------------------------------------------------------------
+
+    def set_project_properties(
+        self,
+        name: str,
+        depth_units: str,
+        depth_domain: str,
+        default_depth_min: float,
+        default_depth_max: float,
+    ) -> None:
+        """Update editable project-level properties and persist to the database."""
+        proj = self._project
+        proj.name = name
+        proj.depth_units = depth_units
+        proj.depth_domain = depth_domain
+        proj.default_depth_min = default_depth_min
+        proj.default_depth_max = default_depth_max
+        self._set_modified()
+        self._db_write(
+            lambda: self._pm.db.set_project_settings(
+                name=proj.name,
+                crs_epsg=proj.crs_epsg,
+                depth_units=proj.depth_units,
+                depth_domain=proj.depth_domain,
+                default_depth_min=proj.default_depth_min,
+                default_depth_max=proj.default_depth_max,
+            )
+        )
+        self.project_changed.emit()
+
+    # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 

@@ -484,6 +484,11 @@ class MainWindow(QMainWindow):
         file_menu.addMenu(export_menu)
 
         file_menu.addSeparator()
+        self._props_action = QAction("Properties…", self)
+        self._props_action.triggered.connect(self._on_project_properties)
+        file_menu.addAction(self._props_action)
+
+        file_menu.addSeparator()
         self._exit_action = QAction("E&xit", self)
         self._exit_action.triggered.connect(self.close)
         file_menu.addAction(self._exit_action)
@@ -1074,6 +1079,12 @@ class MainWindow(QMainWindow):
 
     def _on_save_as(self) -> None:
         self._save_project_as_dialog()
+
+    def _on_project_properties(self) -> None:
+        if not self._state.project:
+            return
+        from section_tool.views.project_properties_dialog import ProjectPropertiesDialog
+        ProjectPropertiesDialog(self._state, self).exec()
 
     def _on_import_las(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
