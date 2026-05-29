@@ -160,25 +160,31 @@ class TestConstructionMetadataRoundtrip:
         assert rp.construction_rule.reference_name == "DipH"
         assert rp.construction_rule.offset_m == pytest.approx(80.0)
 
+    def test_polygon_bounds_survive_roundtrip(self, tmp_path):
+        """Bound polygons reload as bound (bounds_json persisted) so scenario-7
+        auto-update keeps working after save/reload."""
+        layer = _by_name(_roundtrip(tmp_path).project.polygons, "Layer")
+        assert len(layer.bounds) == 2
+        assert layer.bounds[0].category == "Horizons" and layer.bounds[0].index == 0
+        assert layer.bounds[1].reversed is True
+
+    def test_auto_update_still_works_after_reload(self, tmp_path):
+        """The whole point of persisting bounds: editing a bounding horizon
+        after a reload still reshapes the polygon (scenario-7 survives)."""
+        dst = _roundtrip(tmp_path)
+        dst.set_active_section(dst.project.sections[0])
+        layer = _by_name(dst.project.polygons, "Layer")
+        assert layer.vertices[:, 1].min() == pytest.approx(100.0)   # DipH top edge
+
+        dst.update_horizon_pick(0, _hp("DipH", 0, 2000, 40, 40))    # raise DipH
+        assert layer.vertices[:, 1].min() == pytest.approx(40.0)     # polygon followed
+
 
 # ---------------------------------------------------------------------------
 # Known limitations — aspirational tests, xfail(strict) so a fix flips them red
 # ---------------------------------------------------------------------------
 
 class TestKnownLimitations:
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Polygon bounds are not persisted: the polygons table has no "
-               "bounds column and _load_from_sqlite rebuilds SectionPolygon "
-               "without bounds, so a bound polygon reloads as free-form and "
-               "loses scenario-7 auto-update. See db schema database.py:183 "
-               "and app_state._load_from_sqlite polygon branch.")
-    def test_polygon_bounds_survive_roundtrip(self, tmp_path):
-        layer = _by_name(_roundtrip(tmp_path).project.polygons, "Layer")
-        assert len(layer.bounds) == 2
-        assert layer.bounds[0].category == "Horizons" and layer.bounds[0].index == 0
-        assert layer.bounds[1].reversed is True
 
     @pytest.mark.xfail(
         strict=True,

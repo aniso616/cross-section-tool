@@ -578,6 +578,22 @@ class AppState(QObject):
         # Polygons
         for prow in data["polygons"]:
             verts = np.array(_json.loads(prow["vertices_json"]))
+            # Restore reference-based perimeter so bound polygons reload as bound
+            # (and keep auto-updating when their bounding entities change).
+            bounds = []
+            bounds_raw = prow.get("bounds_json")
+            if bounds_raw:
+                try:
+                    bounds = [
+                        PolygonBoundary(
+                            category=b["category"],
+                            index=int(b["index"]),
+                            reversed=bool(b.get("reversed", False)),
+                        )
+                        for b in _json.loads(bounds_raw)
+                    ]
+                except Exception:
+                    bounds = []
             poly = SectionPolygon(
                 vertices=verts,
                 name=prow["name"],
@@ -585,6 +601,7 @@ class AppState(QObject):
                 fill_alpha=float(prow.get("fill_opacity", 0.6)),
                 formation=prow.get("formation_name", ""),
                 section_name=prow.get("section_name", ""),
+                bounds=bounds,
             )
             _restore_construction_rule(poly, prow.get("construction_rule_json"))
             proj.polygons.append(poly)

@@ -189,7 +189,8 @@ CREATE TABLE IF NOT EXISTS polygons (
     fill_color             TEXT    DEFAULT '#9467bd',
     fill_opacity           REAL    DEFAULT 0.6,
     outline_width          REAL    DEFAULT 1.0,
-    construction_rule_json TEXT
+    construction_rule_json TEXT,
+    bounds_json            TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reference_lines (
@@ -451,6 +452,8 @@ class ProjectDatabase:
             ("horizons",  "construction_rule_json", "TEXT"),
             ("faults",    "construction_rule_json", "TEXT"),
             ("polygons",  "construction_rule_json", "TEXT"),
+            # Reference-based polygon perimeter (PolygonBoundary list)
+            ("polygons",  "bounds_json", "TEXT"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -878,6 +881,14 @@ class ProjectDatabase:
         from section_tool.core.construction import serialize_rule
         name = getattr(poly, "name", f"Polygon {poly_idx}")
         rule_json = serialize_rule(getattr(poly, "construction_rule", None))
+        # Reference-based perimeter: persist the PolygonBoundary list so bound
+        # polygons reload as bound (not free-form) and keep auto-updating when
+        # their bounding horizons/faults are edited.
+        bounds = getattr(poly, "bounds", None)
+        bounds_json = _dumps(
+            [{"category": b.category, "index": b.index, "reversed": bool(b.reversed)}
+             for b in bounds]
+        ) if bounds else None
         # Use name + section_name as identifier
         row = self.conn.execute(
             "SELECT id FROM polygons WHERE name=? AND section_name=?",
@@ -889,24 +900,26 @@ class ProjectDatabase:
             self.conn.execute(
                 """UPDATE polygons SET vertices_json=?, fill_color=?,
                    fill_opacity=?, formation_name=?,
-                   construction_rule_json=? WHERE id=?""",
+                   construction_rule_json=?, bounds_json=? WHERE id=?""",
                 (verts_json, getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
                  getattr(poly, "formation", ""),
                  rule_json,
+                 bounds_json,
                  pid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO polygons
                    (name, section_name, vertices_json, fill_color, fill_opacity,
-                    formation_name, construction_rule_json)
-                   VALUES(?,?,?,?,?,?,?)""",
+                    formation_name, construction_rule_json, bounds_json)
+                   VALUES(?,?,?,?,?,?,?,?)""",
                 (name, section_name, verts_json,
                  getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
                  getattr(poly, "formation", ""),
-                 rule_json)
+                 rule_json,
+                 bounds_json)
             )
             pid = cur.lastrowid
         self.conn.commit()
