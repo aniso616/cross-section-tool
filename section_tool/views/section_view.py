@@ -2108,11 +2108,11 @@ class SectionView(QWidget):
             domain  = ex_meta.get("domain", "twt")
             if stretch == "linear" and domain == "twt":
                 scale = v_ms / 2000.0
-                y_top = 0.0
-                y_bot = float(samples[-1] - samples[0]) * scale
+                # First sample sits at its true recording-delay depth
+                # (samples[0]*scale below sea level), not stretched onto y=0.
+                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
             else:
-                y_top = 0.0
-                y_bot = float(samples[-1] - samples[0])
+                y_top, y_bot = float(samples[0]), float(samples[-1])
             if ex_data.shape[1] >= 2:
                 # Use the dedicated dist_min/dist_max keys so the imshow extent
                 # matches the ACTUAL data coverage, not section.total_length().
@@ -2141,11 +2141,9 @@ class SectionView(QWidget):
                 continue
             if stretch == "linear" and ds.domain == "twt":
                 scale = v_ms / 2000.0
-                y_top = 0.0
-                y_bot = float(ds.samples[-1] - ds.samples[0]) * scale
+                y_top, y_bot = float(ds.samples[0]) * scale, float(ds.samples[-1]) * scale
             else:
-                y_top = 0.0
-                y_bot = float(ds.samples[-1] - ds.samples[0])
+                y_top, y_bot = float(ds.samples[0]), float(ds.samples[-1])
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
@@ -2196,11 +2194,9 @@ class SectionView(QWidget):
                 self._seismic_layer.clear(); return
             if domain == "twt":
                 scale = vel / 2000.0
-                y_top = 0.0
-                y_bot = float(samples[-1] - samples[0]) * scale
+                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
             else:
-                y_top = 0.0
-                y_bot = float(samples[-1] - samples[0])
+                y_top, y_bot = float(samples[0]), float(samples[-1])
             ex_meta = {"dist_min": float(distances[0]), "dist_max": float(distances[-1]),
                        "samples": samples, "domain": domain}
 
@@ -2220,15 +2216,13 @@ class SectionView(QWidget):
         domain  = ex_meta.get("domain", "twt")
         if stretch == "linear" and domain == "twt":
             scale = vel / 2000.0
-            # Anchor the first sample at elevation 0 (sea level) so the seismic
-            # top always aligns with the section's depth origin regardless of the
-            # recording-delay stored in samples[0].  The full sample span is
-            # preserved: y_bot is measured from 0, not from samples[0].
-            y_top = 0.0
-            y_bot = float(samples[-1] - samples[0]) * scale
+            # Hang the seismic at its true datum: the first recorded sample is at
+            # TWT=samples[0] (the recording delay), so it sits samples[0]*scale
+            # below sea level (y=0).  TWT=0 / sea level is correctly ABOVE the
+            # data, not stretched onto the first sample.
+            y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
         else:
-            y_top = 0.0
-            y_bot = float(samples[-1] - samples[0])
+            y_top, y_bot = float(samples[0]), float(samples[-1])
 
         effective_clip = min(float(clip_pct), 97.0)
         vmax = float(np.percentile(np.abs(ex_data), effective_clip) or 1.0) * gain
