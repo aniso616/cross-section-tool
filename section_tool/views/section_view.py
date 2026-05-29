@@ -2261,16 +2261,13 @@ class SectionView(QWidget):
                 target_w = min(n_traces, px_w * 2)
                 target_h = min(n_samples, px_h * 2)
                 if target_w < n_traces or target_h < n_samples:
-                    # PIL expects uint8 for BOX; normalise to [0,255] float→uint8
-                    _vmax_tmp = float(np.percentile(np.abs(ex_data), 99) or 1.0)
-                    arr_f32 = np.clip(ex_data / _vmax_tmp, -1.0, 1.0)
-                    # Remap [-1,1] → [0,255] uint8
-                    arr_u8 = np.clip((arr_f32 + 1.0) * 127.5, 0, 255).astype(np.uint8)
-                    img = _PILImage.fromarray(arr_u8, mode="L")
+                    # Area-average in native float32 (PIL mode "F") — no uint8
+                    # round-trip, so the 256-level amplitude quantization that
+                    # crushed dynamic range is gone.
+                    arr_f32 = np.ascontiguousarray(ex_data, dtype=np.float32)
+                    img = _PILImage.fromarray(arr_f32, mode="F")
                     img = img.resize((target_w, target_h), _PILImage.BOX)
-                    arr_u8_ds = np.array(img, dtype=np.float32)
-                    # Remap back to [-1,1] and rescale to original amplitude range
-                    display_data = (arr_u8_ds / 127.5 - 1.0) * _vmax_tmp
+                    display_data = np.asarray(img, dtype=np.float32)
         except Exception:
             pass  # fall back to full-resolution on any error
 

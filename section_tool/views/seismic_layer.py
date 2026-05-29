@@ -278,6 +278,13 @@ class SeismicLayer(QWidget):
         from PySide6.QtCore import QRectF
         pm.fill(QColor(get_theme().background))
         painter = QPainter(pm)
+        # Antialias the scene->pixmap scaling.  Without SmoothPixmapTransform the
+        # ImageItem's drawImage falls back to nearest-neighbour, which aliases the
+        # high-frequency reflectors into diagonal moire streaks when the image is
+        # downscaled to screen.  This is the actual alias point (not the data
+        # resampling upstream), so enabling smooth transform fixes the streaking.
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # QPainter on QPixmap uses physical pixel coordinates regardless of DPR.
         # Use the full physical dimensions so the scene fills every physical pixel.
         phys_rect = QRectF(0, 0, pm.width(), pm.height())
