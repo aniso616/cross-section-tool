@@ -285,11 +285,16 @@ class SeismicLayer(QWidget):
         # resampling upstream), so enabling smooth transform fixes the streaking.
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # QPainter on QPixmap uses physical pixel coordinates regardless of DPR.
-        # Use the full physical dimensions so the scene fills every physical pixel.
-        phys_rect = QRectF(0, 0, pm.width(), pm.height())
+        # The pixmap is created at size*dpr physical px with setDevicePixelRatio(dpr),
+        # so the QPainter operates in LOGICAL coordinates (dpr-aware) — it still
+        # samples at full physical resolution.  The target rect must therefore be
+        # the LOGICAL size (pm.width()/dpr), NOT the physical pixel count.  Passing
+        # the physical size scaled the scene up by dpr and displaced it toward a
+        # corner — invisible at dpr=1 but a gross mis-scale on HiDPI displays.
+        dpr = pm.devicePixelRatio() or 1.0
+        target_rect = QRectF(0, 0, pm.width() / dpr, pm.height() / dpr)
         scene_rect = self._gw.mapToScene(self._gw.viewport().rect()).boundingRect()
-        self._gw.scene().render(painter, phys_rect, scene_rect)
+        self._gw.scene().render(painter, target_rect, scene_rect)
         painter.end()
 
     def sync_view(
