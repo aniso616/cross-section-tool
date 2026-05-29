@@ -156,6 +156,9 @@ def _build_figure(state, section, params: PrintExportParams,
     _style_section_axes(section_ax, params, palette)
 
     # --- Content ---
+    if params.seismic_inclusion != 'omit':
+        _render_seismic(section_ax, state, section, params)
+
     if params.show_grid:
         _render_grid(section_ax, palette)
 
@@ -211,6 +214,49 @@ def _style_section_axes(ax, params: PrintExportParams, palette: dict) -> None:
 # ---------------------------------------------------------------------------
 # Content renderers
 # ---------------------------------------------------------------------------
+
+
+def _render_seismic(ax, state, section, params: PrintExportParams) -> None:
+    """Render extracted seismic for *section* as a grayscale imshow backdrop.
+
+    Sources the in-memory extracted amplitude array (same data the on-screen
+    view shows) and positions it with the section's seismic-display datum logic
+    so the print matches the screen.  No-op when no seismic has been extracted
+    for the section (e.g. a freshly reopened project — see the extracted-seismic
+    restore limitation).  'grayscale' draws opaque; 'faded' draws at low alpha.
+    """
+    try:
+        ex_data, ex_meta = state.get_seismic_for_section(section.name)
+    except Exception:
+        return
+    if ex_data is None or ex_meta is None or getattr(ex_data, "size", 0) == 0:
+        return
+    samples = np.asarray(ex_meta.get("samples", []), dtype=float)
+    if samples.size < 2:
+        return
+
+    domain  = ex_meta.get("domain", "twt")
+    sds     = getattr(section, "seismic_display", None)
+    stretch = getattr(sds, "stretch_mode", "linear") if sds else "linear"
+    vel     = getattr(sds, "constant_velocity", 2000.0) if sds else 2000.0
+    if stretch == "linear" and domain == "twt":
+        scale = vel / 2000.0
+        y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+    else:
+        y_top, y_bot = float(samples[0]), float(samples[-1])
+
+    dist0 = float(ex_meta.get("dist_min", 0.0))
+    dist1 = float(ex_meta.get("dist_max", section.total_length()))
+    vmax  = float(np.percentile(np.abs(ex_data), 99.0) or 1.0)
+    alpha = 0.35 if params.seismic_inclusion == "faded" else 1.0
+
+    ax.imshow(
+        ex_data, aspect="auto",
+        extent=[dist0, dist1, y_bot, y_top],
+        origin="upper", cmap="gray_r",
+        vmin=-vmax, vmax=vmax,
+        interpolation="bilinear", alpha=alpha, zorder=-1,
+    )
 
 
 def _render_grid(ax, palette: dict) -> None:

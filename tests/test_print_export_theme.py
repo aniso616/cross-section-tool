@@ -6,11 +6,10 @@ missing: that the selected theme actually reaches the rendered output, that
 content toggles change the figure structure, and that each output format is
 written.
 
-NOTE (documented limitation): the print renderer composes seismic via the
-matplotlib path and, in fact, _build_figure does not render a seismic layer at
-all (seismic_inclusion is not wired into the figure builder). So this harness
-validates vector content + theme + formats only; it cannot and does not
-exercise the on-screen pyqtgraph seismic layer.
+NOTE: the print renderer composes seismic via the matplotlib imshow path (not
+the on-screen pyqtgraph layer), so these tests validate that seismic is
+included in the print figure but cannot validate the pyqtgraph render. Seismic
+inclusion was wired into _build_figure in the fix for finding #1.
 """
 from __future__ import annotations
 
@@ -122,3 +121,47 @@ class TestOutputFormats:
         render_section_to_file(_state_with_horizon(), _section(), params, out)
         assert os.path.exists(out)
         assert os.path.getsize(out) > 500
+
+
+# ---------------------------------------------------------------------------
+# Seismic inclusion (finding #1 fix) — print figure actually contains seismic
+# ---------------------------------------------------------------------------
+
+def _state_with_seismic(with_seismic=True):
+    from section_tool.app_state import AppState
+    state = AppState()
+    sec = _section(name="EW")
+    state.add_section(sec)
+    state.set_active_section(sec)
+    if with_seismic:
+        data = np.tile(np.linspace(-1, 1, 50, dtype=np.float32)[:, None], (1, 40))
+        meta = {"dist_min": 0.0, "dist_max": 10000.0,
+                "samples": list(range(0, 100, 2)), "domain": "twt"}   # 50 samples
+        state.set_seismic_for_section("EW", data, meta)
+    return state, sec
+
+
+class TestSeismicInclusion:
+
+    def test_omit_renders_no_image(self):
+        state, sec = _state_with_seismic()
+        fig = _build_figure(state, sec, _base_params(seismic_inclusion="omit"), 72)
+        assert len(fig.axes[0].images) == 0
+
+    def test_grayscale_renders_an_image(self):
+        state, sec = _state_with_seismic()
+        fig = _build_figure(state, sec, _base_params(seismic_inclusion="grayscale"), 72)
+        assert len(fig.axes[0].images) == 1
+
+    def test_faded_uses_low_alpha(self):
+        state, sec = _state_with_seismic()
+        fig = _build_figure(state, sec, _base_params(seismic_inclusion="faded"), 72)
+        img = fig.axes[0].images[0]
+        assert img.get_alpha() == pytest.approx(0.35)
+
+    def test_no_extracted_seismic_is_noop(self):
+        # section present but no seismic extracted -> grayscale must not crash/add
+        state, sec = _state_with_seismic(with_seismic=False)
+        fig = _build_figure(state, sec,
+                            _base_params(seismic_inclusion="grayscale"), 72)
+        assert len(fig.axes[0].images) == 0
