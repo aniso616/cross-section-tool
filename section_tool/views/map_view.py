@@ -93,6 +93,12 @@ class MapView(QWidget):
         self._rclick_xy: tuple[float, float] | None = None
         self._show_grid: bool = False
 
+        # ---- saved zoom state (None = fit-all on next render) ----
+        # When non-None, _render_impl restores this after _apply_map_limits so
+        # data-change renders don't silently reset the user's zoom.
+        self._saved_xlim: tuple[float, float] | None = None
+        self._saved_ylim: tuple[float, float] | None = None
+
         # ---- render throttle and re-entry guard ----
         self._is_rendering = False
         self._redraw_timer = QTimer(self)
@@ -137,7 +143,7 @@ class MapView(QWidget):
 
     def _connect_signals(self) -> None:
         s = self._state
-        s.project_changed.connect(self.request_render)
+        s.project_changed.connect(self._on_project_changed)
         s.section_added.connect(self._on_sections_changed)
         s.section_removed.connect(self._on_sections_changed)
         s.section_modified.connect(self._on_sections_changed)
@@ -263,6 +269,8 @@ class MapView(QWidget):
 
     def zoom_to_all_data(self) -> None:
         """Zoom map to fit all loaded data with 15% padding."""
+        self._saved_xlim = None
+        self._saved_ylim = None
         self._apply_map_limits()
         self._canvas.draw_idle()
 
@@ -320,6 +328,14 @@ class MapView(QWidget):
         # Set limits from data bounding box with 15% padding per axis.
         # Equal aspect is enforced in _configure_axes; set_aspect letterboxes as needed.
         self._apply_map_limits()
+
+        # Restore user's zoom if they have panned/scrolled.  _apply_map_limits above
+        # computed the fit-all bbox (used on first render and after zoom_to_all_data).
+        # Preserving the saved limits means data-change renders don't reset the zoom.
+        if self._saved_xlim is not None:
+            self._ax.set_xlim(self._saved_xlim)
+        if self._saved_ylim is not None:
+            self._ax.set_ylim(self._saved_ylim)
 
         self._render_graticule()
         self._canvas.draw_idle()
@@ -624,6 +640,8 @@ class MapView(QWidget):
         if changed:
             self._ax.set_xlim(xl)
             self._ax.set_ylim(y_lo, y_hi)
+            self._saved_xlim = tuple(self._ax.get_xlim())
+            self._saved_ylim = tuple(self._ax.get_ylim())
             self._canvas.draw_idle()
 
     def _pixel_threshold(self, pixels: float = _LINE_HIT_PX) -> float:
@@ -680,6 +698,8 @@ class MapView(QWidget):
         dx, dy = d0[0] - d1[0], d0[1] - d1[1]
         self._ax.set_xlim(self._pan_xlim0[0] + dx, self._pan_xlim0[1] + dx)
         self._ax.set_ylim(self._pan_ylim0[0] + dy, self._pan_ylim0[1] + dy)
+        self._saved_xlim = self._ax.get_xlim()
+        self._saved_ylim = self._ax.get_ylim()
         self._canvas.draw_idle()
 
     def _end_pan(self) -> None:
@@ -723,6 +743,8 @@ class MapView(QWidget):
                 nh = (yl[1] - yl[0]) * factor
                 self._ax.set_xlim(cx - nw * relx, cx + nw * (1 - relx))
                 self._ax.set_ylim(cy - nh * rely, cy + nh * (1 - rely))
+                self._saved_xlim = self._ax.get_xlim()
+                self._saved_ylim = self._ax.get_ylim()
                 self._canvas.draw_idle()
             return
 
@@ -902,6 +924,8 @@ class MapView(QWidget):
         new_h = (yl[1] - yl[0]) * factor
         self._ax.set_xlim(cx - new_w * relx, cx + new_w * (1 - relx))
         self._ax.set_ylim(cy - new_h * rely, cy + new_h * (1 - rely))
+        self._saved_xlim = self._ax.get_xlim()
+        self._saved_ylim = self._ax.get_ylim()
         self._canvas.draw_idle()
 
     def _on_key_press(self, event) -> None:
@@ -1044,6 +1068,12 @@ class MapView(QWidget):
         }
         shape = _map.get(tool_id, _Qt.CursorShape.ArrowCursor)
         self._canvas.setCursor(_Qt.CursorShape(shape))
+
+    def _on_project_changed(self, *_args) -> None:
+        """Reset saved zoom on project load/new so map fits all new data."""
+        self._saved_xlim = None
+        self._saved_ylim = None
+        self.request_render()
 
     def _on_sections_changed(self, *_args) -> None:
         self.request_render()
