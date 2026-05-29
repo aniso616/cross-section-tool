@@ -10,11 +10,21 @@ Usage
 2. Call ``set_data()`` when seismic data loads or changes.
 3. Call ``sync_view()`` at the end of every render to match the
    matplotlib axes limits.
+
+Two-tier render
+---------------
+During pan/zoom (interaction) the layer shows whatever data was last
+uploaded — no re-upload, no resampling.  200 ms after the last
+interaction event (``on_pan_zoom_end``), ``_settle_timer`` fires and
+the section_view calls ``_update_seismic_layer`` with full-res data,
+which calls ``set_data`` with the full-resolution array.  The
+pyqtgraph ImageItem itself does no downsampling (``setAutoDownsample(False)``);
+all resampling is left to the GPU/Qt compositing path.
 """
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 import pyqtgraph as pg
@@ -91,9 +101,59 @@ class SeismicLayer(QWidget):
         self._cmap_key: str = ""
         self._vmax: float = 1.0
 
+        # Two-tier render state: flag + settle timer.
+        # While interacting (pan/zoom) the layer shows the existing image unchanged.
+        # 200 ms after the last gesture event the timer fires, which triggers a
+        # full-res re-upload via the _settle_callback (set by section_view).
+        self._interacting: bool = False
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.setInterval(200)
+        self._settle_timer.timeout.connect(self._on_settle)
+        # _settle_callback is injected by section_view after construction
+        self._settle_callback = None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def on_pan_zoom_start(self) -> None:
+        """Call when a pan/zoom gesture begins.
+
+        Marks the layer as interacting so no re-upload is triggered
+        mid-gesture.  The settle timer is stopped (not yet needed).
+        """
+        self._interacting = True
+        self._settle_timer.stop()
+
+    def on_pan_zoom_tick(self) -> None:
+        """Call on each pan/zoom event tick (e.g. every scroll step).
+
+        Restarts the settle timer so it fires 200 ms after the *last*
+        event, not the first.
+        """
+        self._interacting = True
+        if self._settle_callback is not None:
+            self._settle_timer.start()
+
+    def on_pan_zoom_end(self) -> None:
+        """Call when the gesture is known to be finished (e.g. mouse release).
+
+        Starts the settle timer immediately; it will fire in 200 ms if
+        no further ``on_pan_zoom_tick`` calls restart it first.
+        """
+        self._interacting = True
+        if self._settle_callback is not None:
+            self._settle_timer.start()
+
+    def _on_settle(self) -> None:
+        """Fired by _settle_timer when the view has been still for 200 ms.
+
+        Clears the interacting flag and triggers a full-res re-upload.
+        """
+        self._interacting = False
+        if self._settle_callback is not None:
+            self._settle_callback()
 
     def apply_theme(self, theme) -> None:
         """Update pyqtgraph background to match *theme*."""

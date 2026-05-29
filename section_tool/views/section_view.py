@@ -613,6 +613,13 @@ class SectionView(QWidget):
         # Track which section's seismic is currently loaded in pyqtgraph
         self._seismic_layer_key: str | None = None
 
+        # Wire the settle callback: after 200 ms of no pan/zoom, force a
+        # full-res re-upload by invalidating the layer key and re-rendering.
+        def _seismic_settle():
+            self._seismic_layer_key = None   # force full-res re-upload
+            self.request_render()
+        self._seismic_layer._settle_callback = _seismic_settle
+
         # Matplotlib events
         self._canvas.mpl_connect("button_press_event",   self._on_sv_press)
         self._canvas.mpl_connect("motion_notify_event",  self._on_sv_motion)
@@ -2207,15 +2214,21 @@ class SectionView(QWidget):
         else:
             y_top, y_bot = float(samples[0]), float(samples[-1])
 
-        disp_data = self._display_seismic_data(ex_data)
+        # Always pass full-resolution data to the pyqtgraph layer.
+        # _display_seismic_data() applies stride decimation (for the "Fast display"
+        # checkbox) — that is only appropriate for the matplotlib imshow fallback,
+        # NOT for the pyqtgraph layer.  Stride decimation causes spatial aliasing
+        # ("wiggle mush") that persists at rest because the layer only re-uploads
+        # when the cache key changes.  pyqtgraph + GPU compositing handle the
+        # resampling correctly at any zoom level.
         effective_clip = min(float(clip_pct), 97.0)
-        vmax = float(np.percentile(np.abs(disp_data), effective_clip) or 1.0) * gain
+        vmax = float(np.percentile(np.abs(ex_data), effective_clip) or 1.0) * gain
 
         dist0 = float(ex_meta.get("dist_min", 0.0))
         dist1 = float(ex_meta.get("dist_max", section.total_length()))
 
         self._seismic_layer.set_data(
-            data=disp_data, vmax=vmax,
+            data=ex_data, vmax=vmax,
             dist_min=dist0, dist_max=dist1,
             y_top=y_top, y_bot=y_bot,
             cmap_key=cmap_key,
@@ -3122,6 +3135,7 @@ class SectionView(QWidget):
             self._sv_pan_xlim0  = self._ax.get_xlim()
             self._sv_pan_ylim0  = self._ax.get_ylim()
             self._sv_pan_inv    = self._ax.transData.inverted()
+            self._seismic_layer.on_pan_zoom_start()
             return
 
         # ---- FIX 1: right-click ends pick sequence ----
@@ -3344,6 +3358,7 @@ class SectionView(QWidget):
                 self._saved_xlim = new_xl   # persist pan position
                 self._saved_ylim = new_yl
                 self._user_has_zoomed = True
+                self._seismic_layer.on_pan_zoom_tick()
                 self._seismic_layer.sync_view(
                     new_xl[0], new_xl[1], min(new_yl), max(new_yl))
                 self._canvas.update_seismic_bg()
@@ -3455,6 +3470,9 @@ class SectionView(QWidget):
 
     def _on_sv_release(self, event) -> None:
         if event.button in (1, 2):
+            if self._sv_pan_anchor is not None:
+                # Pan gesture just ended — start settle timer for full-res reload
+                self._seismic_layer.on_pan_zoom_end()
             self._sv_pan_anchor = None
 
         # Commit node drag
@@ -3517,6 +3535,7 @@ class SectionView(QWidget):
         self._saved_xlim   = new_xlim   # persist immediately so rubber-band renders don't reset
         self._saved_ylim   = new_ylim
         self._user_has_zoomed = True
+        self._seismic_layer.on_pan_zoom_tick()
         self.request_render()   # debounced — fires 50 ms after last scroll event
 
     def _on_sv_key(self, event) -> None:
