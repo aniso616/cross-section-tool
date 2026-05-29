@@ -807,6 +807,8 @@ class SectionView(QWidget):
         if self._strat_col_visible:
             left = self._STRAT_W + self._STRAT_GAP
             self._ax.set_position([left, 0.0, 1.0 - left, 1.0])
+            if hasattr(self, "_seismic_layer"):
+                self._seismic_layer.set_left_inset_frac(left)
             if self._strat_ax is None:
                 self._strat_ax = self._fig.add_axes(
                     [0.0, 0.0, self._STRAT_W, 1.0])
@@ -822,6 +824,8 @@ class SectionView(QWidget):
             self._strat_ax.set_visible(True)
         else:
             self._ax.set_position([0.0, 0.0, 1.0, 1.0])
+            if hasattr(self, "_seismic_layer"):
+                self._seismic_layer.set_left_inset_frac(0.0)
             if self._strat_ax is not None:
                 self._strat_ax.set_visible(False)
 

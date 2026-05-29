@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QFrame
 
 import pyqtgraph as pg
 from section_tool.style.theme import get_theme
@@ -87,6 +87,11 @@ class SeismicLayer(QWidget):
         self._gw.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._gw.setMinimumSize(0, 0)
         self._gw.setBackground(get_theme().background)
+        # Strip the QGraphicsView frame/viewport chrome so the scene fills the
+        # widget rect (otherwise a default frame insets the viewbox by px).
+        self._gw.setFrameStyle(QFrame.Shape.NoFrame)
+        self._gw.setViewportMargins(0, 0, 0, 0)
+        self._gw.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._gw)
 
         self._plot = self._gw.addPlot()
@@ -96,6 +101,24 @@ class SeismicLayer(QWidget):
         vb = self._plot.getViewBox()
         vb.setMouseEnabled(x=False, y=False)   # navigation is in matplotlib
         vb.invertY(True)                         # depth increases downward
+
+        # Zero every nested margin so the viewbox occupies the same pixel
+        # rectangle as the matplotlib axes it sits behind.  pyqtgraph's default
+        # GraphicsLayout/PlotItem margins inset the viewbox by ~10px, which makes
+        # the seismic map data→pixels at a different scale than matplotlib and
+        # drift vertically during pan/zoom.  (A ~1px residual from pyqtgraph's
+        # GraphicsView scene mapping is unavoidable but constant and sub-pixel.)
+        self._gw.ci.layout.setContentsMargins(0, 0, 0, 0)
+        self._gw.ci.layout.setSpacing(0)
+        self._plot.setContentsMargins(0, 0, 0, 0)
+        vb.setContentsMargins(0, 0, 0, 0)
+
+        # Horizontal inset (fraction of widget width) matching the matplotlib
+        # main-axes position when the strat column is shown.  Set by section_view
+        # via set_left_inset_frac(); applied as a left layout margin in sync_view
+        # (which always runs with the current widget width before each paint).
+        self._left_inset_frac: float = 0.0
+        self._applied_left_px: int = -1
 
         self._img: pg.ImageItem | None = None
         self._cmap_key: str = ""
@@ -158,6 +181,26 @@ class SeismicLayer(QWidget):
     def apply_theme(self, theme) -> None:
         """Update pyqtgraph background to match *theme*."""
         self._gw.setBackground(theme.background)
+
+    def set_left_inset_frac(self, frac: float) -> None:
+        """Set the left inset (fraction of widget width) for strat-column alignment.
+
+        The matplotlib main axes is positioned at ``[left, 0, 1-left, 1]`` when
+        the strat column is visible.  The seismic viewbox must occupy the same
+        horizontal rectangle, so we inset it by the same fraction.  Applied
+        lazily in :meth:`sync_view` against the current widget width.
+        """
+        frac = max(0.0, float(frac))
+        if frac != self._left_inset_frac:
+            self._left_inset_frac = frac
+            self._applied_left_px = -1   # force re-apply on next sync_view
+
+    def _apply_left_inset(self) -> None:
+        """Apply the left inset as a pixel layout margin (guarded; no-op if unchanged)."""
+        px = round(self._left_inset_frac * self._gw.width())
+        if px != self._applied_left_px:
+            self._gw.ci.layout.setContentsMargins(px, 0, 0, 0)
+            self._applied_left_px = px
 
     def set_data(
         self,
@@ -254,6 +297,9 @@ class SeismicLayer(QWidget):
         ``ymax`` is the deep end (bottom).
         """
         vb = self._plot.getViewBox()
+        # Keep the horizontal inset in sync with the current widget width so the
+        # viewbox tracks the matplotlib main-axes rectangle across resizes.
+        self._apply_left_inset()
         # Block signals so this doesn't recurse
         vb.blockSignals(True)
         vb.setXRange(xmin, xmax, padding=0)
