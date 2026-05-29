@@ -5,6 +5,7 @@ helpers and the expensive computations being bypassed.
 """
 from __future__ import annotations
 
+import os
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -353,3 +354,72 @@ class TestSettingsKey:
         k = _make_settings_key()
         d = {k: "value"}
         assert d[k] == "value"
+
+
+# ---------------------------------------------------------------------------
+# 5. Disk-cache keying: geometry-aware + project-scoped (collision guard)
+# ---------------------------------------------------------------------------
+
+class TestSeismicDiskCacheKeying:
+    """The .npy/.meta extraction cache must be keyed by geometry, not name only,
+    and must resolve under the project folder — never a shared global dir.
+    Regression guard for the cross-project "Section 1" collision.
+    """
+
+    def _section(self, name, end_x):
+        from section_tool.core.section import Section
+        return Section([(0.0, 0.0), (float(end_x), 0.0)], name=name)
+
+    def test_seismic_cache_key_differs_by_geometry(self):
+        """Two sections with the SAME name but different geometry → different keys."""
+        from section_tool.io.project_manager import seismic_cache_key
+        a = self._section("Section 1", 10000)
+        b = self._section("Section 1", 16000)   # same name, different length/nodes
+        ka = seismic_cache_key(a, "Seismic_data", "J:/x.sgy")
+        kb = seismic_cache_key(b, "Seismic_data", "J:/x.sgy")
+        assert ka != kb
+
+    def test_seismic_cache_key_stable_for_same_geometry(self):
+        """Identical name + geometry + segy → identical key (so the cache hits)."""
+        from section_tool.io.project_manager import seismic_cache_key
+        a = self._section("Section 1", 10000)
+        c = self._section("Section 1", 10000)
+        assert (seismic_cache_key(a, "Seismic_data", "J:/x.sgy")
+                == seismic_cache_key(c, "Seismic_data", "J:/x.sgy"))
+
+    def test_seismic_cache_key_differs_by_segy_path(self):
+        """Same section, different SEG-Y source → different key."""
+        from section_tool.io.project_manager import seismic_cache_key
+        a = self._section("Section 1", 10000)
+        assert (seismic_cache_key(a, "Seismic_data", "J:/x.sgy")
+                != seismic_cache_key(a, "Seismic_data", "J:/y.sgy"))
+
+    def test_seismic_cache_is_project_scoped(self, tmp_path):
+        """Path resolves under <project>/cache/, not a shared/global dir."""
+        from section_tool.io.project_manager import ProjectManager
+        pm = ProjectManager()
+        pm.project_path = str(tmp_path / "proj_A")
+        a = self._section("Section 1", 10000)
+        path = pm.seismic_extract_npy_path(a, "Seismic_data", "J:/x.sgy")
+        assert os.path.dirname(path) == os.path.join(str(tmp_path / "proj_A"), "cache")
+        assert path.endswith(".extract.npy")
+
+    def test_same_name_different_projects_dont_collide(self, tmp_path):
+        """A 'Section 1' in two projects with different geometry → different paths."""
+        from section_tool.io.project_manager import ProjectManager
+        pm_a = ProjectManager(); pm_a.project_path = str(tmp_path / "A")
+        pm_b = ProjectManager(); pm_b.project_path = str(tmp_path / "B")
+        sec_a = self._section("Section 1", 10000)
+        sec_b = self._section("Section 1", 16000)
+        pa = pm_a.seismic_extract_npy_path(sec_a, "Seismic_data", "J:/x.sgy")
+        pb = pm_b.seismic_extract_npy_path(sec_b, "Seismic_data", "J:/x.sgy")
+        assert pa != pb                       # different folder AND different hash
+        assert os.path.basename(pa) != os.path.basename(pb)
+
+    def test_path_requires_open_project(self):
+        """No project open → resolver raises rather than writing to a global dir."""
+        from section_tool.io.project_manager import ProjectManager
+        pm = ProjectManager()   # project_path is None
+        with pytest.raises(RuntimeError):
+            pm.seismic_extract_npy_path(self._section("Section 1", 10000),
+                                        "Seismic_data", "J:/x.sgy")
