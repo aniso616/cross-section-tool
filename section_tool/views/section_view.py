@@ -2104,9 +2104,11 @@ class SectionView(QWidget):
             domain  = ex_meta.get("domain", "twt")
             if stretch == "linear" and domain == "twt":
                 scale = v_ms / 2000.0
-                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+                y_top = 0.0
+                y_bot = float(samples[-1] - samples[0]) * scale
             else:
-                y_top, y_bot = float(samples[0]), float(samples[-1])
+                y_top = 0.0
+                y_bot = float(samples[-1] - samples[0])
             if ex_data.shape[1] >= 2:
                 # Use the dedicated dist_min/dist_max keys so the imshow extent
                 # matches the ACTUAL data coverage, not section.total_length().
@@ -2135,9 +2137,11 @@ class SectionView(QWidget):
                 continue
             if stretch == "linear" and ds.domain == "twt":
                 scale = v_ms / 2000.0
-                y_top, y_bot = float(ds.samples[0]) * scale, float(ds.samples[-1]) * scale
+                y_top = 0.0
+                y_bot = float(ds.samples[-1] - ds.samples[0]) * scale
             else:
-                y_top, y_bot = float(ds.samples[0]), float(ds.samples[-1])
+                y_top = 0.0
+                y_bot = float(ds.samples[-1] - ds.samples[0])
             if show_wig:
                 self._render_wiggle(distances, data, ds.samples)
             else:
@@ -2188,9 +2192,11 @@ class SectionView(QWidget):
                 self._seismic_layer.clear(); return
             if domain == "twt":
                 scale = vel / 2000.0
-                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+                y_top = 0.0
+                y_bot = float(samples[-1] - samples[0]) * scale
             else:
-                y_top, y_bot = float(samples[0]), float(samples[-1])
+                y_top = 0.0
+                y_bot = float(samples[-1] - samples[0])
             ex_meta = {"dist_min": float(distances[0]), "dist_max": float(distances[-1]),
                        "samples": samples, "domain": domain}
 
@@ -2210,25 +2216,68 @@ class SectionView(QWidget):
         domain  = ex_meta.get("domain", "twt")
         if stretch == "linear" and domain == "twt":
             scale = vel / 2000.0
-            y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+            # Anchor the first sample at elevation 0 (sea level) so the seismic
+            # top always aligns with the section's depth origin regardless of the
+            # recording-delay stored in samples[0].  The full sample span is
+            # preserved: y_bot is measured from 0, not from samples[0].
+            y_top = 0.0
+            y_bot = float(samples[-1] - samples[0]) * scale
         else:
-            y_top, y_bot = float(samples[0]), float(samples[-1])
+            y_top = 0.0
+            y_bot = float(samples[-1] - samples[0])
 
-        # Always pass full-resolution data to the pyqtgraph layer.
-        # _display_seismic_data() applies stride decimation (for the "Fast display"
-        # checkbox) — that is only appropriate for the matplotlib imshow fallback,
-        # NOT for the pyqtgraph layer.  Stride decimation causes spatial aliasing
-        # ("wiggle mush") that persists at rest because the layer only re-uploads
-        # when the cache key changes.  pyqtgraph + GPU compositing handle the
-        # resampling correctly at any zoom level.
         effective_clip = min(float(clip_pct), 97.0)
         vmax = float(np.percentile(np.abs(ex_data), effective_clip) or 1.0) * gain
 
         dist0 = float(ex_meta.get("dist_min", 0.0))
         dist1 = float(ex_meta.get("dist_max", section.total_length()))
 
+        # Area-averaged resampling: downsample to ~2× screen resolution using
+        # PIL BOX filter so the pyqtgraph layer shows alias-free seismic at rest.
+        # Stride decimation (data[::step]) aliases; GPU nearest-neighbour also
+        # aliases when thousands of traces are squashed into hundreds of pixels.
+        # PIL BOX averages every NxM source pixels into one output pixel, giving
+        # a clean result at any zoom level.
+        #
+        # When zoomed in (each trace spans multiple pixels) we pass full resolution
+        # so individual traces are crisp.  Downsampling only occurs when the data
+        # is denser than the screen (many traces per pixel = aliasing territory).
+        display_data = ex_data
+        try:
+            from PIL import Image as _PILImage
+            bbox = self._ax.get_window_extent()
+            n_samples, n_traces = ex_data.shape
+            xl = self._ax.get_xlim()
+            x_range = abs(xl[1] - xl[0]) if xl[1] != xl[0] else (dist1 - dist0)
+            # How many traces are visible in the current view?
+            visible_frac = min(1.0, x_range / max(dist1 - dist0, 1.0))
+            visible_traces = n_traces * visible_frac
+            px_w = max(1, int(bbox.width))
+            px_h = max(1, int(bbox.height))
+            # Downsample only when the display is denser than 0.5 traces/px.
+            # At 0.5 traces/px (2px per trace) GPU bilinear is fine; below that
+            # we area-average to prevent moiré.
+            traces_per_px = visible_traces / max(px_w, 1)
+            if traces_per_px > 0.5:
+                # Target: 2× screen pixels (HiDPI-safe) but no more than source
+                target_w = min(n_traces, px_w * 2)
+                target_h = min(n_samples, px_h * 2)
+                if target_w < n_traces or target_h < n_samples:
+                    # PIL expects uint8 for BOX; normalise to [0,255] float→uint8
+                    _vmax_tmp = float(np.percentile(np.abs(ex_data), 99) or 1.0)
+                    arr_f32 = np.clip(ex_data / _vmax_tmp, -1.0, 1.0)
+                    # Remap [-1,1] → [0,255] uint8
+                    arr_u8 = np.clip((arr_f32 + 1.0) * 127.5, 0, 255).astype(np.uint8)
+                    img = _PILImage.fromarray(arr_u8, mode="L")
+                    img = img.resize((target_w, target_h), _PILImage.BOX)
+                    arr_u8_ds = np.array(img, dtype=np.float32)
+                    # Remap back to [-1,1] and rescale to original amplitude range
+                    display_data = (arr_u8_ds / 127.5 - 1.0) * _vmax_tmp
+        except Exception:
+            pass  # fall back to full-resolution on any error
+
         self._seismic_layer.set_data(
-            data=ex_data, vmax=vmax,
+            data=display_data, vmax=vmax,
             dist_min=dist0, dist_max=dist1,
             y_top=y_top, y_bot=y_bot,
             cmap_key=cmap_key,
