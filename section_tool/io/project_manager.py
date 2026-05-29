@@ -11,7 +11,9 @@ A project is a directory containing:
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -20,6 +22,31 @@ from section_tool.io.database import ProjectDatabase
 _SUBDIRS = ("seismic", "wells", "images", "exports", "cache", "autosave")
 _DB_NAME = "project.sqlite"
 _AUTOSAVE_NAME = "autosave/project.sqlite.bak"
+
+
+def _safe_name(s: str) -> str:
+    """Filesystem-safe token (alphanumerics, dash, underscore)."""
+    return re.sub(r"[^\w\-]", "_", str(s))
+
+
+def seismic_cache_key(section, seismic_name: str, segy_path: str) -> str:
+    """Geometry-aware, project-independent cache key for a seismic extraction.
+
+    The key incorporates the SEG-Y source path *and* the section geometry
+    (node coordinates + total length), so two sections that share a name but
+    differ in geometry — e.g. a default-named ``"Section 1"`` in two projects —
+    produce different keys and never collide on the same cache file.  When a
+    section's nodes change, the key changes automatically, so the next lookup
+    misses and the seismic is re-extracted for the new geometry.
+
+    The sample range is determined by the SEG-Y, so ``segy_path`` covers it;
+    azimuth is a function of the nodes, so the nodes cover it.
+    """
+    import numpy as np
+    nodes = tuple(map(tuple, np.asarray(section.nodes, dtype=float).round(3).tolist()))
+    geom = repr((str(segy_path), nodes, round(float(section.total_length()), 2)))
+    digest = hashlib.sha1(geom.encode("utf-8")).hexdigest()[:12]
+    return f"{_safe_name(section.name)}_{_safe_name(seismic_name)}_{digest}"
 
 
 class ProjectManager:
@@ -192,6 +219,19 @@ class ProjectManager:
     # ------------------------------------------------------------------
     # Cached seismic extractions
     # ------------------------------------------------------------------
+
+    def seismic_extract_npy_path(self, section, seismic_name: str, segy_path: str) -> str:
+        """Project-scoped, geometry-aware path for a seismic extraction (.npy).
+
+        Always resolves under ``<project>/cache/`` — never a shared/global dir —
+        and the filename carries a geometry hash (see :func:`seismic_cache_key`)
+        so same-named sections in different projects/geometries never collide.
+        Raises if no project is open (extraction must target a project).
+        """
+        if not self.project_path:
+            raise RuntimeError("No project open; cannot resolve a seismic cache path.")
+        key = seismic_cache_key(section, seismic_name, segy_path)
+        return os.path.join(self.project_path, "cache", f"{key}.extract.npy")
 
     def seismic_cache_path(self, section_name: str, seismic_name: str) -> str:
         """Return the path for a cached .npy seismic extraction."""

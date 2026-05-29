@@ -1580,17 +1580,23 @@ class MainWindow(QMainWindow):
                 return
             ref = refs[names.index(name)]
 
-        # Resolve output path into a cache sub-folder alongside the project
-        import os, re
-        _safe = lambda s: re.sub(r"[^\w\-]", "_", s)
-        base_dir = (os.path.dirname(self._state.project_path)
-                    if self._state.project_path else os.getcwd())
-        cache_dir = os.path.join(base_dir, "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        out_npy = os.path.join(
-            cache_dir,
-            f"{_safe(section.name)}_{_safe(ref.name)}.extract.npy"
-        )
+        # Resolve output path INSIDE the project's own cache/ folder, keyed by
+        # section geometry + SEG-Y path.  Previously this used
+        # os.path.dirname(project_path) (the project's PARENT) with a name-only
+        # key, so every project under the same parent shared one global cache
+        # file — a "Section 1" in project A would overwrite/serve project B's
+        # "Section 1", rendering a wrong-geometry extract.  seismic_extract_npy_path
+        # is project-scoped and geometry-hashed, so collisions cannot happen and
+        # editing a section's nodes re-extracts automatically.
+        import os
+        if not self._state.project_path:
+            QMessageBox.information(
+                self, "No Project",
+                "Open or save a project before extracting seismic.")
+            return
+        out_npy = self._state.project_manager.seismic_extract_npy_path(
+            section, ref.name, ref.path)
+        os.makedirs(os.path.dirname(out_npy), exist_ok=True)
 
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtWidgets import QProgressDialog, QApplication as _QApp, QCheckBox, QDialog, QVBoxLayout, QDialogButtonBox, QLabel
