@@ -223,3 +223,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code agent worktrees (transient, per-agent git worktrees — never track)
+.claude/worktrees/
