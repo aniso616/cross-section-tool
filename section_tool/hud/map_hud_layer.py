@@ -12,8 +12,12 @@ ticks align exactly with the data columns/rows of the full-bleed map.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
 
+from section_tool.core.crs import reproject_xy
 from section_tool.hud.axis_ruler import AxisRuler
+from section_tool.hud.nav_readout import NavReadout
 from section_tool.hud.scale_bar import ScaleBar
+
+_WGS84 = 4326
 
 
 def _fmt_coord(v: float) -> str:
@@ -28,6 +32,8 @@ class MapHUDLayer(QWidget):
     E_RULER_H = AxisRuler.THICKNESS     # 52
     SB_W      = 150
     SB_H      = ScaleBar.HEIGHT         # 26
+    NR_W      = 360                     # cursor readout (E/N + lat/long)
+    NR_H      = 20
     M         = 10
 
     def __init__(self, parent, map_view):
@@ -44,11 +50,15 @@ class MapHUDLayer(QWidget):
                                  formatter=_fmt_coord)
         self.scale_bar = ScaleBar(self, compact=True)
         self.scale_bar.setFixedWidth(self.SB_W)
+        self.nav_readout = NavReadout(self)
 
         # Reflow whenever the canvas redraws — draw_event fires after matplotlib
         # has applied the equal-aspect/datalim adjustment, so the limits we read
         # are the ones actually on screen (render, resize, pan, zoom all covered).
         map_view.canvas.mpl_connect("draw_event", lambda _evt: self.refresh())
+        # Cursor readout: easting/northing, plus lat/long when the project CRS
+        # is projected (reproject short-circuits to identity otherwise).
+        map_view.cursor_map_pos.connect(self._on_cursor)
 
     # ------------------------------------------------------------------
 
@@ -65,8 +75,18 @@ class MapHUDLayer(QWidget):
         self.e_ruler.setGeometry(0, h - eh, w, eh)
         self.scale_bar.setGeometry(w - self.SB_W - self.M, h - eh - self.SB_H,
                                    self.SB_W, self.SB_H)
+        self.nav_readout.setGeometry(w - self.NR_W - self.M, self.M,
+                                     self.NR_W, self.NR_H)
 
     # ------------------------------------------------------------------
+
+    def _on_cursor(self, mx: float, my: float):
+        crs = getattr(self._map._state.project, "crs_epsg", None)
+        if crs and crs != _WGS84:
+            lon, lat = reproject_xy(mx, my, crs, _WGS84)
+            self.nav_readout.update_map_coords(mx, my, lon, lat)
+        else:
+            self.nav_readout.update_map_coords(mx, my)
 
     def refresh(self):
         """Pull the current map extent and push it into the rulers + scale bar."""

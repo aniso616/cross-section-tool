@@ -2791,6 +2791,13 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2000, self._update_status)
 
     def _on_map_status(self, msg: str) -> None:
+        # In the game UI the old _status_label is an orphaned, invisible stub;
+        # route map status (node-drag coords, nearest-well) to the visible
+        # bottom status strip instead. The persistent E/N + lat/long cursor
+        # readout lives on the MapHUD itself.
+        if hasattr(self, "status_strip"):
+            self.status_strip.set_hint(msg or "")
+            return
         if msg:
             self._status_label.setText(msg)
         else:
