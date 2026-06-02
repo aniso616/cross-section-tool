@@ -50,8 +50,10 @@ class StatusStrip(QStatusBar):
         )
 
     def set_tool(self, tool: str | None):
-        from section_tool.interaction.tool_manager import TOOL_LABELS
-        self._tool.setText(TOOL_LABELS.get(tool, ""))
+        # Driven by AppState.tool_changed, so use the AppState-keyed labels
+        # (covers construction tools, which bypass the ToolManager).
+        from section_tool.interaction.tool_manager import APPSTATE_TOOL_LABELS
+        self._tool.setText(APPSTATE_TOOL_LABELS.get(tool, ""))
 
     def set_hint(self, text: str):
         self._hint.setText(text)

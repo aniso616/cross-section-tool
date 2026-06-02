@@ -21,8 +21,10 @@ class ToolIndicator(QWidget):
         self.hide()
 
     def set_tool(self, tool):
-        from section_tool.interaction.tool_manager import TOOL_LABELS
-        self._label = TOOL_LABELS.get(tool, "")
+        # Driven by AppState.tool_changed, so use the AppState-keyed labels
+        # (covers construction tools, which bypass the ToolManager).
+        from section_tool.interaction.tool_manager import APPSTATE_TOOL_LABELS
+        self._label = APPSTATE_TOOL_LABELS.get(tool, "")
         if self._label:
             self.show()
         else:

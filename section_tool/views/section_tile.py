@@ -9,15 +9,25 @@ class ToolHUD(QWidget):
     """Small semi-transparent bar at top-centre of section canvas — active tool + hint."""
 
     _HINTS = {
-        "select":       "Click to select  ·  Double-click for node editing",
-        "node_edit":    "Click node to select  ·  Drag to move  ·  Del to remove",
-        "horizon_pick": "Click to place pick  ·  Right-click or Esc to end",
-        "fault_pick":   "Click to place pick  ·  Right-click or Esc to end",
-        "polygon":      "Click vertices  ·  Right-click to close",
-        "measure":      "Click two points to measure",
-        "pan":          "Drag to pan  ·  Scroll to zoom",
-        "new_section":  "Click endpoints  ·  Double-click or Enter to finish",
+        "select":          "Click to select  ·  Double-click for node editing",
+        "node_edit":       "Click node to select  ·  Drag to move  ·  Del to remove",
+        "horizon_pick":    "Click to place pick  ·  Right-click or Esc to end",
+        "fault_pick":      "Click to place pick  ·  Right-click or Esc to end",
+        "polygon":         "Click vertices  ·  Right-click to close",
+        "measure":         "Click two points to measure",
+        "pan":             "Drag to pan  ·  Scroll to zoom",
+        "new_section":     "Click endpoints  ·  Double-click or Enter to finish",
+        # Construction tools (parameters set in the bar above the canvas)
+        "extend":          "Click a pick endpoint, then the target line",
+        "trim":            "Click the keep-side of a line, then the cutting line",
+        "parallel":        "Click a reference horizon, then click to place the copy",
+        "dip_constrained": "Click anchor, then extent  ·  set Dip angle above",
+        "kink_band":       "Click backlimb horizon, then axial trace  ·  set dips above",
     }
+
+    # Initial key legend, shown before any tool is activated.
+    _LEGEND = ("V Select · A Nodes · H Horizon · F Fault · G Polygon · M Measure"
+               "    E Extend · T Trim · P Parallel · D Dip · K Kink")
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -39,27 +49,34 @@ class ToolHUD(QWidget):
             "color: #4A9EFF; font-weight: bold; font-size: 9pt;")
         layout.addWidget(self._tool_lbl)
 
-        self._hint_lbl = QLabel("V – Select   A – Nodes   H – Horizon   F – Fault   G – Polygon   M – Measure")
+        self._hint_lbl = QLabel(self._LEGEND)
         self._hint_lbl.setStyleSheet("color: #707880; font-size: 8pt;")
         layout.addWidget(self._hint_lbl)
         self.show()
 
     def set_tool(self, tool_id: str | None) -> None:
         _names = {
-            "select":       "● Select",
-            "node_edit":    "● Nodes",
-            "horizon_pick": "● Horizon Pick",
-            "fault_pick":   "● Fault Pick",
-            "polygon":      "● Polygon",
-            "measure":      "● Measure",
-            "pan":          "● Pan",
-            "new_section":  "● Draw Section",
-            "h_ref":        "● H-Ref",
-            "v_ref":        "● V-Ref",
+            "select":          "● Select",
+            "node_edit":       "● Nodes",
+            "horizon_pick":    "● Horizon Pick",
+            "fault_pick":      "● Fault Pick",
+            "polygon":         "● Polygon",
+            "measure":         "● Measure",
+            "pan":             "● Pan",
+            "new_section":     "● Draw Section",
+            "h_ref":           "● H-Ref",
+            "v_ref":           "● V-Ref",
+            "a_ref":           "● A-Ref",
+            "extend":          "● Extend",
+            "trim":            "● Trim",
+            "parallel":        "● Parallel",
+            "dip_constrained": "● Dip-Constrained",
+            "kink_band":       "● Kink Band",
         }
         tool = tool_id or "select"
         self._tool_lbl.setText(_names.get(tool, f"● {tool}"))
-        self._hint_lbl.setText(self._HINTS.get(tool, ""))
+        # Fall back to the key legend when a tool has no specific hint.
+        self._hint_lbl.setText(self._HINTS.get(tool, self._LEGEND))
         self.adjustSize()
         self._reposition()
 

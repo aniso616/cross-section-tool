@@ -3080,9 +3080,10 @@ class SectionMainWindow(MainWindow):
             self.section_tile.command_palette.invoke
         )
         self._tool_mgr.tool_changed.connect(self._on_game_tool_changed)
-        self._tool_mgr.tool_changed.connect(self.hud.tool_indicator.set_tool)
-        self._tool_mgr.tool_changed.connect(self.status_strip.set_tool)
-        # Tool HUD bar on section tile (shows appstate tool, not ToolManager ID)
+        # All on-screen tool indicators are driven by AppState.tool_changed so
+        # they reflect construction tools too (those bypass the ToolManager).
+        self._state.tool_changed.connect(self.hud.tool_indicator.set_tool)
+        self._state.tool_changed.connect(self.status_strip.set_tool)
         self._state.tool_changed.connect(self.section_tile.tool_hud.set_tool)
 
         # Install on canvas — navigator AFTER key_filter (LIFO: navigator runs first).
@@ -3678,6 +3679,12 @@ class SectionMainWindow(MainWindow):
             "tool_fault":    lambda: self._tool_mgr.handle_key(Qt.Key.Key_F),
             "tool_pick":     lambda: self._tool_mgr.handle_key(Qt.Key.Key_T),
             "tool_annotate": lambda: self._tool_mgr.handle_key(Qt.Key.Key_A),
+            # Construction tools bypass the ToolManager; activate via the palette.
+            "tool_extend":   lambda: self._tool_palette.set_active_tool("extend"),
+            "tool_trim":     lambda: self._tool_palette.set_active_tool("trim"),
+            "tool_parallel": lambda: self._tool_palette.set_active_tool("parallel"),
+            "tool_dip":      lambda: self._tool_palette.set_active_tool("dip_constrained"),
+            "tool_kink":     lambda: self._tool_palette.set_active_tool("kink_band"),
             "mode_section":  lambda: self.set_mode(Mode.SECTION),
             "mode_map":      self._toggle_map_dock,
             "mode_3d":       lambda: self.set_mode(Mode.THREE_D),

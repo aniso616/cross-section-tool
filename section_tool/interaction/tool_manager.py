@@ -22,6 +22,31 @@ TOOL_LABELS = {
     None:         "",
 }
 
+# AppState tool-id → on-screen label. The status strip and corner indicator are
+# driven by AppState.tool_changed (not ToolManager.tool_changed), so this map —
+# unlike TOOL_LABELS above, which is keyed by ToolManager ids — must cover the
+# construction tools, which bypass the ToolManager and activate via the palette.
+APPSTATE_TOOL_LABELS = {
+    "select":          "",
+    "node_edit":       "● Nodes",
+    "horizon_pick":    "● Horizon",
+    "fault_pick":      "● Fault",
+    "polygon":         "● Polygon",
+    "measure":         "● Measure",
+    "pan":             "● Pan",
+    "zoom":            "● Zoom",
+    "new_section":     "● Section",
+    "h_ref":           "● H-Ref",
+    "v_ref":           "● V-Ref",
+    "a_ref":           "● A-Ref",
+    "extend":          "● Extend",
+    "trim":            "● Trim",
+    "parallel":        "● Parallel",
+    "dip_constrained": "● Dip-Constrained",
+    "kink_band":       "● Kink Band",
+    None:              "",
+}
+
 
 class ToolManager(QObject):
     tool_changed = Signal(object)  # str or None
