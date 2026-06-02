@@ -473,23 +473,34 @@ class AppState(QObject):
                                     for p in picks], dtype=float)
                 map_ys  = np.array([p.get("y") if p.get("y") is not None else float("nan")
                                     for p in picks], dtype=float)
+                hp = HorizonPick(
+                    dists, depths,
+                    name=hrow["name"],
+                    color=hrow.get("color", "#2ca02c"),
+                    line_width=float(hrow.get("line_width", 1.5)),
+                    line_style=hrow.get("line_style", "solid"),
+                    section_names=snames,
+                    map_x=map_xs,
+                    map_y=map_ys,
+                    uuid=hrow.get("uuid"),
+                    contact_type=hrow.get("contact_type", "conformable"),
+                    formation_above=hrow.get("formation_above", ""),
+                    formation_below=hrow.get("formation_below", ""),
+                )
             else:
-                dists = depths = np.array([], dtype=float)
-                snames = np.array([], dtype=object)
-                map_xs = map_ys = np.array([], dtype=float)
-            hp = HorizonPick(
-                dists, depths,
-                name=hrow["name"],
-                color=hrow.get("color", "#2ca02c"),
-                line_width=float(hrow.get("line_width", 1.5)),
-                line_style=hrow.get("line_style", "solid"),
-                section_names=snames,
-                map_x=map_xs,
-                map_y=map_ys,
-                contact_type=hrow.get("contact_type", "conformable"),
-                formation_above=hrow.get("formation_above", ""),
-                formation_below=hrow.get("formation_below", ""),
-            )
+                # Pickless entity (created but not yet drawn). HorizonPick() rejects
+                # zero-length arrays, so build via empty() and restore metadata.
+                hp = HorizonPick.empty(
+                    name=hrow["name"],
+                    color=hrow.get("color", "#2ca02c"),
+                    line_width=float(hrow.get("line_width", 1.5)),
+                    line_style=hrow.get("line_style", "solid"),
+                )
+                if hrow.get("uuid"):
+                    hp.uuid = hrow["uuid"]
+                hp.contact_type    = hrow.get("contact_type", "conformable")
+                hp.formation_above = hrow.get("formation_above", "")
+                hp.formation_below = hrow.get("formation_below", "")
             _restore_construction_rule(hp, hrow.get("construction_rule_json"))
             proj.horizon_picks.append(hp)
 
@@ -504,20 +515,27 @@ class AppState(QObject):
                                    for p in picks], dtype=float)
                 map_ys = np.array([p.get("y") if p.get("y") is not None else float("nan")
                                    for p in picks], dtype=float)
+                fp = HorizonPick(
+                    dists, depths,
+                    name=frow["name"],
+                    color=frow.get("color", "#d62728"),
+                    line_width=float(frow.get("line_width", 1.5)),
+                    line_style=frow.get("line_style", "solid"),
+                    section_names=snames,
+                    map_x=map_xs,
+                    map_y=map_ys,
+                    uuid=frow.get("uuid"),
+                )
             else:
-                dists = depths = np.array([], dtype=float)
-                snames = np.array([], dtype=object)
-                map_xs = map_ys = np.array([], dtype=float)
-            fp = HorizonPick(
-                dists, depths,
-                name=frow["name"],
-                color=frow.get("color", "#d62728"),
-                line_width=float(frow.get("line_width", 1.5)),
-                line_style=frow.get("line_style", "solid"),
-                section_names=snames,
-                map_x=map_xs,
-                map_y=map_ys,
-            )
+                # Pickless entity — build via empty() (see horizons above).
+                fp = HorizonPick.empty(
+                    name=frow["name"],
+                    color=frow.get("color", "#d62728"),
+                    line_width=float(frow.get("line_width", 1.5)),
+                    line_style=frow.get("line_style", "solid"),
+                )
+                if frow.get("uuid"):
+                    fp.uuid = frow["uuid"]
             _restore_construction_rule(fp, frow.get("construction_rule_json"))
             proj.fault_picks.append(fp)
 

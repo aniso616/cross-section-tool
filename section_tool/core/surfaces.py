@@ -6,10 +6,16 @@ use bilinear lookup for fast section intersection.
 """
 from __future__ import annotations
 
+import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import numpy as np
+
+
+def new_entity_uuid() -> str:
+    """Return a fresh stable identity (UUID4 string) for a horizon/fault entity."""
+    return str(_uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +386,7 @@ class HorizonPick:
         section_names: list | np.ndarray | None = None,
         map_x: list | np.ndarray | None = None,
         map_y: list | np.ndarray | None = None,
+        uuid: str | None = None,
         # Phase A: horizon / contact attributes
         contact_type: str = "conformable",
         formation_above: str = "",
@@ -429,6 +436,9 @@ class HorizonPick:
         self._quality: np.ndarray    = np.array(["picked"] * n, dtype=object)
         self._note: np.ndarray       = np.array([""] * n, dtype=object)
         self.name = name
+        # Stable entity identity — rename-safe. Generated on creation; preserved
+        # across save/reload and deepcopy. Distinct from the (mutable) name.
+        self.uuid: str = uuid if uuid else new_entity_uuid()
         self.z_units: Literal["m", "ft", "ms"] = z_units
         self.color = color
         self.line_width: float = float(line_width)
@@ -641,6 +651,7 @@ class HorizonPick:
         obj._map_x         = np.array([], dtype=float)
         obj._map_y         = np.array([], dtype=float)
         obj.name       = name
+        obj.uuid       = new_entity_uuid()
         obj.z_units    = z_units
         obj.color      = color
         obj.line_width = float(line_width)

@@ -181,6 +181,55 @@ class TestConstructionMetadataRoundtrip:
 
 
 # ---------------------------------------------------------------------------
+# Stable entity identity (Step 1): UUIDs survive + are stable across reload
+# ---------------------------------------------------------------------------
+
+class TestEntityIdentity:
+
+    def test_every_entity_has_unique_uuid_after_reload(self, tmp_path):
+        proj = _roundtrip(tmp_path).project
+        entities = proj.horizon_picks + proj.fault_picks
+        assert all(getattr(e, "uuid", None) for e in entities)   # non-empty
+        uuids = [e.uuid for e in entities]
+        assert len(uuids) == len(set(uuids))                     # unique
+
+    def test_uuid_is_stable_across_save_reload(self, tmp_path):
+        """Identity must be preserved, not regenerated — the whole point."""
+        folder = str(tmp_path / "proj")
+        src = AppState()
+        src.new_project(name="RT", crs_epsg=32631, folder_path=folder)
+        _populate(src)
+        before = {hp.name: hp.uuid for hp in src.project.horizon_picks}
+        src.save_project()
+
+        dst = AppState()
+        dst.open_project(folder)
+        after = {hp.name: hp.uuid for hp in dst.project.horizon_picks}
+        assert after == before
+
+    def test_pickless_entity_survives_reload(self, tmp_path):
+        """A horizon created but not yet drawn must reload (regression: an empty
+        HorizonPick used to crash reconstruct with 'requires at least one point').
+        """
+        folder = str(tmp_path / "proj")
+        src = AppState()
+        src.new_project(name="RT", crs_epsg=32631, folder_path=folder)
+        sec = Section([(0.0, 0.0), (2000.0, 0.0)], name="L1")
+        src.add_section(sec)
+        src.set_active_section(sec)
+        undrawn = HorizonPick.empty(name="Undrawn")
+        saved_uuid = undrawn.uuid
+        src.add_horizon_pick(undrawn)
+        src.save_project()
+
+        dst = AppState()
+        dst.open_project(folder)
+        reloaded = _by_name(dst.project.horizon_picks, "Undrawn")
+        assert reloaded.n_picks == 0
+        assert reloaded.uuid == saved_uuid
+
+
+# ---------------------------------------------------------------------------
 # Known limitations — aspirational tests, xfail(strict) so a fix flips them red
 # ---------------------------------------------------------------------------
 

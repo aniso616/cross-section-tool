@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS sections (
 CREATE TABLE IF NOT EXISTS horizons (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     name                   TEXT    UNIQUE NOT NULL,
+    uuid                   TEXT    UNIQUE,               -- stable entity identity (UUID4)
     contact_type           TEXT    DEFAULT 'conformable',
     color                  TEXT    DEFAULT '#2ca02c',
     line_width             REAL    DEFAULT 1.5,
@@ -76,6 +77,7 @@ CREATE TABLE IF NOT EXISTS horizon_picks (
 CREATE TABLE IF NOT EXISTS faults (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     name                   TEXT    UNIQUE NOT NULL,
+    uuid                   TEXT    UNIQUE,               -- stable entity identity (UUID4)
     fault_type             TEXT    DEFAULT 'normal',
     dip_direction          TEXT    DEFAULT 'right',
     color                  TEXT    DEFAULT '#d62728',
@@ -454,6 +456,12 @@ class ProjectDatabase:
             ("polygons",  "construction_rule_json", "TEXT"),
             # Reference-based polygon perimeter (PolygonBoundary list)
             ("polygons",  "bounds_json", "TEXT"),
+            # Stable entity identity (UUID4). ALTER ADD COLUMN can't add a UNIQUE
+            # constraint, so existing DBs get a plain TEXT column; uniqueness is
+            # guaranteed in practice by UUID4 generation (and by the CREATE TABLE
+            # constraint on fresh DBs).
+            ("horizons",  "uuid", "TEXT"),
+            ("faults",    "uuid", "TEXT"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -465,6 +473,28 @@ class ProjectDatabase:
             self.conn.execute("ALTER TABLE surfaces DROP COLUMN points_blob")
         except Exception:
             pass
+        self._backfill_entity_uuids()
+
+    def _backfill_entity_uuids(self) -> None:
+        """Assign a stable UUID to every horizon/fault row that lacks one.
+
+        Idempotent: only touches rows where uuid IS NULL or ''. Runs on open so
+        pre-existing projects gain stable identity without any user action.
+        """
+        from section_tool.core.surfaces import new_entity_uuid
+        for table in ("horizons", "faults"):
+            try:
+                rows = self.conn.execute(
+                    f"SELECT id FROM {table} WHERE uuid IS NULL OR uuid=''"
+                ).fetchall()
+            except Exception:
+                continue  # table/column not present yet
+            for r in rows:
+                self.conn.execute(
+                    f"UPDATE {table} SET uuid=? WHERE id=?",
+                    (new_entity_uuid(), r["id"]),
+                )
+        self.conn.commit()
 
     # ------------------------------------------------------------------
     # Context manager for batched writes
@@ -571,18 +601,24 @@ class ProjectDatabase:
 
     def upsert_horizon(self, pick) -> int:
         from section_tool.core.construction import serialize_rule
+        from section_tool.core.surfaces import new_entity_uuid
         rule_json = serialize_rule(getattr(pick, "construction_rule", None))
+        entity_uuid = getattr(pick, "uuid", None) or new_entity_uuid()
         row = self.conn.execute(
             "SELECT id FROM horizons WHERE name=?", (pick.name,)
         ).fetchone()
         if row:
             hid = row["id"]
+            # COALESCE keeps an already-assigned identity on name-match; only
+            # fills it for a legacy row that never had one.
             self.conn.execute(
-                """UPDATE horizons SET color=?, line_width=?, line_style=?,
+                """UPDATE horizons SET uuid=COALESCE(uuid, ?), color=?,
+                   line_width=?, line_style=?,
                    contact_type=?, formation_above=?, formation_below=?,
                    confidence=?, construction_rule_json=?
                    WHERE id=?""",
-                (pick.color,
+                (entity_uuid,
+                 pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "contact_type", "conformable"),
@@ -594,11 +630,11 @@ class ProjectDatabase:
             )
         else:
             cur = self.conn.execute(
-                """INSERT INTO horizons(name, color, line_width, line_style,
+                """INSERT INTO horizons(name, uuid, color, line_width, line_style,
                    contact_type, formation_above, formation_below, confidence,
                    construction_rule_json)
-                   VALUES(?,?,?,?,?,?,?,?,?)""",
-                (pick.name, pick.color,
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (pick.name, entity_uuid, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "contact_type", "conformable"),
@@ -658,18 +694,22 @@ class ProjectDatabase:
 
     def upsert_fault(self, pick) -> int:
         from section_tool.core.construction import serialize_rule
+        from section_tool.core.surfaces import new_entity_uuid
         rule_json = serialize_rule(getattr(pick, "construction_rule", None))
+        entity_uuid = getattr(pick, "uuid", None) or new_entity_uuid()
         row = self.conn.execute(
             "SELECT id FROM faults WHERE name=?", (pick.name,)
         ).fetchone()
         if row:
             fid = row["id"]
             self.conn.execute(
-                """UPDATE faults SET color=?, line_width=?, line_style=?,
+                """UPDATE faults SET uuid=COALESCE(uuid, ?), color=?,
+                   line_width=?, line_style=?,
                    fault_type=?, dip_direction=?, confidence=?,
                    construction_rule_json=?
                    WHERE id=?""",
-                (pick.color,
+                (entity_uuid,
+                 pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "fault_type", "normal"),
@@ -680,11 +720,11 @@ class ProjectDatabase:
             )
         else:
             cur = self.conn.execute(
-                """INSERT INTO faults(name, color, line_width, line_style,
+                """INSERT INTO faults(name, uuid, color, line_width, line_style,
                    fault_type, dip_direction, confidence,
                    construction_rule_json)
-                   VALUES(?,?,?,?,?,?,?,?)""",
-                (pick.name, pick.color,
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                (pick.name, entity_uuid, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "fault_type", "normal"),
