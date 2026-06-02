@@ -3290,7 +3290,23 @@ class SectionMainWindow(MainWindow):
         self._section_view.pick_ended.connect(
             lambda: self._tool_mgr.handle_key(Qt.Key.Key_Escape)
         )
-        self.h_splitter.addWidget(self.v_splitter)
+
+        # Center column = thin context/options bar (per-tool parameters) on top
+        # of the section/map splitter. The ContextToolbar built in __init__ is
+        # alive and wired (its action_requested already routes cst_param edits
+        # to the construction tools via section_view._on_context_action); its
+        # old options-bar QToolBar host was removed in _convert_to_game_ui, so
+        # re-parent it here and re-theme it for the dark canvas chrome.
+        center = QWidget(self)
+        cv = QVBoxLayout(center)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        self._ctx.set_dark_theme()
+        cv.addWidget(self._ctx)
+        cv.addWidget(self.v_splitter, 1)
+        self.h_splitter.addWidget(center)
+        # show() AFTER re-parenting (re-parent hides the widget).
+        self._ctx.setVisible(True)
 
         # Right: properties panel (reuse existing, no title bar)
         self._properties_panel.setTitleBarWidget(QWidget(self._properties_panel))

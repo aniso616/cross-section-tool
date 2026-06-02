@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
 )
 
 from section_tool.app_state import AppState
+from section_tool.style import BG_CANVAS, C_LABEL, C_RULE
+from section_tool.views.tool_palette import _rgba
 
 
 def _qlbl(text: str) -> QLabel:
@@ -44,6 +46,7 @@ class ContextToolbar(QWidget):
         self._layout.setContentsMargins(8, 2, 8, 2)
         self._layout.setSpacing(4)
 
+        self._dark = False
         self._rebuilding = False
         self._state.tool_changed.connect(self._on_tool_changed)
         self._state.active_pick_target_changed.connect(
@@ -116,7 +119,36 @@ class ContextToolbar(QWidget):
         fn = builders.get(tool_id, self._build_default)
         fn()
         self._layout.addStretch()
+        if self._dark:
+            self._recolor_labels_dark()
         self._rebuilding = False
+
+    # ------------------------------------------------------------------
+    # Dark game-UI theming
+    # ------------------------------------------------------------------
+
+    def set_dark_theme(self) -> None:
+        """Re-theme for the dark game UI.
+
+        The default styling targets the light Phase-3 options bar (``#333333``
+        text on ``#e8e8e8``), which is unreadable once the bar is re-hosted on
+        the dark canvas chrome. This switches the bar background + label colors
+        to the shared HUD tokens and rebuilds the current tool's content.
+        """
+        self._dark = True
+        self.setStyleSheet(
+            f"QWidget#ContextToolbar {{ background: {BG_CANVAS}; "
+            f"border-bottom: 1px solid {_rgba(C_RULE)}; }}"
+            "QLabel { font-size: 8pt; }"
+            "QPushButton { font-size: 8pt; padding: 2px 10px; }"
+            "QComboBox { font-size: 8pt; min-width: 90px; }"
+        )
+        self._on_tool_changed(self._state.active_tool)
+
+    def _recolor_labels_dark(self) -> None:
+        """Override per-build light label colors with a readable HUD token."""
+        for lbl in self.findChildren(QLabel):
+            lbl.setStyleSheet(f"font-size: 8pt; color: {_rgba(C_LABEL)};")
 
     # ------------------------------------------------------------------
     # Per-tool content
