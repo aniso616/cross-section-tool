@@ -80,7 +80,7 @@ class CommandPalette(QWidget):
         for args in [
             ("tool_horizon",   "Draw Horizon",          "H"),
             ("tool_fault",     "Draw Fault",             "F"),
-            ("tool_pick",      "Pick Well Top",          "T"),
+            ("tool_pick",      "Pick Well Top",          "W"),
             ("tool_annotate",  "Add Annotation",         "A"),
             ("tool_extend",    "Extend Pick",            "E"),
             ("tool_trim",      "Trim Pick",              "T"),

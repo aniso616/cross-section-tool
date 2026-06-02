@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         ("F",            "Fault Pick",               "Interpretation"),
         ("G",            "Polygon",                  "Interpretation"),
         ("S",            "Section Draw",             "Interpretation"),
+        ("W",            "Well Top Pick",            "Interpretation"),
         ("R",            "Reference Line (cycle)",   "Construction"),
         ("M",            "Measure",                  "Construction"),
         ("E",            "Extend Pick",              "Construction"),
@@ -3010,6 +3011,7 @@ class SectionMainWindow(MainWindow):
         _sc("F", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_F))
         _sc("G", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_G))
         _sc("M", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_M))
+        _sc("W", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_W))
         _sc("R", self._cycle_ref_line_tool)
         # Construction tools — not in ToolManager key map, so route via _tool_palette directly
         _sc("T", lambda: self._tool_palette.set_active_tool("trim"))
@@ -3677,7 +3679,7 @@ class SectionMainWindow(MainWindow):
         dispatch = {
             "tool_horizon":  lambda: self._tool_mgr.handle_key(Qt.Key.Key_H),
             "tool_fault":    lambda: self._tool_mgr.handle_key(Qt.Key.Key_F),
-            "tool_pick":     lambda: self._tool_mgr.handle_key(Qt.Key.Key_T),
+            "tool_pick":     lambda: self._tool_mgr.handle_key(Qt.Key.Key_W),
             "tool_annotate": lambda: self._tool_mgr.handle_key(Qt.Key.Key_A),
             # Construction tools bypass the ToolManager; activate via the palette.
             "tool_extend":   lambda: self._tool_palette.set_active_tool("extend"),

@@ -6,7 +6,7 @@ TOOL_KEYS = {
     Qt.Key.Key_A: "node_edit",
     Qt.Key.Key_H: "horizon",
     Qt.Key.Key_F: "fault",
-    Qt.Key.Key_T: "pick",
+    Qt.Key.Key_W: "pick",      # well-top pick (moved off T, which is now Trim)
     Qt.Key.Key_G: "polygon",
     Qt.Key.Key_M: "measure",
 }
