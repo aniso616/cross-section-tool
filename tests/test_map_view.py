@@ -177,15 +177,16 @@ class TestRenderNoCrash:
 # ---------------------------------------------------------------------------
 
 class TestAxesState:
-    def test_xlabel_set(self, view, state):
+    def test_xlabel_empty_fullbleed(self, view, state):
+        # Full-bleed: E/N labels are HUD overlays now, not matplotlib chrome.
         state.add_section(_sec())
         view.render()
-        assert "Easting" in view.axes.get_xlabel()
+        assert view.axes.get_xlabel() == ""
 
-    def test_ylabel_set(self, view, state):
+    def test_ylabel_empty_fullbleed(self, view, state):
         state.add_section(_sec())
         view.render()
-        assert "Northing" in view.axes.get_ylabel()
+        assert view.axes.get_ylabel() == ""
 
     def test_aspect_equal(self, view, state):
         state.add_section(_sec())
@@ -593,15 +594,16 @@ class TestNiceInterval:
 
 
 class TestGraticule:
-    def test_render_with_sections_sets_labels(self, view, state):
+    def test_render_with_sections_no_chrome(self, view, state):
+        # Full-bleed: no matplotlib axis labels (E/N are HUD AxisRulers now).
         state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)]))
         view.render()
-        assert "Easting" in view.axes.get_xlabel()
-        assert "Northing" in view.axes.get_ylabel()
+        assert view.axes.get_xlabel() == ""
+        assert view.axes.get_ylabel() == ""
 
-    def test_render_empty_still_sets_labels(self, view):
+    def test_render_empty_no_chrome(self, view):
         view.render()
-        assert "Easting" in view.axes.get_xlabel()
+        assert view.axes.get_xlabel() == ""
 
     def test_grid_lines_present_after_render(self, view, state):
         state.add_section(Section([(0.0, 0.0), (5000.0, 0.0)]))
@@ -609,11 +611,12 @@ class TestGraticule:
         # Grid lines are axvlines/axhlines; check lines exist
         assert len(view.axes.lines) >= 0  # renders without crash
 
-    def test_no_scientific_notation(self, view, state):
+    def test_no_matplotlib_ticks(self, view, state):
+        # Edge ticks are HUD overlays — the matplotlib axes carry none.
         state.add_section(Section([(500000.0, 5500000.0), (510000.0, 5500000.0)]))
         view.render()
-        # TickLabel format set to plain — just check no crash
-        assert view.axes.get_xlabel() != ""
+        assert list(view.axes.get_xticks()) == []
+        assert list(view.axes.get_yticks()) == []
 
 
 # ---------------------------------------------------------------------------
