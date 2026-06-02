@@ -10,6 +10,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from section_tool.style import BG_CANVAS, C_DIM, C_LABEL, C_READ, C_RULE
+
+
+def _rgba(token: tuple[int, ...], alpha: int | None = None) -> str:
+    """Render a style.py HUD color token as a CSS ``rgba(...)`` string.
+
+    *token* is an (R, G, B[, A]) tuple; *alpha* overrides the token alpha.
+    """
+    r, g, b = token[0], token[1], token[2]
+    a = alpha if alpha is not None else (token[3] if len(token) > 3 else 255)
+    return f"rgba({r}, {g}, {b}, {a})"
+
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -92,39 +104,41 @@ _TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if isinstance(t, tuple)]
 # Styles
 # ---------------------------------------------------------------------------
 
-_BTN_STYLE = """
+# Receding dark "tool rail" styling, built from the shared HUD tokens in
+# section_tool.style so the palette matches the game-UI chrome. Active tool
+# reads as a calm but clear highlight (C_READ wash + outline), not a loud fill.
+_BTN_STYLE = f"""
 QPushButton {{
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     border-radius: 4px;
-    color: #CCCCCC;
+    color: {_rgba(C_LABEL)};
     font-size: 15px;
     padding: 0px;
     margin: 0px;
 }}
 QPushButton:hover {{
-    background: #444444;
-    color: white;
+    background: {_rgba(C_LABEL, 40)};
+    color: {_rgba(C_READ)};
 }}
 QPushButton:checked {{
-    background: #2563EB;
-    color: white;
-    border-radius: 4px;
-    border: 1px solid #1D4ED8;
+    background: {_rgba(C_READ, 45)};
+    color: {_rgba(C_READ)};
+    border: 1px solid {_rgba(C_READ)};
 }}
 QPushButton:disabled {{
-    color: #555555;
+    color: {_rgba(C_DIM)};
     background: transparent;
 }}
 """
 
 _CATEGORY_STYLE = (
-    "QLabel { color: #777777; font-size: 7pt; font-weight: bold; "
+    f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; font-weight: bold; "
     "letter-spacing: 1px; padding: 12px 0 4px 4px; }"
 )
 
 _LABEL_STYLE = (
-    "QLabel { color: #888888; font-size: 7pt; padding: 0; margin: 0; }"
+    f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; padding: 0; margin: 0; }}"
 )
 
 
@@ -179,7 +193,8 @@ class _ToolButton(QWidget):
             tip = reason or "Not available"
             self._btn.setToolTip(tip)
             self._lbl.setStyleSheet(
-                "QLabel { color: #505050; font-size: 7pt; padding: 0; margin: 0; }"
+                f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; "
+                "padding: 0; margin: 0; }"
             )
 
 
@@ -211,8 +226,8 @@ class ToolPalette(QWidget):
         self.setFixedWidth(56)
         self.setObjectName("ToolPalette")
         self.setStyleSheet(
-            "QWidget#ToolPalette { background: #363636; "
-            "border-right: 2px solid #4A4A4A; }"
+            f"QWidget#ToolPalette {{ background: {BG_CANVAS}; "
+            f"border-right: 1px solid {_rgba(C_RULE)}; }}"
         )
 
         layout = QVBoxLayout(self)
@@ -231,7 +246,7 @@ class ToolPalette(QWidget):
                     line = QFrame()
                     line.setFrameShape(QFrame.Shape.HLine)
                     line.setStyleSheet(
-                        "QFrame { color: #444; margin: 0 6px; }")
+                        f"QFrame {{ color: {_rgba(C_RULE)}; margin: 0 6px; }}")
                     line.setFixedHeight(1)
                     layout.addWidget(line)
                 first_group = False

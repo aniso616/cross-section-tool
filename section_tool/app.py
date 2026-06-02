@@ -3251,10 +3251,17 @@ class SectionMainWindow(MainWindow):
             QSplitter::handle:hover    { background: #3a4050; }
         """
 
-        # Outer: horizontal [project | center | properties]
+        # Outer: horizontal [tool-rail | project | center | properties]
         self.h_splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.h_splitter.setHandleWidth(3)
         self.h_splitter.setStyleSheet(_splitter_style)
+
+        # Leftmost: the existing ToolPalette as a thin, fixed-width tool rail.
+        # The widget at __init__ is alive and fully wired; its old toolbar host
+        # was removed in _convert_to_game_ui, so we simply re-parent it here.
+        # NB: re-parenting hides the widget, so show() must come AFTER addWidget.
+        self.h_splitter.addWidget(self._tool_palette)
+        self._tool_palette.setVisible(True)
 
         # Left: project panel (reuse existing, no title bar)
         self._project_panel.setTitleBarWidget(QWidget(self._project_panel))
@@ -3291,13 +3298,19 @@ class SectionMainWindow(MainWindow):
         self._properties_panel.setVisible(True)
         self.h_splitter.addWidget(self._properties_panel)
 
+        # Keep the tool rail a fixed thin strip: never let the splitter
+        # collapse or stretch it.
+        self.h_splitter.setCollapsible(0, False)
+        self.h_splitter.setStretchFactor(0, 0)
+
         self.setCentralWidget(self.h_splitter)
 
     def _apply_default_proportions(self) -> None:
         """Set default panel proportions after the window has real geometry."""
         w        = self.width()
-        center_w = max(w - 480, 400)
-        self.h_splitter.setSizes([220, center_w, 260])
+        rail_w   = self._tool_palette.width()   # fixed thin tool rail (56 px)
+        center_w = max(w - 480 - rail_w, 400)
+        self.h_splitter.setSizes([rail_w, 220, center_w, 260])
         # Section | Map side by side — section gets 60%, map gets 40%
         self.v_splitter.setSizes([int(center_w * 0.60), int(center_w * 0.40)])
 
