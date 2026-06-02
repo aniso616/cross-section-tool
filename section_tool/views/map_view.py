@@ -59,6 +59,7 @@ class MapView(QWidget):
     section_node_moved = Signal(int, int, float, float)
     status_message     = Signal(str)
     cursor_map_pos     = Signal(float, float)   # map x,y on hover
+    view_changed       = Signal()               # extent changed (render/pan/zoom)
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
@@ -115,7 +116,12 @@ class MapView(QWidget):
 
     def _setup_ui(self) -> None:
         from section_tool.style import BG_CANVAS as CANVAS_BG
-        self._fig    = Figure(figsize=(8, 6), facecolor=CANVAS_BG, tight_layout=True)
+        # Full-bleed: the axes fill the whole figure (matching the section idiom).
+        # No tight_layout — its label margins are what produced the inset
+        # "window-within-window" look. Edge references are HUD overlays, not
+        # matplotlib chrome.
+        self._fig    = Figure(figsize=(8, 6), facecolor=CANVAS_BG)
+        self._fig.subplots_adjust(left=0.0, right=1.0, top=1.0, bottom=0.0)
         self._ax     = self._fig.add_subplot(111)
         self._ax.set_facecolor(CANVAS_BG)
         self._canvas = FigureCanvasQTAgg(self._fig)
@@ -298,17 +304,26 @@ class MapView(QWidget):
 
     @staticmethod
     def _configure_axes(ax) -> None:
+        """Strip all matplotlib chrome — full-bleed canvas, no bounding box.
+
+        Edge references (E/N ticks, scale bar) are HUD QWidget overlays, mirroring
+        the section. Equal aspect uses adjustable='datalim' so the data range
+        expands to fill the whole canvas (no letterbox margins) while staying 1:1.
+        """
         from section_tool.style import BG_CANVAS
         ax.set_facecolor(BG_CANVAS)
         ax.figure.patch.set_facecolor(BG_CANVAS)
         for spine in ax.spines.values():
-            spine.set_color("#444455")
-        ax.tick_params(colors="#AAAAAA", which="both", labelsize=7)
-        ax.xaxis.label.set_color("#CCCCCC")
-        ax.yaxis.label.set_color("#CCCCCC")
-        # Equal aspect: easting/northing must be 1:1 or geometry is distorted.
-        # adjustable='box' letterboxes the axes rather than changing the data range.
-        ax.set_aspect("equal", adjustable="box")
+            spine.set_visible(False)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.xaxis.set_visible(False)
+        ax.yaxis.set_visible(False)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        # Equal aspect (E/N 1:1). datalim expands the data range to fill the
+        # canvas shape rather than letterboxing the axes box.
+        ax.set_aspect("equal", adjustable="datalim")
 
     def _render_impl(self) -> None:
         """Internal render body — called only from render() with re-entry guard held."""
@@ -339,6 +354,7 @@ class MapView(QWidget):
 
         self._render_graticule()
         self._canvas.draw_idle()
+        self.view_changed.emit()
 
     def _render_new_section_preview(self) -> None:
         """Phase 7: draw the in-progress section trace."""
@@ -394,14 +410,19 @@ class MapView(QWidget):
         self._ax.set_ylim(ymn - ypad, ymx + ypad)
 
     def _render_graticule(self) -> None:
-        _LABEL_COLOR = "#606870"
+        """Optional data-space grid lines only.
+
+        Edge tick labels, axis labels and the scale bar are no longer drawn in
+        matplotlib — they are HUD overlays (AxisRuler + ScaleBar) on the MapHUD,
+        so the canvas stays full-bleed with no bounding box.
+        """
+        if not self._show_grid:
+            return
         xmin, xmax = self._ax.get_xlim()
         ymin, ymax = self._ax.get_ylim()
         span_x = xmax - xmin
         span_y = ymax - ymin
         if span_x <= 0 or span_y <= 0:
-            self._ax.set_xlabel("Easting (m)", color=_LABEL_COLOR)
-            self._ax.set_ylabel("Northing (m)", color=_LABEL_COLOR)
             return
 
         x_interval = _nice_interval(span_x / 5)
@@ -409,57 +430,13 @@ class MapView(QWidget):
         xs = np.arange(math.floor(xmin / x_interval) * x_interval, xmax + x_interval, x_interval)
         ys = np.arange(math.floor(ymin / y_interval) * y_interval, ymax + y_interval, y_interval)
 
-        if self._show_grid:
-            grid_kw = dict(color="#252832", linewidth=0.6, linestyle="--", zorder=0)
-            if len(xs) <= 500:
-                for x in xs:
-                    self._ax.axvline(x, **grid_kw)
-            if len(ys) <= 500:
-                for y in ys:
-                    self._ax.axhline(y, **grid_kw)
-
-        self._ax.set_xlabel("Easting (m)", color=_LABEL_COLOR)
-        self._ax.set_ylabel("Northing (m)", color=_LABEL_COLOR)
-        from matplotlib.ticker import MultipleLocator, FuncFormatter
-        self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
-        self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
-        self._ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-        self._ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-        self._ax.tick_params(colors=_LABEL_COLOR, which="both", labelsize=8)
-        self._render_scale_bar(xmin, xmax, ymin, ymax)
-
-    def _render_scale_bar(self, xmin, xmax, ymin, ymax) -> None:
-        """Draw a scale bar in the bottom-right corner."""
-        span = xmax - xmin
-        # Pick a round bar length: roughly 15% of view width
-        raw = span * 0.15
-        exp = math.floor(math.log10(max(raw, 1)))
-        base = 10 ** exp
-        for step in (1, 2, 5, 10):
-            bar_len = step * base
-            if bar_len >= raw:
-                break
-
-        # Position: 5% from right, 7% from bottom
-        bx1 = xmax - span * 0.07 - bar_len
-        bx2 = bx1 + bar_len
-        by  = ymin + (ymax - ymin) * 0.05
-
-        self._ax.plot([bx1, bx2], [by, by], color="black", linewidth=2.5, zorder=12,
-                      solid_capstyle="butt")
-        # End ticks
-        tick_h = (ymax - ymin) * 0.01
-        for bx in (bx1, bx2):
-            self._ax.plot([bx, bx], [by - tick_h, by + tick_h],
-                          color="black", linewidth=2.0, zorder=12)
-        # Label
-        if bar_len >= 1000:
-            label = f"{bar_len / 1000:.0f} km"
-        else:
-            label = f"{bar_len:.0f} m"
-        self._ax.text((bx1 + bx2) / 2, by + tick_h * 2.5, label,
-                      ha="center", va="bottom", fontsize=7, zorder=12,
-                      bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
+        grid_kw = dict(color="#252832", linewidth=0.6, linestyle="--", zorder=0)
+        if len(xs) <= 500:
+            for x in xs:
+                self._ax.axvline(x, **grid_kw)
+        if len(ys) <= 500:
+            for y in ys:
+                self._ax.axhline(y, **grid_kw)
 
     def _render_aoi(self) -> None:
         """Draw the project AOI polygon outline on the map."""

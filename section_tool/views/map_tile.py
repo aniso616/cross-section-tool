@@ -1,14 +1,15 @@
 """MapTile — full-size map canvas tile (bottom of center splitter)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QStackedLayout, QWidget
 
 
 class MapTile(QWidget):
-    """Center-bottom tile: full-size map canvas.
+    """Center-bottom tile: full-bleed map canvas + transparent HUD overlay.
 
-    Where section lines are drawn and spatial context lives.
-    Replaces the minimap thumbnail used in the old game-UI layout.
+    Where section lines are drawn and spatial context lives. Mirrors SectionTile:
+    the map canvas fills the tile and a MapHUDLayer (edge rulers + scale bar) is
+    composited on top, so the map and section share the same canvas idiom.
     """
 
     def __init__(self, map_view: QWidget, parent=None):
@@ -16,10 +17,14 @@ class MapTile(QWidget):
         self.setMinimumSize(400, 180)
         self.setStyleSheet("background: #0e1014;")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        stacked = QStackedLayout(self)
+        stacked.setStackingMode(QStackedLayout.StackingMode.StackAll)
 
         map_view.setParent(self)
-        layout.addWidget(map_view)
+        stacked.addWidget(map_view)
         self.canvas = map_view   # alias
+
+        from section_tool.hud.map_hud_layer import MapHUDLayer
+        self.hud = MapHUDLayer(self, map_view)
+        stacked.addWidget(self.hud)
+        self.hud.raise_()
