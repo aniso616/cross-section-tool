@@ -870,6 +870,7 @@ class MainWindow(QMainWindow):
         s.active_pick_target_changed.connect(lambda *_: self._update_status())
         # Tool availability — update when section or picks change
         s.active_section_changed.connect(lambda _: self._update_tool_availability())
+        s.active_slice_changed.connect(lambda _: self._update_tool_availability())
         s.horizon_pick_added.connect(lambda _: self._update_tool_availability())
         s.horizon_pick_removed.connect(lambda _: self._update_tool_availability())
         s.fault_pick_added.connect(lambda _: self._update_tool_availability())
@@ -917,12 +918,17 @@ class MainWindow(QMainWindow):
     # Tool availability
     # ------------------------------------------------------------------
 
+    def _zslice_active(self) -> bool:
+        """True when a horizontal z-slice is the active workspace (Model A guard)."""
+        return getattr(self._state.active_slice, "kind", None) == "horizontal"
+
     def _update_tool_availability(self, *_args) -> None:
         """Recompute which palette tools are enabled based on current state."""
         has_section = self._state.active_section is not None
         proj = self._state.project
         has_picks = bool(proj.horizon_picks or proj.fault_picks)
-        self._tool_palette.update_tool_availability(has_section, has_picks)
+        self._tool_palette.update_tool_availability(
+            has_section, has_picks, section_workspace=not self._zslice_active())
 
     # ------------------------------------------------------------------
     # Title / status helpers
@@ -3230,14 +3236,21 @@ class SectionMainWindow(MainWindow):
         self.addToolBar(tb)
         self.tiled_toolbar = tb
 
-        # Update section info when active section changes
+        # Update section info when the active section / workspace slice changes
         self._state.active_section_changed.connect(self._update_section_info)
+        self._state.active_slice_changed.connect(lambda _: self._update_section_info())
         self._state.section_modified.connect(lambda *_: self._update_section_info(
             self._state.active_section))
 
     def _update_section_info(self, section=None) -> None:
         lbl = getattr(self, "_section_info_label", None)
         if lbl is None:
+            return
+        # A horizontal z-slice is the active workspace → show slice info, not the
+        # (stale) section's.
+        if self._zslice_active():
+            zs = self._state.active_slice
+            lbl.setText(f"{zs.name}  ·  z = {zs.elevation:,.0f} m  ·  EPSG:{zs.crs_epsg}")
             return
         if section is None:
             section = self._state.active_section

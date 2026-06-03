@@ -306,11 +306,25 @@ class ToolPalette(QWidget):
     _NEEDS_PICKS: frozenset[str] = frozenset({
         "extend", "trim", "parallel",
     })
+    # Tools that operate in the section's vertical plane (depth axis / trace).
+    # Meaningless when a horizontal z-slice is the active workspace — disabled.
+    _SECTION_WORKSPACE: frozenset[str] = _NEEDS_SECTION | frozenset({
+        "extend", "trim", "parallel", "dip_constrained", "kink_band",
+        "measure", "node_edit",
+    })
 
-    def update_tool_availability(self, has_section: bool,
-                                  has_picks: bool) -> None:
-        """Enable / disable tool buttons based on current project state."""
+    def update_tool_availability(self, has_section: bool, has_picks: bool,
+                                  section_workspace: bool = True) -> None:
+        """Enable / disable tool buttons based on current project state.
+
+        *section_workspace* is False when a horizontal z-slice is the active
+        workspace; section-plane tools (picking, construction, measure, node
+        edit) are then disabled — navigation and Draw Section stay available.
+        """
         for tool_id, tbtn in self._buttons.items():
+            if not section_workspace and tool_id in self._SECTION_WORKSPACE:
+                tbtn.set_available(False, "Section tool — switch to a section")
+                continue
             if tool_id in self._NEEDS_PICKS:
                 if not has_picks:
                     tbtn.set_available(False, "Create a horizon or fault first")
