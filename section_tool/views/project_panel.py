@@ -27,10 +27,11 @@ from section_tool.app_state import AppState
 # Category labels and per-object type colours
 # ---------------------------------------------------------------------------
 
-_CATEGORIES = ["Sections", "Horizons", "Faults", "Reference Lines",
+_CATEGORIES = ["Sections", "Z-Slices", "Horizons", "Faults", "Reference Lines",
                "Polygons", "Wells", "Surfaces"]
 _DEFAULT_COLORS = {
     "Sections":        "#1f77b4",
+    "Z-Slices":        "#17becf",
     "Horizons":        "#2ca02c",
     "Faults":          "#d62728",
     "Reference Lines": "#999999",
@@ -40,6 +41,7 @@ _DEFAULT_COLORS = {
 }
 _ICONS = {
     "Sections":        "⟋",
+    "Z-Slices":        "▱",
     "Horizons":        "─",
     "Faults":          "╲",
     "Reference Lines": "·",
@@ -397,6 +399,8 @@ class ProjectPanel(QDockWidget):
         s.polygon_modified.connect(lambda *_: self._rebuild())
         # Active section indicator + tree selection sync
         s.active_section_changed.connect(self._on_active_section_changed)
+        # Active workspace slice (Section or Z-Slice) — unified row marker.
+        s.active_slice_changed.connect(self._on_active_slice_changed)
         # Pick-target selection: highlight the active horizon/fault row
         s.active_pick_target_changed.connect(self._on_pick_target_changed)
         # Update Add button label when active tool changes
@@ -457,13 +461,13 @@ class ProjectPanel(QDockWidget):
                     )
                     self._tree.setItemWidget(child, 0, row)
                     self._row_widgets[(cat, idx)] = row
-                    # Mark active section immediately
-                    if cat == "Sections":
-                        active = self._state.active_section
-                        is_active = (active is not None and
-                                     idx < len(self._state.project.sections) and
-                                     self._state.project.sections[idx] is active)
-                        row.set_active(is_active)
+                    # Mark the active workspace slice (a Section or a Z-Slice).
+                    if cat in ("Sections", "Z-Slices"):
+                        objs = (self._state.project.sections if cat == "Sections"
+                                else getattr(self._state.project, "horizontal_slices", []))
+                        active = self._state.active_slice
+                        row.set_active(active is not None and idx < len(objs)
+                                       and objs[idx] is active)
 
                 cat_item.setExpanded(True)
 
@@ -495,6 +499,9 @@ class ProjectPanel(QDockWidget):
         if category == "Sections":
             return [(s.name or f"Section {i+1}", _DEFAULT_COLORS["Sections"], _dw, _ds, True)
                     for i, s in enumerate(proj.sections)]
+        if category == "Z-Slices":
+            return [(hs.name or f"Z-Slice {i+1}", _DEFAULT_COLORS["Z-Slices"], _dw, _ds, True)
+                    for i, hs in enumerate(getattr(proj, "horizontal_slices", []))]
         if category == "Horizons":
             return [(h.name or f"Horizon {i+1}", h.color,
                      getattr(h, "line_width", _dw), getattr(h, "line_style", _ds),
@@ -593,7 +600,11 @@ class ProjectPanel(QDockWidget):
         elif cat == "Sections":
             proj = self._state.project
             if idx < len(proj.sections):
-                self._state.set_active_section(proj.sections[idx])
+                self._state.set_active_slice(proj.sections[idx])
+        elif cat == "Z-Slices":
+            hslices = getattr(self._state.project, "horizontal_slices", [])
+            if idx < len(hslices):
+                self._state.set_active_slice(hslices[idx])
         self.object_selected.emit(cat, idx)
 
     def _on_active_section_changed(self, *_) -> None:
@@ -621,6 +632,29 @@ class ProjectPanel(QDockWidget):
                     self._tree.blockSignals(False)
             except ValueError:
                 pass
+
+    def _on_active_slice_changed(self, *_) -> None:
+        """Mark the active workspace slice across Sections + Z-Slices (one row).
+
+        Driven by active_slice (the workspace selection): the active slice's row
+        is marked and rows in the other category are cleared, so exactly one
+        workspace is highlighted whether it's a section or a z-slice.
+        """
+        proj = self._state.project
+        active = self._state.active_slice
+        cats = {
+            "Sections": proj.sections,
+            "Z-Slices": getattr(proj, "horizontal_slices", []),
+        }
+        for cat, objs in cats.items():
+            cat_item = getattr(self, "_category_items", {}).get(cat)
+            if cat_item is None:
+                continue
+            for i in range(cat_item.childCount()):
+                row = self._tree.itemWidget(cat_item.child(i), 0)
+                if isinstance(row, _ObjectRow):
+                    row.set_active(active is not None and i < len(objs)
+                                   and objs[i] is active)
 
     def _on_pick_target_changed(self, category: str, idx: int) -> None:
         """Highlight the active horizon/fault row when a pick target changes."""
