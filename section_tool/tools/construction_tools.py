@@ -154,7 +154,9 @@ class ParallelOffsetTool:
             section_names=[sec_name] * len(d_ref),
         )
         hp_new.construction_rule = ParallelToBedRule(
-            reference_name=ref_name, offset_m=offset
+            reference_name=ref_name,
+            reference_uuid=getattr(self._ref_hp, "uuid", ""),
+            offset_m=offset,
         )
         self.reset()
         return hp_new

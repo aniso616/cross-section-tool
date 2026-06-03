@@ -44,14 +44,18 @@ class ParallelToBedRule:
     Parameters
     ----------
     reference_name:
-        Name of the HorizonPick that this element was constructed
-        parallel to.
+        Display label — name of the HorizonPick this element was constructed
+        parallel to. Denormalised; may go stale if the bed is renamed.
+    reference_uuid:
+        Stable identity of the reference bed (rename-safe link). This is the
+        authoritative reference; ``reference_name`` is a human-readable label.
     offset_m:
         Constant vertical offset from the reference bed, in metres
         (positive = deeper).
     """
     reference_name: str
     offset_m: float = 0.0
+    reference_uuid: str = ""
     kind: Literal["parallel_to_bed"] = field(default="parallel_to_bed", init=False)
 
 
@@ -108,11 +112,15 @@ class ListricFaultRule:
     ramp_dip_deg:
         Dip of the upper straight ramp segment (degrees).
     hangingwall_reference:
-        Name of the hangingwall cutoff pick used to define displacement.
+        Display label — name of the hangingwall cutoff pick used to define
+        displacement. Denormalised; may go stale if that pick is renamed.
+    hangingwall_uuid:
+        Stable identity of the hangingwall cutoff pick (rename-safe link).
     """
     detachment_depth_m: float
     ramp_dip_deg: float = 30.0
     hangingwall_reference: str = ""
+    hangingwall_uuid: str = ""
     kind: Literal["listric_fault"] = field(default="listric_fault", init=False)
 
 

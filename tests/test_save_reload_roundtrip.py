@@ -230,6 +230,52 @@ class TestEntityIdentity:
 
 
 # ---------------------------------------------------------------------------
+# Construction parent refs are id-based and rename-safe (Step 2)
+# ---------------------------------------------------------------------------
+
+class TestConstructionParentRefs:
+
+    def test_parallel_reference_uuid_backfilled_on_reload(self, tmp_path):
+        """A rule stored with only reference_name resolves to the bed's UUID on
+        open (migration backfill), while keeping the name as a display label."""
+        dst = _roundtrip(tmp_path)
+        dip  = _by_name(dst.project.horizon_picks, "DipH")
+        para = _by_name(dst.project.horizon_picks, "ParaH")
+        assert isinstance(para.construction_rule, ParallelToBedRule)
+        assert para.construction_rule.reference_name == "DipH"     # label kept
+        assert para.construction_rule.reference_uuid == dip.uuid    # id link resolved
+        assert dip.uuid                                             # sanity
+
+    def test_polygon_parallel_reference_uuid_backfilled(self, tmp_path):
+        dst = _roundtrip(tmp_path)
+        dip = _by_name(dst.project.horizon_picks, "DipH")
+        rp  = _by_name(dst.project.polygons, "RuleP")
+        assert rp.construction_rule.reference_uuid == dip.uuid
+
+    def test_new_parallel_tool_records_reference_uuid(self):
+        """New constructions store the parent's UUID at creation (not just name)."""
+        from section_tool.tools.construction_tools import ParallelOffsetTool
+        ref = HorizonPick(np.array([0.0, 1000.0]), np.array([100.0, 100.0]),
+                          name="Bed", section_names=["L1", "L1"])
+        tool = ParallelOffsetTool()
+        tool.set_reference(ref, "L1")
+        new = tool.handle_placement(500.0, 250.0, "L1")
+        assert new.construction_rule.reference_uuid == ref.uuid
+        assert new.construction_rule.reference_name == "Bed"
+
+    def test_link_survives_rename(self):
+        """The id link is immutable across a rename; only the name label goes
+        stale. This is the rename-safety the id-based ref buys us."""
+        bed = HorizonPick(np.array([0.0, 1.0]), np.array([0.0, 1.0]), name="X")
+        para = HorizonPick(np.array([0.0, 1.0]), np.array([2.0, 3.0]), name="P")
+        para.construction_rule = ParallelToBedRule(
+            reference_name=bed.name, reference_uuid=bed.uuid, offset_m=10.0)
+        bed.name = "Y"                                   # rename the bed
+        assert para.construction_rule.reference_uuid == bed.uuid   # link intact
+        assert para.construction_rule.reference_name == "X"        # label now stale
+
+
+# ---------------------------------------------------------------------------
 # Known limitations — aspirational tests, xfail(strict) so a fix flips them red
 # ---------------------------------------------------------------------------
 

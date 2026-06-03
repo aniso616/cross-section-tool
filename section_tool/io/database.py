@@ -474,6 +474,7 @@ class ProjectDatabase:
         except Exception:
             pass
         self._backfill_entity_uuids()
+        self._backfill_construction_ref_uuids()
 
     def _backfill_entity_uuids(self) -> None:
         """Assign a stable UUID to every horizon/fault row that lacks one.
@@ -494,6 +495,68 @@ class ProjectDatabase:
                     f"UPDATE {table} SET uuid=? WHERE id=?",
                     (new_entity_uuid(), r["id"]),
                 )
+        self.conn.commit()
+
+    def _backfill_construction_ref_uuids(self) -> None:
+        """Resolve construction-rule parent name-refs to stable UUIDs.
+
+        Runs after _backfill_entity_uuids so the name→uuid map is complete.
+        Only fills a *_uuid that is empty AND whose *_name resolves to a known
+        entity; the name is kept as a denormalised display label. Idempotent
+        (a populated *_uuid is skipped). Unresolvable refs are left untouched
+        and recorded in ``self.unresolved_construction_refs`` for reporting —
+        never silently dropped.
+        """
+        import json
+        self.unresolved_construction_refs: list[tuple[str, str, str]] = []
+
+        name_to_uuid: dict[str, str] = {}
+        for table in ("horizons", "faults"):
+            try:
+                for r in self.conn.execute(f"SELECT name, uuid FROM {table}"):
+                    if r["name"] and r["uuid"]:
+                        name_to_uuid[r["name"]] = r["uuid"]
+            except Exception:
+                pass
+
+        # (rule kind, name field, uuid field)
+        ref_specs = [
+            ("parallel_to_bed", "reference_name",        "reference_uuid"),
+            ("listric_fault",   "hangingwall_reference", "hangingwall_uuid"),
+        ]
+        for table in ("horizons", "faults", "polygons"):
+            try:
+                rows = self.conn.execute(
+                    f"SELECT id, construction_rule_json FROM {table} "
+                    "WHERE construction_rule_json IS NOT NULL "
+                    "AND construction_rule_json!=''"
+                ).fetchall()
+            except Exception:
+                continue
+            for row in rows:
+                try:
+                    d = json.loads(row["construction_rule_json"])
+                except Exception:
+                    continue
+                kind = d.get("kind")
+                changed = False
+                for rk, name_field, uuid_field in ref_specs:
+                    if kind != rk:
+                        continue
+                    ref_name = d.get(name_field)
+                    if ref_name and not d.get(uuid_field):
+                        target = name_to_uuid.get(ref_name)
+                        if target:
+                            d[uuid_field] = target
+                            changed = True
+                        else:
+                            self.unresolved_construction_refs.append(
+                                (table, name_field, ref_name))
+                if changed:
+                    self.conn.execute(
+                        f"UPDATE {table} SET construction_rule_json=? WHERE id=?",
+                        (json.dumps(d), row["id"]),
+                    )
         self.conn.commit()
 
     # ------------------------------------------------------------------
