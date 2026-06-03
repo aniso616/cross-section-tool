@@ -314,6 +314,31 @@ class Section:
         return float(self._nodes[-1, 0]), float(self._nodes[-1, 1])
 
     # ------------------------------------------------------------------
+    # Slice protocol (a Section is a *vertical* slice)
+    # ------------------------------------------------------------------
+
+    @property
+    def kind(self) -> str:
+        return "section"
+
+    def to_world(self, distance_along: float, depth: float) -> tuple[float, float, float]:
+        """Slice coords ``(distance_along, depth)`` → world ``(x, y, z)``.
+
+        x, y come from the trace at *distance_along*; z is positive-up
+        (``z = −depth``).
+        """
+        x, y = self.section_to_map(distance_along)
+        return float(x), float(y), float(-depth)
+
+    def from_world(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+        """World ``(x, y, z)`` → ``(distance_along, depth, residual)``.
+
+        *residual* is the absolute perpendicular offset from the trace.
+        """
+        dist, perp = self.project_point(x, y)
+        return float(dist), float(-z), abs(float(perp))
+
+    # ------------------------------------------------------------------
     # Node operations
     # ------------------------------------------------------------------
 
