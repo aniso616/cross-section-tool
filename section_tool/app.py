@@ -3288,10 +3288,26 @@ class SectionMainWindow(MainWindow):
 
         self.map_tile = MapTile(self._map_view, self)
 
+        # Z-slice plan workspace — a sibling plan view sharing the map's canvas
+        # chrome (MapTile + MapHUDLayer). Occupies the section column when a
+        # horizontal slice is the active workspace; hidden otherwise.
+        from section_tool.views.zslice_view import ZSliceView
+        self._zslice_view = ZSliceView(self._state, self)
+        self.zslice_tile = MapTile(self._zslice_view, self)
+        self._zslice_view.cursor_map_pos.connect(self._on_map_cursor_pos)
+        for _sig in (self._state.project_changed, self._state.section_added,
+                     self._state.section_removed, self._state.section_modified):
+            _sig.connect(lambda *_a: self._zslice_view.request_render())
+
         self.v_splitter.addWidget(self.section_tile)
+        self.v_splitter.addWidget(self.zslice_tile)
         self.v_splitter.addWidget(self.map_tile)
+        self.zslice_tile.setVisible(False)       # shown by the active-slice router
         self.v_splitter.setStretchFactor(0, 3)   # section: 60%
-        self.v_splitter.setStretchFactor(1, 2)   # map: 40%
+        self.v_splitter.setStretchFactor(1, 3)   # z-slice (same slot as section)
+        self.v_splitter.setStretchFactor(2, 2)   # map: 40%
+        # Active-slice router: section ⇒ section tile, horizontal ⇒ z-slice tile.
+        self._state.active_slice_changed.connect(self._on_active_slice_route)
         # Bidirectional cursor: map tile hover → section vertical indicator
         self._map_view.cursor_map_pos.connect(self._on_map_cursor_pos)
         # Reproject picks when section geometry changes
@@ -3374,6 +3390,19 @@ class SectionMainWindow(MainWindow):
 
     def _toggle_section_tile(self) -> None:
         self.section_tile.setVisible(not self.section_tile.isVisible())
+
+    def _on_active_slice_route(self, slice_) -> None:
+        """Route the active workspace slice to the correct view.
+
+        A horizontal slice shows the z-slice plan tile (bound + rendered) in the
+        section column; a Section (or None) restores the section tile. The map
+        tile (surface plan) is unaffected.
+        """
+        is_horizontal = getattr(slice_, "kind", None) == "horizontal"
+        if is_horizontal:
+            self._zslice_view.set_slice(slice_)
+        self.zslice_tile.setVisible(is_horizontal)
+        self.section_tile.setVisible(not is_horizontal)
 
     def _toggle_project_panel(self) -> None:
         self._project_panel.setVisible(not self._project_panel.isVisible())
