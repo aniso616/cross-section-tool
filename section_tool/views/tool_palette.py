@@ -92,6 +92,14 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
      "Kink Band  (K) — click backlimb horizon then click axial trace.\n"
      "Creates a forelimb extension using kink-band kinematics."),
     None,
+    "Plan",
+    ("plan_fault",  "✎", "Z-Fault",
+     "Plan Fault Trace  (L)\n"
+     "Draw a fault's trace on the active horizontal slice (plan view).\n"
+     "Select/create a fault, then click along its trace; right-click or "
+     "Escape to end.\n"
+     "Available only when a z-slice is the active workspace."),
+    None,
     "Tools",
     ("measure",     "↔", "Measure",
      "Measure  (M)\n"
@@ -312,6 +320,10 @@ class ToolPalette(QWidget):
         "extend", "trim", "parallel", "dip_constrained", "kink_band",
         "measure", "node_edit",
     })
+    # Tools that operate in the horizontal-slice (plan) workspace. The inverse
+    # of _SECTION_WORKSPACE: available ONLY when a z-slice is the active
+    # workspace, disabled when a section is.
+    _ZSLICE_WORKSPACE: frozenset[str] = frozenset({"plan_fault"})
 
     def update_tool_availability(self, has_section: bool, has_picks: bool,
                                   section_workspace: bool = True) -> None:
@@ -320,8 +332,16 @@ class ToolPalette(QWidget):
         *section_workspace* is False when a horizontal z-slice is the active
         workspace; section-plane tools (picking, construction, measure, node
         edit) are then disabled — navigation and Draw Section stay available.
+        The plan fault-draw tool is the mirror image: enabled only when a
+        z-slice is active.
         """
         for tool_id, tbtn in self._buttons.items():
+            if tool_id in self._ZSLICE_WORKSPACE:
+                if section_workspace:
+                    tbtn.set_available(False, "Z-slice tool — open a horizontal slice")
+                else:
+                    tbtn.set_available(True)
+                continue
             if not section_workspace and tool_id in self._SECTION_WORKSPACE:
                 tbtn.set_available(False, "Section tool — switch to a section")
                 continue

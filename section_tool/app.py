@@ -2909,6 +2909,11 @@ class MainWindow(QMainWindow):
         self._section_view.set_fault_picking(tool_id == "fault_pick")
         self._section_view.set_polygon_drawing(tool_id == "polygon")
         self._section_view.set_ref_line_tool(tool_id)
+        # Plan fault-draw tool lives on the z-slice view (tiled layout only) and
+        # is only meaningful when a horizontal slice is the active workspace.
+        if hasattr(self, "_zslice_view"):
+            self._zslice_view.set_fault_drawing(
+                tool_id == "plan_fault" and self._zslice_active())
         self._section_view.apply_tool_cursor(tool_id)
         self._map_view.apply_tool_cursor(tool_id)
         # Phase 2: update status bar with picking info
@@ -3034,6 +3039,8 @@ class SectionMainWindow(MainWindow):
         _sc("P", lambda: self._tool_palette.set_active_tool("parallel"))
         _sc("Z", lambda: self._tool_palette.set_active_tool("zoom"))
         _sc("S", lambda: self._tool_palette.set_active_tool("new_section"))
+        # Plan fault-draw (z-slice workspace) — palette greys it out off a z-slice
+        _sc("L", lambda: self._tool_palette.set_active_tool("plan_fault"))
 
     # ------------------------------------------------------------------
     # Override: remove Space-bar temporary pan
@@ -3311,6 +3318,11 @@ class SectionMainWindow(MainWindow):
         for _sig in (self._state.project_changed, self._state.section_added,
                      self._state.section_removed, self._state.section_modified):
             _sig.connect(lambda *_a: self._zslice_view.request_render())
+        # Plan fault-draw: right-click/Esc ends the trace → revert to select;
+        # transient hints (e.g. "select a fault first") go to the status strip.
+        self._zslice_view.draw_ended.connect(
+            lambda: self._tool_palette.set_active_tool("select"))
+        self._zslice_view.status_message.connect(self._flash_status)
 
         self.v_splitter.addWidget(self.section_tile)
         self.v_splitter.addWidget(self.zslice_tile)
@@ -3416,6 +3428,13 @@ class SectionMainWindow(MainWindow):
             self._zslice_view.set_slice(slice_)
         self.zslice_tile.setVisible(is_horizontal)
         self.section_tile.setVisible(not is_horizontal)
+        # Revert the active tool if it no longer belongs to the new workspace:
+        # plan-draw is meaningless on a section, section-plane tools on a z-slice.
+        active = self._tool_palette.active_tool
+        if not is_horizontal and active in self._tool_palette._ZSLICE_WORKSPACE:
+            self._tool_palette.set_active_tool("select")
+        elif is_horizontal and active in self._tool_palette._SECTION_WORKSPACE:
+            self._tool_palette.set_active_tool("select")
 
     def _toggle_project_panel(self) -> None:
         self._project_panel.setVisible(not self._project_panel.isVisible())
