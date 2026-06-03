@@ -773,10 +773,13 @@ class MapView(QWidget):
                         self.render()
                         return
 
-                # Both V and A: section line selection
+                # Both V and A: section line selection. Route through
+                # set_active_slice so picking a section on the map switches the
+                # active workspace away from any z-slice (delegates to
+                # set_active_section identically for a Section).
                 sec_idx = self._find_nearest_section(x, y)
                 if sec_idx is not None:
-                    self._state.set_active_section(
+                    self._state.set_active_slice(
                         self._state.project.sections[sec_idx]
                     )
                     self._selected_node     = None
@@ -1022,7 +1025,7 @@ class MapView(QWidget):
             crs_epsg=self._state.project.crs_epsg,
         )
         self._state.add_section(sec)
-        self._state.set_active_section(sec)
+        self._state.set_active_slice(sec)   # drawn section becomes the active workspace
         # Return to select tool after drawing
         self._state.set_active_tool("select")
 
@@ -1143,7 +1146,7 @@ class MapView(QWidget):
         sec = Section(nodes, name=f"{name} {n + 1}",
                       crs_epsg=self._state.project.crs_epsg)
         self._state.add_section(sec)
-        self._state.set_active_section(sec)
+        self._state.set_active_slice(sec)   # quick section becomes the active workspace
 
     def _on_tool_changed(self, tool_id: str) -> None:
         # Cancel section drawing when switching away
