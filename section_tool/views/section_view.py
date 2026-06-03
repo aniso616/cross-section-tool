@@ -1955,54 +1955,42 @@ class SectionView(QWidget):
             self._render_pick_object("Faults", obj_idx, fp, section, "D", "dashed")
 
     def _render_cross_section_ghost_picks(self, section: Section) -> None:
-        """Render ghost markers where other sections' horizon picks cross this section.
+        """Render where other slices cross this section — the 'window into 3D'.
 
-        For each other section that intersects the current one, for each horizon
-        that has picks on both sections (matched by name), renders an open circle
-        at (intersection_distance, other_section_depth) with a small label.
+        * section × section: a ghost dot per horizon at the trace crossing
+          (unchanged from the original behaviour).
+        * section × horizontal slice: a dim reference line at the slice's
+          elevation plus piercing dots where this section's picks cross it.
+
+        Both cases share one geometry helper (:func:`slice_crossing`); the
+        section×section dots are produced exactly as before.
         """
-        from section_tool.core.geometry import find_section_intersection, sample_pick_at_distance
+        from section_tool.core.geometry import slice_crossing
 
         proj = self._state.project
-        other_sections = [s for s in proj.sections if s.name != section.name]
-        if not other_sections:
-            return
-
-        horizon_picks = proj.horizon_picks
         removed = self._get_removed_names()
+        t = get_theme()
 
-        for other_sec in other_sections:
-            result = find_section_intersection(section, other_sec)
-            if result is None:
-                continue
-            s_here, s_other = result
+        # Visible, non-removed picks — filtered once, used for every slice.
+        picks = [hp for hp in proj.horizon_picks
+                 if getattr(hp, "visible", True)
+                 and not (removed and hp.name and hp.name in removed)]
 
-            for hp in horizon_picks:
-                if not getattr(hp, "visible", True):
-                    continue
-                if removed and hp.name and hp.name in removed:
-                    continue
+        def _ghost_dot(u: float, v: float, color: str) -> None:
+            mkw = marker_kwargs(t.cross_section_ghost, entity_color=color)
+            mkw.update(alpha=0.55, zorder=11)
+            self._overlay_artists.extend(self._ax.plot([u], [v], **mkw))
 
-                # Need at least one pick on each section
-                other_depth = sample_pick_at_distance(hp, s_other, other_sec.name)
-                if other_depth is None:
-                    continue
-                # Only show the ghost if this section doesn't already have a pick
-                # at that location — i.e. always show for awareness
-                color = getattr(hp, "color", "#aaaaaa") or "#aaaaaa"
-                t = get_theme()
-                ghost_style = t.cross_section_ghost
-                mkw = marker_kwargs(ghost_style, entity_color=color)
-                mkw.update(alpha=0.55, zorder=11)
-
-                self._overlay_artists.extend(
-                    self._ax.plot([s_here], [other_depth], **mkw)
-                )
-                label = f"← {other_sec.name}"
+        # --- section × section (existing ghost; identical output) ---
+        for other_sec in [s for s in proj.sections if s.name != section.name]:
+            sc = slice_crossing(section, other_sec, picks)
+            for p in sc.piercings:
+                color = getattr(p.pick, "color", "#aaaaaa") or "#aaaaaa"
+                _ghost_dot(p.u, p.v, color)
                 self._overlay_artists.append(
                     self._ax.annotate(
-                        label,
-                        xy=(s_here, other_depth),
+                        f"← {other_sec.name}",
+                        xy=(p.u, p.v),
                         xytext=(8, 0),
                         textcoords="offset points",
                         fontsize=t.annotation_size,
@@ -2012,6 +2000,35 @@ class SectionView(QWidget):
                         zorder=11,
                     )
                 )
+
+        # --- section × horizontal slice (the window into 3D) ---
+        for hslice in getattr(proj, "horizontal_slices", []):
+            sc = slice_crossing(section, hslice, picks)
+            if sc.locus_kind != "h_line":
+                continue
+            depth = sc.locus
+            rl = t.reference_line   # receding, low-contrast — context, not content
+            line_kw = dict(color=rl.color, lw=rl.width, alpha=rl.alpha, zorder=9)
+            if rl.dash:
+                line_kw["dashes"] = rl.dash
+            self._overlay_artists.append(self._ax.axhline(depth, **line_kw))
+            xmin, _xmax = self._ax.get_xlim()
+            self._overlay_artists.append(
+                self._ax.annotate(
+                    f"{hslice.name} →",
+                    xy=(xmin, depth),
+                    xytext=(6, -2),
+                    textcoords="offset points",
+                    fontsize=t.annotation_size,
+                    color=rl.color,
+                    alpha=0.8,
+                    va="top", ha="left",
+                    zorder=9,
+                )
+            )
+            for p in sc.piercings:
+                color = getattr(p.pick, "color", "#aaaaaa") or "#aaaaaa"
+                _ghost_dot(p.u, p.v, color)
 
     def _pick_point_style(
         self, category: str, obj_idx: int, pt_idx: int
