@@ -104,6 +104,10 @@ class AppState(QObject):
     section_removed = Signal(object)
     section_modified = Signal(int, object)
     active_section_changed = Signal(object)
+    # The active *workspace slice* — a Section OR a HorizontalSlice (Model A).
+    # active_section stays Section-typed and untouched; this is the parallel,
+    # additive selection concept that the z-slice workspace routes on.
+    active_slice_changed = Signal(object)
 
     # AOI
     aoi_changed = Signal(object)   # emits AOI or None
@@ -179,6 +183,7 @@ class AppState(QObject):
         self._project: Project = Project()
         self._project_path: str | None = None
         self._active_section: Section | None = None
+        self._active_slice = None   # Section | HorizontalSlice | None (Model A)
         self._active_well: Well | None = None
         self._is_modified: bool = False
         self._active_tool: str = "select"
@@ -390,6 +395,7 @@ class AppState(QObject):
         )
         self._project_path = folder_path
         self._active_section = None
+        self._active_slice = None
         self._active_well = None
         self._is_modified = False
         self._topology = None
@@ -424,6 +430,7 @@ class AppState(QObject):
             self._project = Project.load(path)
             self._project_path = path
         self._active_section = None
+        self._active_slice = None
         self._active_well = None
         self._is_modified = False
         self._topology = None
@@ -847,6 +854,29 @@ class AppState(QObject):
             self._active_section = section
             self.active_section_changed.emit(section)
             self._rebuild_topology()
+
+    @property
+    def active_slice(self):
+        """The active workspace slice — a Section, a HorizontalSlice, or None."""
+        return self._active_slice
+
+    def set_active_slice(self, slice_) -> None:
+        """Set the active workspace slice (Model A — additive, behaviour-preserving).
+
+        A Section (or None) is delegated to :meth:`set_active_section`, so
+        ``active_section`` and the entire existing section surface behave exactly
+        as today. A HorizontalSlice leaves ``active_section`` untouched and only
+        updates the parallel active-slice selection. Emits ``active_slice_changed``
+        on change.
+        """
+        from section_tool.core.slices import HorizontalSlice
+        if not isinstance(slice_, HorizontalSlice):
+            # Section or None — delegate; the existing surface is unchanged.
+            self.set_active_section(slice_)
+        # (HorizontalSlice: active_section is deliberately left as-is.)
+        if self._active_slice is not slice_:
+            self._active_slice = slice_
+            self.active_slice_changed.emit(slice_)
 
     # ------------------------------------------------------------------
     # Live topology management
