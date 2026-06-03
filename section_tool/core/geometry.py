@@ -182,3 +182,86 @@ def sample_pick_at_elevation(pick, elevation: float, section=None) -> list[Level
         out.append(LevelCrossing(distance=float(dc), depth=target_depth,
                                   x=float(x), y=float(y), z=float(wz)))
     return out
+
+
+class Piercing(NamedTuple):
+    """A point where a pick pierces the rendered slice, in that slice's coords.
+
+    u, v       — slice_a's native 2D coords (distance/depth for a section,
+                 easting/northing for a horizontal slice).
+    x, y, z    — world coordinates of the piercing.
+    """
+    pick: object
+    u: float
+    v: float
+    x: float
+    y: float
+    z: float
+
+
+class SliceCrossing(NamedTuple):
+    """Where slice_b crosses slice_a, expressed in slice_a's coords.
+
+    locus_kind — 'v_line' | 'h_line' | 'polyline' | 'coincident' | 'none'.
+    locus      — the crossing locus payload in slice_a coords:
+                 v_line   → float u (a vertical line at distance u, all depths)
+                 h_line   → float v (a horizontal line at depth v, all distances)
+                 polyline → list[(u, v)] (a trace drawn in slice_a's plan)
+                 coincident / none → None
+    piercings  — list[Piercing]: where each pick pierces slice_a.
+    """
+    locus_kind: str
+    locus: object
+    piercings: list
+
+
+def slice_crossing(slice_a, slice_b, picks) -> SliceCrossing:
+    """Generic "where does slice_b cross slice_a", in slice_a's coords.
+
+    Dispatches the four slice pairings using each slice's embedding data
+    (Section trace nodes, HorizontalSlice elevation) — the Slice protocol's
+    point transforms alone don't give the locus, so this is a small per-pairing
+    helper, not a general geometry engine. *picks* is the pool of observations
+    to test (each sampler filters to the relevant section internally).
+    """
+    ka, kb = slice_a.kind, slice_b.kind
+
+    # section × section — the existing ghost geometry, unchanged.
+    if ka == "section" and kb == "section":
+        result = find_section_intersection(slice_a, slice_b)
+        if result is None:
+            return SliceCrossing("none", None, [])
+        s_a, s_b = result
+        pierc: list[Piercing] = []
+        for hp in picks:
+            depth = sample_pick_at_distance(hp, s_b, slice_b.name)
+            if depth is None:
+                continue
+            x, y, z = slice_a.to_world(s_a, depth)
+            pierc.append(Piercing(hp, float(s_a), float(depth), x, y, z))
+        return SliceCrossing("v_line", float(s_a), pierc)
+
+    # section × horizontal — locus is a horizontal line at depth = -z0;
+    # dots are where this section's picks cross z0.
+    if ka == "section" and kb == "horizontal":
+        target_depth = -float(slice_b.elevation)
+        pierc = []
+        for hp in picks:
+            for c in sample_pick_at_elevation(hp, slice_b.elevation, slice_a):
+                pierc.append(Piercing(hp, c.distance, c.depth, c.x, c.y, c.z))
+        return SliceCrossing("h_line", target_depth, pierc)
+
+    # horizontal × section — locus is the section's trace in plan; dots are
+    # where the section's picks cross z0, in world (= plan) coords.
+    if ka == "horizontal" and kb == "section":
+        pierc = []
+        for hp in picks:
+            for c in sample_pick_at_elevation(hp, slice_a.elevation, slice_b):
+                pierc.append(Piercing(hp, c.x, c.y, c.x, c.y, c.z))
+        trace = [(float(x), float(y)) for x, y in slice_b._nodes]
+        return SliceCrossing("polyline", trace, pierc)
+
+    # horizontal × horizontal — parallel planes: coincident iff equal elevation.
+    if abs(float(slice_a.elevation) - float(slice_b.elevation)) < 1e-9:
+        return SliceCrossing("coincident", None, [])
+    return SliceCrossing("none", None, [])
