@@ -386,6 +386,7 @@ class HorizonPick:
         section_names: list | np.ndarray | None = None,
         map_x: list | np.ndarray | None = None,
         map_y: list | np.ndarray | None = None,
+        slice_kinds: list | np.ndarray | None = None,
         uuid: str | None = None,
         # Phase A: horizon / contact attributes
         contact_type: str = "conformable",
@@ -416,10 +417,20 @@ class HorizonPick:
             snames = np.asarray(section_names, dtype=object).ravel()
             if len(snames) != len(distances):
                 raise ValueError("section_names must have the same length as distances")
+        # Per-point slice discriminant: 'section' (default) | 'horizontal'.
+        # Parallel to _section_names, which holds the slice REFERENCE string
+        # (a Section name or a HorizontalSlice name); _slice_kinds says which.
+        if slice_kinds is None:
+            skinds = np.array(["section"] * len(distances), dtype=object)
+        else:
+            skinds = np.asarray(slice_kinds, dtype=object).ravel()
+            if len(skinds) != len(distances):
+                raise ValueError("slice_kinds must have the same length as distances")
         order = np.argsort(distances, kind="stable")
         self._distances = distances[order].copy()
         self._depths = depths[order].copy()
         self._section_names: np.ndarray = snames[order].copy()
+        self._slice_kinds: np.ndarray = skinds[order].copy()
         n = len(distances)
         # Map-space source of truth — NaN when not yet set (legacy picks)
         if map_x is None:
@@ -502,14 +513,44 @@ class HorizonPick:
     # ------------------------------------------------------------------
 
     def section_names(self) -> list[str]:
-        """Return sorted unique non-empty section names across all picks."""
+        """Sorted unique non-empty *section-kind* slice refs across all picks.
+
+        Kind-aware: a horizontal-slice ref is NOT a section name and is excluded,
+        so the section write/render paths never mistake one for the other.
+        """
         return sorted(set(
-            str(s) for s in self._section_names if str(s) != ""
+            str(self._section_names[i]) for i in range(len(self._section_names))
+            if self._slice_kinds[i] == "section" and str(self._section_names[i]) != ""
         ))
 
     def section_indices(self, section_name: str) -> np.ndarray:
-        """Full-array indices for picks on *section_name* or global picks ('')."""
-        mask = (self._section_names == section_name) | (self._section_names == "")
+        """Full-array indices for section-kind picks on *section_name* or globals ('')."""
+        sec = (self._slice_kinds == "section")
+        mask = sec & ((self._section_names == section_name) | (self._section_names == ""))
+        return np.where(mask)[0]
+
+    # ------------------------------------------------------------------
+    # Slice-agnostic access (sections + horizontal slices)
+    # ------------------------------------------------------------------
+
+    def slice_keys(self) -> list[tuple[str, str]]:
+        """Sorted distinct ``(slice_kind, slice_ref)`` pairs (non-empty ref)."""
+        return sorted(set(
+            (str(self._slice_kinds[i]), str(self._section_names[i]))
+            for i in range(len(self._section_names))
+            if str(self._section_names[i]) != ""
+        ))
+
+    def horizontal_slice_refs(self) -> list[str]:
+        """Sorted unique non-empty horizontal-slice refs across all picks."""
+        return sorted(set(
+            str(self._section_names[i]) for i in range(len(self._section_names))
+            if self._slice_kinds[i] == "horizontal" and str(self._section_names[i]) != ""
+        ))
+
+    def indices_for_slice(self, kind: str, ref: str) -> np.ndarray:
+        """Full-array indices for picks on slice ``(kind, ref)`` exactly."""
+        mask = (self._slice_kinds == kind) & (self._section_names == ref)
         return np.where(mask)[0]
 
     def picks_for_section(
@@ -532,12 +573,14 @@ class HorizonPick:
                     quality: str = "picked",
                     note: str = "",
                     map_x: float = float("nan"),
-                    map_y: float = float("nan")) -> None:
+                    map_y: float = float("nan"),
+                    slice_kind: str = "section") -> None:
         """Insert a pick, maintaining ascending distance order."""
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
         self._depths        = np.insert(self._depths, idx, depth)
         self._section_names = np.insert(self._section_names, idx, section_name)
+        self._slice_kinds   = np.insert(self._slice_kinds, idx, slice_kind)
         self._confidence    = np.insert(self._confidence, idx, confidence)
         self._quality       = np.insert(self._quality, idx, quality)
         self._note          = np.insert(self._note, idx, note)
@@ -550,7 +593,7 @@ class HorizonPick:
             raise ValueError("Cannot delete: HorizonPick must retain at least one pick")
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
-        for attr in ("_distances", "_depths", "_section_names",
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                      "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(self, attr, np.delete(getattr(self, attr), index))
 
@@ -560,16 +603,18 @@ class HorizonPick:
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
         sec  = self._section_names[index]
+        kind = self._slice_kinds[index]
         conf = self._confidence[index]
         qual = self._quality[index]
         note = self._note[index]
-        for attr in ("_distances", "_depths", "_section_names",
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                      "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(self, attr, np.delete(getattr(self, attr), index))
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
         self._depths        = np.insert(self._depths, idx, depth)
         self._section_names = np.insert(self._section_names, idx, sec)
+        self._slice_kinds   = np.insert(self._slice_kinds, idx, kind)
         self._confidence    = np.insert(self._confidence, idx, conf)
         self._quality       = np.insert(self._quality, idx, qual)
         self._note          = np.insert(self._note, idx, note)
@@ -595,7 +640,7 @@ class HorizonPick:
             self._distances[i] = dist
         # Re-sort after distances changed
         order = np.argsort(self._distances, kind="stable")
-        for attr in ("_distances", "_depths", "_section_names",
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                      "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(self, attr, getattr(self, attr)[order])
 
@@ -645,6 +690,7 @@ class HorizonPick:
         obj._distances     = np.array([], dtype=float)
         obj._depths        = np.array([], dtype=float)
         obj._section_names = np.array([], dtype=object)
+        obj._slice_kinds   = np.array([], dtype=object)
         obj._confidence    = np.array([], dtype=float)
         obj._quality       = np.array([], dtype=object)
         obj._note          = np.array([], dtype=object)

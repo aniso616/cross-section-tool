@@ -462,13 +462,27 @@ class AppState(QObject):
             )
             proj.sections.append(sec)
 
+        # Horizontal slices (plan-slice registry)
+        from section_tool.core.slices import HorizontalSlice
+        for hsrow in data.get("horizontal_slices", []):
+            proj.horizontal_slices.append(HorizontalSlice(
+                name=hsrow["name"],
+                elevation=float(hsrow["elevation"]),
+                crs_epsg=int(hsrow.get("crs_epsg", 32632)),
+            ))
+
         # Horizons + picks
         for hrow in data["horizons"]:
             picks = hrow.get("picks", [])
             if picks:
                 dists   = np.array([p["distance_along"] for p in picks], dtype=float)
                 depths  = np.array([p["depth"]          for p in picks], dtype=float)
-                snames  = np.array([p["section_name"]   for p in picks], dtype=object)
+                # slice_ref is the generalized reference; fall back to the legacy
+                # section_name. slice_kind defaults to 'section' for old rows.
+                snames  = np.array([p.get("slice_ref") or p["section_name"]
+                                    for p in picks], dtype=object)
+                skinds  = np.array([p.get("slice_kind") or "section"
+                                    for p in picks], dtype=object)
                 map_xs  = np.array([p.get("x") if p.get("x") is not None else float("nan")
                                     for p in picks], dtype=float)
                 map_ys  = np.array([p.get("y") if p.get("y") is not None else float("nan")
@@ -482,6 +496,7 @@ class AppState(QObject):
                     section_names=snames,
                     map_x=map_xs,
                     map_y=map_ys,
+                    slice_kinds=skinds,
                     uuid=hrow.get("uuid"),
                     contact_type=hrow.get("contact_type", "conformable"),
                     formation_above=hrow.get("formation_above", ""),
@@ -510,7 +525,10 @@ class AppState(QObject):
             if picks:
                 dists  = np.array([p["distance_along"] for p in picks], dtype=float)
                 depths = np.array([p["depth"]          for p in picks], dtype=float)
-                snames = np.array([p["section_name"]   for p in picks], dtype=object)
+                snames = np.array([p.get("slice_ref") or p["section_name"]
+                                   for p in picks], dtype=object)
+                skinds = np.array([p.get("slice_kind") or "section"
+                                   for p in picks], dtype=object)
                 map_xs = np.array([p.get("x") if p.get("x") is not None else float("nan")
                                    for p in picks], dtype=float)
                 map_ys = np.array([p.get("y") if p.get("y") is not None else float("nan")
@@ -524,6 +542,7 @@ class AppState(QObject):
                     section_names=snames,
                     map_x=map_xs,
                     map_y=map_ys,
+                    slice_kinds=skinds,
                     uuid=frow.get("uuid"),
                 )
             else:
@@ -719,6 +738,8 @@ class AppState(QObject):
             )
             for section in self._project.sections:
                 self._pm.db.upsert_section(section)
+            for hslice in self._project.horizontal_slices:
+                self._pm.db.upsert_horizontal_slice(hslice)
             for hp in self._project.horizon_picks:
                 self._pm.db.upsert_horizon(hp)
             for fp in self._project.fault_picks:
@@ -756,6 +777,12 @@ class AppState(QObject):
         self._set_modified()
         self._db_write(lambda: self._pm.db.upsert_section(section))
         self.section_added.emit(section)
+
+    def add_horizontal_slice(self, hslice) -> None:
+        """Register a horizontal plan slice (fixed-elevation observation frame)."""
+        self._project.horizontal_slices.append(hslice)
+        self._set_modified()
+        self._db_write(lambda: self._pm.db.upsert_horizontal_slice(hslice))
 
     def remove_section(self, section: Section) -> None:
         self._project.sections.remove(section)

@@ -568,8 +568,8 @@ class PropertiesPanel(QDockWidget):
             h2._depths[pi] = val
         # Re-sort
         order = np.argsort(h2._distances, kind="stable")
-        for attr in ("_distances", "_depths", "_section_names",
-                     "_confidence", "_quality", "_note"):
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
+                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             arr = getattr(h2, attr, None)
             if arr is not None and len(arr) == len(order):
                 setattr(h2, attr, arr[order])

@@ -120,6 +120,7 @@ class _FakePick:
         self._distances = np.array(dists, dtype=float)
         self._depths = np.array(depths, dtype=float)
         n = len(dists)
+        self._slice_kinds = np.array(["section"] * n, dtype=object)
         self._map_x = np.full(n, np.nan)
         self._map_y = np.full(n, np.nan)
         self.line_width = 1.5
@@ -134,6 +135,12 @@ class _FakePick:
 
     def section_indices(self, sec_name):
         return np.where(self._section_names == sec_name)[0]
+
+    def slice_keys(self):
+        return sorted(set(("section", str(s)) for s in self._section_names if str(s) != ""))
+
+    def indices_for_slice(self, kind, ref):
+        return np.where((self._slice_kinds == kind) & (self._section_names == ref))[0]
 
 
 def test_horizon_upsert_and_get(tmp_db):

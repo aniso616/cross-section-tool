@@ -2904,8 +2904,8 @@ class SectionView(QWidget):
         last_idx = int(sec_idxs[-1])
         hp2 = copy.deepcopy(hp)
         if hp2.n_picks > 1:
-            for attr in ("_distances", "_depths", "_section_names",
-                         "_confidence", "_quality", "_note"):
+            for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
+                         "_confidence", "_quality", "_note", "_map_x", "_map_y"):
                 arr = getattr(hp2, attr)
                 setattr(hp2, attr, np.delete(arr, last_idx))
         if cat == "Horizons":
@@ -3432,7 +3432,7 @@ class SectionView(QWidget):
                 if mc_arr is not None and pi < len(mc_arr):
                     mc_arr[pi] = float('nan')
             order = np.argsort(self._pick_copy._distances, kind="stable")
-            for _attr in ("_distances", "_depths", "_section_names",
+            for _attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                           "_confidence", "_quality", "_note", "_map_x", "_map_y"):
                 arr = getattr(self._pick_copy, _attr, None)
                 if arr is not None and len(arr) == len(order):
@@ -3833,10 +3833,17 @@ class SectionView(QWidget):
         }
 
         if hp.n_picks <= 1:
-            # Allow object to become empty (Phase 1 spec)
+            # Allow object to become empty (Phase 1 spec). Clear ALL per-point
+            # arrays together so they stay length-consistent.
             hp._distances     = np.array([], dtype=float)
             hp._depths        = np.array([], dtype=float)
             hp._section_names = np.array([], dtype=object)
+            hp._slice_kinds   = np.array([], dtype=object)
+            hp._confidence    = np.array([], dtype=float)
+            hp._quality       = np.array([], dtype=object)
+            hp._note          = np.array([], dtype=object)
+            hp._map_x         = np.array([], dtype=float)
+            hp._map_y         = np.array([], dtype=float)
         else:
             hp.delete_pick(pi)
 

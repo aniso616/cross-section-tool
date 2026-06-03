@@ -78,7 +78,7 @@ def _deduplicate_picks(hp, sec_name: str, tol: float) -> "HorizonPick":
 
     to_remove = sorted(set(idxs) - set(keep), reverse=True)
     for idx_r in to_remove:
-        for attr in ("_distances", "_depths", "_section_names",
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                      "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             import numpy as _np
             arr = getattr(hp2, attr)

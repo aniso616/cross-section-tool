@@ -40,6 +40,16 @@ CREATE TABLE IF NOT EXISTS sections (
     modified_date         TEXT
 );
 
+-- Horizontal plan slices (fixed-elevation observation frames), parallel to
+-- sections. Observations reference these by name when slice_kind='horizontal'.
+CREATE TABLE IF NOT EXISTS horizontal_slices (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT    UNIQUE NOT NULL,
+    elevation    REAL    NOT NULL,
+    crs_epsg     INTEGER DEFAULT 32632,
+    created_date TEXT
+);
+
 CREATE TABLE IF NOT EXISTS horizons (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     name                   TEXT    UNIQUE NOT NULL,
@@ -59,10 +69,15 @@ CREATE TABLE IF NOT EXISTS horizon_picks (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     horizon_id     INTEGER NOT NULL REFERENCES horizons(id) ON DELETE CASCADE,
     section_name   TEXT    NOT NULL,
+    -- slice the observation lives on: kind ('section'|'horizontal') + ref.
+    -- For section observations slice_ref == section_name; for horizontal ones
+    -- slice_ref is a HorizontalSlice name and section_name mirrors it (NOT NULL).
+    slice_kind     TEXT    DEFAULT 'section',
+    slice_ref      TEXT,
     distance_along REAL    NOT NULL,
     depth          REAL    NOT NULL,
-    -- elevation is positive-up (source of truth when populated);
-    -- depth = -elevation for display. Populated in a future migration.
+    -- elevation is positive-up; depth = -elevation. Live truth for horizontal
+    -- observations (the slice elevation); also populated for section picks.
     elevation      REAL,
     -- map-space source of truth: reproject onto section when geometry changes
     x              REAL,
@@ -93,6 +108,8 @@ CREATE TABLE IF NOT EXISTS fault_picks (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     fault_id       INTEGER NOT NULL REFERENCES faults(id) ON DELETE CASCADE,
     section_name   TEXT    NOT NULL,
+    slice_kind     TEXT    DEFAULT 'section',
+    slice_ref      TEXT,
     distance_along REAL    NOT NULL,
     depth          REAL    NOT NULL,
     elevation      REAL,
@@ -452,6 +469,13 @@ class ProjectDatabase:
             # constraint on fresh DBs).
             ("horizons",  "uuid", "TEXT"),
             ("faults",    "uuid", "TEXT"),
+            # Slice generalization: observations carry an explicit slice kind +
+            # ref. DEFAULT 'section' makes every existing row a section
+            # observation automatically (fully backward compatible).
+            ("horizon_picks", "slice_kind", "TEXT DEFAULT 'section'"),
+            ("horizon_picks", "slice_ref",  "TEXT"),
+            ("fault_picks",   "slice_kind", "TEXT DEFAULT 'section'"),
+            ("fault_picks",   "slice_ref",  "TEXT"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -476,6 +500,14 @@ class ProjectDatabase:
                 self.conn.execute(stmt)
             except Exception:
                 pass  # already dropped / never existed
+        # Backfill slice_ref from the legacy section_name on pre-existing rows
+        # (slice_kind already defaulted to 'section' via ALTER … DEFAULT).
+        for table in ("horizon_picks", "fault_picks"):
+            try:
+                self.conn.execute(
+                    f"UPDATE {table} SET slice_ref=section_name WHERE slice_ref IS NULL")
+            except Exception:
+                pass
         self._backfill_entity_uuids()
         self._backfill_construction_ref_uuids()
 
@@ -662,6 +694,70 @@ class ProjectDatabase:
         self.conn.commit()
 
     # ------------------------------------------------------------------
+    # Horizontal slices (plan-slice registry, parallel to sections)
+    # ------------------------------------------------------------------
+
+    def upsert_horizontal_slice(self, hslice) -> int:
+        row = self.conn.execute(
+            "SELECT id FROM horizontal_slices WHERE name=?", (hslice.name,)
+        ).fetchone()
+        if row:
+            sid = row["id"]
+            self.conn.execute(
+                "UPDATE horizontal_slices SET elevation=?, crs_epsg=? WHERE id=?",
+                (float(hslice.elevation), int(getattr(hslice, "crs_epsg", 32632)), sid)
+            )
+        else:
+            cur = self.conn.execute(
+                """INSERT INTO horizontal_slices(name, elevation, crs_epsg, created_date)
+                   VALUES(?,?,?,?)""",
+                (hslice.name, float(hslice.elevation),
+                 int(getattr(hslice, "crs_epsg", 32632)), _now())
+            )
+            sid = cur.lastrowid
+        self.conn.commit()
+        return sid
+
+    def get_all_horizontal_slices(self) -> list[dict]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM horizontal_slices ORDER BY id").fetchall()]
+
+    # ------------------------------------------------------------------
+    # Pick writer (shared by horizons + faults; section + horizontal slices)
+    # ------------------------------------------------------------------
+
+    def _write_picks(self, table: str, owner_col: str, owner_id: int, pick) -> None:
+        """Replace all observation rows for *owner_id*, slice-kind aware.
+
+        Section observations preserve the prior behaviour exactly (slice_kind=
+        'section', slice_ref=section_name, grouped via section_indices which
+        also carries global '' picks). Horizontal observations write slice_kind=
+        'horizontal' with the slice elevation (= -depth) as the live truth.
+        """
+        self.conn.execute(f"DELETE FROM {table} WHERE {owner_col}=?", (owner_id,))
+        for kind, ref in pick.slice_keys():
+            idxs = (pick.section_indices(ref) if kind == "section"
+                    else pick.indices_for_slice(kind, ref))
+            if len(idxs) == 0:
+                continue
+            dists  = pick._distances[idxs]
+            depths = pick._depths[idxs]
+            map_xs = pick._map_x[idxs]
+            map_ys = pick._map_y[idxs]
+            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
+                self.conn.execute(
+                    f"""INSERT INTO {table}
+                       ({owner_col}, section_name, slice_kind, slice_ref,
+                        distance_along, depth, elevation, x, y, sort_order)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (owner_id, ref, kind, ref,
+                     float(d), float(z), float(-z),
+                     None if (mx != mx) else float(mx),
+                     None if (my != my) else float(my),
+                     order)
+                )
+
+    # ------------------------------------------------------------------
     # Horizons + picks
     # ------------------------------------------------------------------
 
@@ -711,26 +807,8 @@ class ProjectDatabase:
             )
             hid = cur.lastrowid
 
-        # Replace all picks
-        self.conn.execute("DELETE FROM horizon_picks WHERE horizon_id=?", (hid,))
-        for sec_name in pick.section_names():
-            idxs = pick.section_indices(sec_name)
-            if len(idxs) == 0:
-                continue
-            dists  = pick._distances[idxs]
-            depths = pick._depths[idxs]
-            map_xs = pick._map_x[idxs]
-            map_ys = pick._map_y[idxs]
-            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
-                self.conn.execute(
-                    """INSERT INTO horizon_picks
-                       (horizon_id, section_name, distance_along, depth, x, y, sort_order)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (hid, sec_name, float(d), float(z),
-                     None if (mx != mx) else float(mx),
-                     None if (my != my) else float(my),
-                     order)
-                )
+        # Replace all picks (section + horizontal observations)
+        self._write_picks("horizon_picks", "horizon_id", hid, pick)
         self.conn.commit()
         return hid
 
@@ -800,25 +878,7 @@ class ProjectDatabase:
             )
             fid = cur.lastrowid
 
-        self.conn.execute("DELETE FROM fault_picks WHERE fault_id=?", (fid,))
-        for sec_name in pick.section_names():
-            idxs = pick.section_indices(sec_name)
-            if len(idxs) == 0:
-                continue
-            dists  = pick._distances[idxs]
-            depths = pick._depths[idxs]
-            map_xs = pick._map_x[idxs]
-            map_ys = pick._map_y[idxs]
-            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
-                self.conn.execute(
-                    """INSERT INTO fault_picks
-                       (fault_id, section_name, distance_along, depth, x, y, sort_order)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (fid, sec_name, float(d), float(z),
-                     None if (mx != mx) else float(mx),
-                     None if (my != my) else float(my),
-                     order)
-                )
+        self._write_picks("fault_picks", "fault_id", fid, pick)
         self.conn.commit()
         return fid
 
@@ -1445,16 +1505,17 @@ class ProjectDatabase:
                 k: v for k, v in
                 self.conn.execute("SELECT key, value FROM project_meta").fetchall()
             },
-            "sections":        self.get_all_sections(),
-            "horizons":        self.get_all_horizons(),
-            "faults":          self.get_all_faults(),
-            "wells":           self.get_all_wells(),
-            "seismic":         self.get_all_seismic(),
-            "polygons":        self.get_all_polygons(),
-            "reference_lines": self.get_all_reference_lines(),
-            "annotations":     self.get_all_annotations(),
-            "aoi":             self.get_aoi(),
-            "surfaces":        self.get_all_surfaces(),
+            "sections":          self.get_all_sections(),
+            "horizontal_slices": self.get_all_horizontal_slices(),
+            "horizons":          self.get_all_horizons(),
+            "faults":            self.get_all_faults(),
+            "wells":             self.get_all_wells(),
+            "seismic":           self.get_all_seismic(),
+            "polygons":          self.get_all_polygons(),
+            "reference_lines":   self.get_all_reference_lines(),
+            "annotations":       self.get_all_annotations(),
+            "aoi":               self.get_aoi(),
+            "surfaces":          self.get_all_surfaces(),
         }
 
     # ------------------------------------------------------------------

@@ -1226,7 +1226,7 @@ class ProjectPanel(QDockWidget):
         # Remove only picks belonging to this section
         keep = new_hp._section_names != sec.name
         import numpy as np
-        for attr in ("_distances", "_depths", "_section_names",
+        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
                      "_confidence", "_quality", "_note", "_map_x", "_map_y"):
             setattr(new_hp, attr, getattr(new_hp, attr)[keep])
         self._state.update_horizon_pick(horizon_idx, new_hp)

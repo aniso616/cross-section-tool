@@ -100,6 +100,10 @@ class Project:
         self.default_depth_min = float(default_depth_min)
         self.default_depth_max = float(default_depth_max)
         self.sections: list[Section] = []
+        # Horizontal plan slices (fixed-elevation observation frames), parallel
+        # to sections. Observations reference these when slice_kind='horizontal'.
+        from section_tool.core.slices import HorizontalSlice  # noqa: PLC0415
+        self.horizontal_slices: list[HorizontalSlice] = []
         self.surfaces: list[Surface] = []
         self.aoi = None   # AOI | None — avoid importing AOI here to keep deps light
         self.horizon_picks: list[HorizonPick] = []
