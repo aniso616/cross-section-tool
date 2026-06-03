@@ -715,6 +715,9 @@ class HorizonPick:
         obj.displacement     = None
         obj.age_activation_ma = None
         obj.age_cessation_ma  = None
+        # Kinematic restoration — match __init__ so the attribute always exists
+        # (a pickless entity is freehand until a construction tool sets a rule).
+        obj.construction_rule = None
         return obj
 
     # ------------------------------------------------------------------

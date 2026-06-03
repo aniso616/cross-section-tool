@@ -14,6 +14,9 @@ the same interface MapHUDLayer needs: ``canvas``, ``axes``, ``cursor_map_pos``,
 """
 from __future__ import annotations
 
+import copy
+import math
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -31,11 +34,14 @@ class ZSliceView(QWidget):
 
     cursor_map_pos = Signal(float, float)   # world easting/northing on hover
     view_changed   = Signal()
+    draw_ended     = Signal()               # right-click/Esc ends the plan trace
+    status_message = Signal(str)            # transient hints (e.g. "select a fault")
 
     def __init__(self, state: AppState, parent=None) -> None:
         super().__init__(parent)
         self._state = state
         self._slice = None                  # the active HorizontalSlice
+        self._drawing_fault = False         # plan fault-draw mode (z-slice only)
         self._is_rendering = False
         self._redraw = QTimer(self); self._redraw.setSingleShot(True)
         self._redraw.setInterval(50); self._redraw.timeout.connect(self.render)
@@ -76,6 +82,10 @@ class ZSliceView(QWidget):
     def set_slice(self, hslice) -> None:
         self._slice = hslice
         self.render()
+
+    def set_fault_drawing(self, active: bool) -> None:
+        """Enable/disable freehand plan fault-draw mode (only meaningful on a z-slice)."""
+        self._drawing_fault = bool(active)
 
     def request_render(self, *_a) -> None:
         if not self._redraw.isActive():
@@ -180,9 +190,61 @@ class ZSliceView(QWidget):
             self._canvas.draw_idle()
 
     def _on_press(self, event) -> None:
+        # Plan fault-draw mode: left-click extends the trace, right-click ends it.
+        if self._drawing_fault and self._slice is not None:
+            if event.button == 1 and event.xdata is not None and event.ydata is not None:
+                self._add_plan_pick(float(event.xdata), float(event.ydata))
+                return
+            if event.button == 3:
+                self.draw_ended.emit()
+                return
         if event.button in (1, 2) and event.x is not None:
             self._pan_anchor = (event.x, event.y)
             self._pan_xlim0 = self._ax.get_xlim(); self._pan_ylim0 = self._ax.get_ylim()
+
+    def _add_plan_pick(self, easting: float, northing: float) -> None:
+        """Append a freehand plan point to the active fault on the current slice.
+
+        Mirrors section picking (_add_pick_to_active_target) in plan orientation:
+        world (E, N) is the source of truth (map_x/map_y), depth is fixed at
+        -z0, slice_kind='horizontal', slice_ref = this slice's name. No
+        construction rule is set — plan traces are freehand.
+        """
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        picks = self._state.project.fault_picks
+        if cat != "Faults" or idx is None or idx >= len(picks):
+            self.status_message.emit("Select or create a fault first")
+            return
+
+        slc = self._slice
+        depth = -float(slc.elevation)
+        ref = slc.name
+        hp_before = copy.deepcopy(picks[idx])
+        hp_after = copy.deepcopy(hp_before)
+
+        # distance_along = cumulative distance along the drawn plan trace, so
+        # insert_pick (which sorts by distance) keeps points in draw order and
+        # the trace renders as a connected polyline, not tangled. Points on THIS
+        # slice are the existing horizontal observations referencing it.
+        existing = hp_after.indices_for_slice("horizontal", ref)
+        if len(existing) > 0:
+            last = int(existing[-1])
+            seg = math.hypot(easting - float(hp_after._map_x[last]),
+                             northing - float(hp_after._map_y[last]))
+            dist = float(hp_after._distances[last]) + seg
+        else:
+            dist = 0.0
+
+        hp_after.insert_pick(dist, depth, section_name=ref,
+                             map_x=easting, map_y=northing, slice_kind="horizontal")
+
+        def _do():  self._state.update_fault_pick(idx, copy.deepcopy(hp_after))
+        def _undo(): self._state.update_fault_pick(idx, copy.deepcopy(hp_before))
+        _do()
+        self._state.record_command(
+            f"Draw plan trace on {hp_before.name or 'fault'}", undo=_undo, redo=_do)
+        self.render()
 
     def _on_release(self, _event) -> None:
         self._pan_anchor = None
