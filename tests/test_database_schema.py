@@ -51,7 +51,7 @@ EXPECTED_TABLES = {
     "project_meta", "sections", "horizons", "horizon_picks",
     "faults", "fault_picks", "wells", "well_tops", "well_logs",
     "lithologies", "formations", "polygons", "reference_lines",
-    "seismic", "annotations", "events", "velocity_model",
+    "seismic", "annotations", "velocity_model",
     "measurements", "well_sections",
 }
 

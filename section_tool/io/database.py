@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS horizons (
     formation_below        TEXT    DEFAULT '',
     age_ma                 REAL,
     confidence             REAL    DEFAULT 1.0,
-    event_id               INTEGER,
     construction_rule_json TEXT
 );
 
@@ -87,7 +86,6 @@ CREATE TABLE IF NOT EXISTS faults (
     age_activation_ma      REAL,
     age_cessation_ma       REAL,
     confidence             REAL    DEFAULT 1.0,
-    event_id               INTEGER,
     construction_rule_json TEXT
 );
 
@@ -273,14 +271,6 @@ CREATE TABLE IF NOT EXISTS annotations (
     color           TEXT    DEFAULT '#000000',
     anchor_distance REAL,
     anchor_depth    REAL
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-    name                 TEXT    NOT NULL,
-    event_type           TEXT,
-    age_ma               REAL,
-    related_objects_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS measurements (
@@ -473,6 +463,19 @@ class ProjectDatabase:
             self.conn.execute("ALTER TABLE surfaces DROP COLUMN points_blob")
         except Exception:
             pass
+        # Remove dead geological-event schema: the `events` table and the
+        # horizons/faults `event_id` columns were never written or read by any
+        # code path. (The live Event/EventSequence restoration model is separate
+        # — persisted via project_meta / project JSON — and is untouched.)
+        for stmt in (
+            "DROP TABLE IF EXISTS events",
+            "ALTER TABLE horizons DROP COLUMN event_id",
+            "ALTER TABLE faults DROP COLUMN event_id",
+        ):
+            try:
+                self.conn.execute(stmt)
+            except Exception:
+                pass  # already dropped / never existed
         self._backfill_entity_uuids()
         self._backfill_construction_ref_uuids()
 
