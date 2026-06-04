@@ -2581,12 +2581,14 @@ class MainWindow(QMainWindow):
         self._state.update_fault_pick(index, fp2)
 
     def _toggle_map_panel(self) -> None:
-        """Toggle map dock visibility (legacy; now delegates to dock action)."""
-        self._map_dock.toggleViewAction().trigger()
+        """Toggle map dock visibility (legacy; dock may be retired in game UI)."""
+        if getattr(self, "_map_dock", None) is not None:
+            self._map_dock.toggleViewAction().trigger()
 
     def _toggle_section_panel(self) -> None:
-        """Toggle section dock visibility (legacy; now delegates to dock action)."""
-        self._section_dock.toggleViewAction().trigger()
+        """Toggle section dock visibility (legacy; dock may be retired in game UI)."""
+        if getattr(self, "_section_dock", None) is not None:
+            self._section_dock.toggleViewAction().trigger()
 
     # ------------------------------------------------------------------
     # Phase 6 helpers
@@ -3447,33 +3449,111 @@ class SectionMainWindow(MainWindow):
     def _toggle_properties_panel(self) -> None:
         self._properties_panel.setVisible(not self._properties_panel.isVisible())
 
+    def _set_tile_visible(self, tile, visible: bool) -> None:
+        """Show/hide a v_splitter tile, restoring width on show.
+
+        A splitter pane that was hidden comes back at 0 width, so when showing
+        a tile that returned collapsed, give it a usable share again.
+        """
+        tile.setVisible(visible)
+        if visible:
+            sizes = self.v_splitter.sizes()
+            idx = self.v_splitter.indexOf(tile)
+            if 0 <= idx < len(sizes) and sizes[idx] < 20:        # came back collapsed
+                sizes[idx] = max(int(self.width() * 0.20), 200)
+                self.v_splitter.setSizes(sizes)
+
+    def _retire_dock(self, attr: str, live_view, tile) -> None:
+        """Detach and delete an orphaned dock once its view lives in a tile.
+
+        The live view was reparented into the tile (MapTile/SectionTile do
+        setParent(self)), so the dock owns nothing; guard anyway — if the dock
+        still parents the view, rescue it to the tile before deleting.
+        """
+        dock = getattr(self, attr, None)
+        if dock is None:
+            return
+        if live_view is not None and live_view.parent() is dock:
+            live_view.setParent(tile)
+        try:
+            self.removeDockWidget(dock)
+        except RuntimeError:
+            pass
+        dock.deleteLater()
+        setattr(self, attr, None)
+
     def _rewire_view_menu_for_tiles(self) -> None:
-        """Replace dock-based view menu toggles with tile-visibility actions."""
-        map_action = self._map_dock.toggleViewAction()
-        sec_action = self._section_dock.toggleViewAction()
-        d3_action  = self._view3d_dock.toggleViewAction()
+        """Swap dock-based View toggles for clean tile-bound actions, then
+        retire the orphaned Map/Section docks.
 
-        # Map: disconnect dock, connect to tile
-        try:
-            map_action.triggered.disconnect()
-        except RuntimeError:
-            pass
-        map_action.setCheckable(True)
-        map_action.setChecked(True)
-        map_action.triggered.connect(lambda checked: self.map_tile.setVisible(checked))
+        Order matters: the menu items are currently the docks' toggleViewActions,
+        so we replace the menu actions first, then delete the docks.
+        """
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
 
-        # Section: connect to section_tile
-        try:
-            sec_action.triggered.disconnect()
-        except RuntimeError:
-            pass
-        sec_action.setCheckable(True)
-        sec_action.setChecked(True)
-        sec_action.triggered.connect(lambda checked: self.section_tile.setVisible(checked))
+        map_old   = self._map_dock.toggleViewAction()
+        sec_old   = self._section_dock.toggleViewAction()
+        d3_action = self._view3d_dock.toggleViewAction()
 
-        # 3D: not in tiled layout — disable
+        # The base class built the View menu as a local; rather than re-find it
+        # by title (the menubar hands back transient action wrappers whose
+        # .menu() shiboken may invalidate), take the live menu straight from an
+        # action that already lives in it — that wrapper is tied to map_old,
+        # which we hold, so it stays valid.
+        menus = [o for o in map_old.associatedObjects() if isinstance(o, QMenu)]
+        view_menu = menus[0] if menus else None
+
+        # Fresh checkable actions bound ONLY to the live tiles — no surviving
+        # binding to the orphaned docks (which caused empty floating windows).
+        # NB: use isHidden(), not isVisible() — _rewire runs before the window
+        # is shown, so isVisible() is False for every tile; isHidden() reflects
+        # the intended default (only zslice_tile is explicitly hidden).
+        map_new = QAction(map_old.text(), self)
+        map_new.setCheckable(True)
+        map_new.setChecked(not self.map_tile.isHidden())
+        map_new.toggled.connect(
+            lambda checked, t=self.map_tile: self._set_tile_visible(t, checked))
+
+        sec_new = QAction(sec_old.text(), self)
+        sec_new.setCheckable(True)
+        sec_new.setChecked(not self.section_tile.isHidden())
+        sec_new.toggled.connect(
+            lambda checked, t=self.section_tile: self._set_tile_visible(t, checked))
+
+        if view_menu is not None:
+            view_menu.insertAction(map_old, map_new)
+            view_menu.removeAction(map_old)
+            view_menu.insertAction(sec_old, sec_new)
+            view_menu.removeAction(sec_old)
+        self._map_view_action     = map_new
+        self._section_view_action = sec_new
+
+        # 3D: still not in the tiling (re-homed in a later phase) — disable.
         d3_action.setEnabled(False)
         d3_action.setChecked(False)
+
+        # Retire the now-orphaned Map/Section docks (3D dock kept for re-home).
+        self._retire_dock("_map_dock", self._map_view, self.map_tile)
+        self._retire_dock("_section_dock", self._section_view, self.section_tile)
+
+    def _reset_layout(self) -> None:
+        """Game UI has no docks — reset splitter proportions and default tile
+        visibility instead of the (now-removed) dock arrangement.
+
+        Overrides the base dock-based reset, which referenced the retired
+        Map/Section docks and never touched the splitter (see layout diagnosis).
+        """
+        QSettings("Geoscience", "CrossSectionTool").remove("window/state")
+        # Default workspace: section + map visible, z-slice hidden.
+        self.section_tile.setVisible(True)
+        self.zslice_tile.setVisible(False)
+        self.map_tile.setVisible(True)
+        if getattr(self, "_map_view_action", None) is not None:
+            self._map_view_action.setChecked(True)
+        if getattr(self, "_section_view_action", None) is not None:
+            self._section_view_action.setChecked(True)
+        self._apply_default_proportions()
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
