@@ -2704,7 +2704,16 @@ class MainWindow(QMainWindow):
         self._tool_palette.set_active_tool("select")
 
     def _on_delete_shortcut(self) -> None:
-        """Delete: cancel active pick or remove the last-added pick point."""
+        """Delete: remove the selected node (Nodes tool); otherwise the legacy
+        pick-tool → Select fallback. Does not delete whole objects."""
+        sv = self._section_view
+        if sv.has_node_selected():
+            msg = sv.delete_selected_node()
+            if msg:
+                self._flash_status(msg)        # refused (≥2-node floor)
+            else:
+                self._properties_panel.set_selected_node(None)
+            return
         tool = self._state.active_tool
         if tool in ("horizon_pick", "fault_pick"):
             self._tool_palette.set_active_tool("select")

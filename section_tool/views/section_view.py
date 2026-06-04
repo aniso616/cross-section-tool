@@ -3118,6 +3118,47 @@ class SectionView(QWidget):
         self._set_selected_object(None)
         self.render()
 
+    def delete_selected_node(self) -> str | None:
+        """Delete the selected node from its feature as ONE undo unit.
+
+        Returns a refusal message (and changes nothing) if the delete would drop
+        the feature below 2 nodes; returns None on success or when no node is
+        selected. Acts only on the selected node — never the whole object.
+        """
+        if self._pick_selected is None:
+            return None
+        cat, oi, pi = self._pick_selected
+        proj = self._state.project
+        picks = proj.horizon_picks if cat == "Horizons" else proj.fault_picks
+        if oi >= len(picks):
+            return None
+        hp = picks[oi]
+        kind = "horizon" if cat == "Horizons" else "fault"
+        if hp.n_picks <= 2:
+            return f"Can't delete: {kind} needs at least 2 nodes"
+        hp_before = copy.deepcopy(hp)
+        hp_after  = copy.deepcopy(hp)
+        hp_after.delete_pick(pi)
+
+        def _do():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(oi, copy.deepcopy(hp_after))
+            else:
+                self._state.update_fault_pick(oi, copy.deepcopy(hp_after))
+        def _undo():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(oi, copy.deepcopy(hp_before))
+            else:
+                self._state.update_fault_pick(oi, copy.deepcopy(hp_before))
+
+        _do()
+        self._state.record_command(
+            f"Delete node from {hp_before.name or kind}", undo=_undo, redo=_do)
+        self._pick_selected = None
+        self._pick_copy     = None
+        self.render()
+        return None
+
     # ------------------------------------------------------------------
     # Seismic cache
     # ------------------------------------------------------------------
