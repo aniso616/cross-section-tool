@@ -112,41 +112,59 @@ _TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if isinstance(t, tuple)]
 # Styles
 # ---------------------------------------------------------------------------
 
-# Receding dark "tool rail" styling, built from the shared HUD tokens in
-# section_tool.style so the palette matches the game-UI chrome. Active tool
-# reads as a calm but clear highlight (C_READ wash + outline), not a loud fill.
+# Receding dark "tool rail" styling. The shared HUD tokens (C_LABEL/C_DIM) are
+# tuned for thin readouts over a busy canvas and render near-invisible for rail
+# glyphs/labels, so the rail uses its own brighter neutrals: legible at rest,
+# clearly brighter on hover, and an unmistakable active/checked state — without
+# shouting (recede-not-disappear).
+_ICON_REST   = (180, 194, 204)   # resting glyph: calm but readable
+_ICON_HOVER  = (210, 226, 238)   # hover glyph: brighter
+_ICON_ACTIVE = (220, 234, 246)   # active glyph: brightest
+_LBL_REST    = (158, 172, 182)   # resting short-label
+_LBL_ACTIVE  = (205, 222, 234)   # active short-label
+_CAT_REST    = (146, 162, 172)   # group header
+
 _BTN_STYLE = f"""
 QPushButton {{
     background: transparent;
     border: 1px solid transparent;
     border-radius: 4px;
-    color: {_rgba(C_LABEL)};
+    color: {_rgba(_ICON_REST, 240)};
     font-size: 15px;
     padding: 0px;
     margin: 0px;
 }}
 QPushButton:hover {{
-    background: {_rgba(C_LABEL, 40)};
-    color: {_rgba(C_READ)};
+    background: {_rgba(C_LABEL, 60)};
+    border: 1px solid {_rgba(C_LABEL, 80)};
+    color: {_rgba(_ICON_HOVER, 255)};
 }}
 QPushButton:checked {{
-    background: {_rgba(C_READ, 45)};
-    color: {_rgba(C_READ)};
-    border: 1px solid {_rgba(C_READ)};
+    background: {_rgba(C_READ, 70)};
+    color: {_rgba(_ICON_ACTIVE, 255)};
+    border: 1px solid {_rgba(C_READ, 245)};
 }}
 QPushButton:disabled {{
-    color: {_rgba(C_DIM)};
+    color: {_rgba(C_DIM, 120)};
     background: transparent;
+    border: 1px solid transparent;
 }}
 """
 
 _CATEGORY_STYLE = (
-    f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; font-weight: bold; "
+    f"QLabel {{ color: {_rgba(_CAT_REST, 235)}; font-size: 7pt; font-weight: bold; "
     "letter-spacing: 1px; padding: 12px 0 4px 4px; }"
 )
 
 _LABEL_STYLE = (
-    f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; padding: 0; margin: 0; }}"
+    f"QLabel {{ color: {_rgba(_LBL_REST, 225)}; font-size: 7pt; padding: 0; margin: 0; }}"
+)
+_LABEL_ACTIVE_STYLE = (
+    f"QLabel {{ color: {_rgba(_LBL_ACTIVE, 255)}; font-size: 7pt; font-weight: bold; "
+    "padding: 0; margin: 0; }"
+)
+_LABEL_DISABLED_STYLE = (
+    f"QLabel {{ color: {_rgba(C_DIM, 120)}; font-size: 7pt; padding: 0; margin: 0; }}"
 )
 
 
@@ -190,20 +208,23 @@ class _ToolButton(QWidget):
 
     def set_checked(self, val: bool) -> None:
         self._btn.setChecked(val)
+        self._refresh_label()
+
+    def _refresh_label(self) -> None:
+        """Keep the short-label's contrast in sync with button state so the
+        active tool reads at a glance and disabled tools recede."""
+        if not self._btn.isEnabled():
+            self._lbl.setStyleSheet(_LABEL_DISABLED_STYLE)
+        elif self._btn.isChecked():
+            self._lbl.setStyleSheet(_LABEL_ACTIVE_STYLE)
+        else:
+            self._lbl.setStyleSheet(_LABEL_STYLE)
 
     def set_available(self, available: bool, reason: str = "") -> None:
         """Grey out (disabled) or restore the button."""
         self._btn.setEnabled(available)
-        if available:
-            self._btn.setToolTip(self._base_tooltip)
-            self._lbl.setStyleSheet(_LABEL_STYLE)
-        else:
-            tip = reason or "Not available"
-            self._btn.setToolTip(tip)
-            self._lbl.setStyleSheet(
-                f"QLabel {{ color: {_rgba(C_DIM)}; font-size: 7pt; "
-                "padding: 0; margin: 0; }"
-            )
+        self._btn.setToolTip(self._base_tooltip if available else (reason or "Not available"))
+        self._refresh_label()
 
 
 # ---------------------------------------------------------------------------
