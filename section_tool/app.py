@@ -2874,13 +2874,12 @@ class MainWindow(QMainWindow):
         )
 
     def _on_pick_target_selected(self, cat: str, idx: int) -> None:
-        """Clicking a horizon/fault in the panel selects it and activates pick mode."""
+        """Selecting a horizon/fault in the panel selects it and arms it as the
+        pick target — WITHOUT changing the active tool. Selection and active-tool
+        are independent: the tool stays Select. Pressing H/F afterwards picks
+        onto the selected target (see _ensure_pick_target)."""
         self._state.set_selected_entity(cat, idx)
         self._state.set_active_pick_target(cat, idx)
-        if cat == "Horizons":
-            self._tool_palette.set_active_tool("horizon_pick")
-        elif cat == "Faults":
-            self._tool_palette.set_active_tool("fault_pick")
 
     def _on_state_tool_changed(self, tool_id: str) -> None:
         """Sync palette when tool changes via state (e.g. from map view draw finish)."""
