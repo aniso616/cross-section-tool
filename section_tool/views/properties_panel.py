@@ -119,7 +119,8 @@ class PropertiesPanel(QDockWidget):
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
         )
         self.setMinimumWidth(220)
-        self.setMaximumWidth(300)
+        # No max-width cap: fill the host column (it lives in the left vertical
+        # panel under the project tree, so a cap would leave dead space beside it).
 
         # Scrollable inner area
         scroll = QScrollArea()
