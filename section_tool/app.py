@@ -3143,6 +3143,7 @@ class SectionMainWindow(MainWindow):
         # 13. Panel toggle shortcuts.
         QShortcut(QKeySequence("Ctrl+1"), self, self._toggle_map_tile)
         QShortcut(QKeySequence("Ctrl+2"), self, self._toggle_section_tile)
+        QShortcut(QKeySequence("Ctrl+3"), self, self._toggle_view3d_tile)
         QShortcut(QKeySequence("Ctrl+4"), self, self._toggle_project_panel)
         QShortcut(QKeySequence("Ctrl+5"), self, self._toggle_properties_panel)
         QShortcut(QKeySequence("F11"), self, self._toggle_fullscreen)
@@ -3327,13 +3328,24 @@ class SectionMainWindow(MainWindow):
             lambda: self._tool_palette.set_active_tool("select"))
         self._zslice_view.status_message.connect(self._flash_status)
 
+        # 3D viewer tile — re-homed from the retired dock world. Wraps the live
+        # Viewer3D (lazy OpenGL: no GL context until the user clicks Enable, so
+        # reparenting here is safe). PROVISIONAL placement: its own slot below
+        # the map. TBD whether 3D keeps a dedicated slot, shares the section
+        # slot via a router (like z-slice), or becomes a detachable window.
+        from section_tool.views.view3d_tile import View3DTile
+        self.view3d_tile = View3DTile(self._viewer_3d, self)
+
         self.v_splitter.addWidget(self.section_tile)
         self.v_splitter.addWidget(self.zslice_tile)
         self.v_splitter.addWidget(self.map_tile)
+        self.v_splitter.addWidget(self.view3d_tile)
         self.zslice_tile.setVisible(False)       # shown by the active-slice router
+        self.view3d_tile.setVisible(False)       # shown by the View ▸ 3D toggle
         self.v_splitter.setStretchFactor(0, 3)   # section: 60%
         self.v_splitter.setStretchFactor(1, 3)   # z-slice (same slot as section)
         self.v_splitter.setStretchFactor(2, 2)   # map: 40%
+        self.v_splitter.setStretchFactor(3, 2)   # 3D (provisional, own slot)
         # Active-slice router: section ⇒ section tile, horizontal ⇒ z-slice tile.
         self._state.active_slice_changed.connect(self._on_active_slice_route)
         # Bidirectional cursor: map tile hover → section vertical indicator
@@ -3384,10 +3396,11 @@ class SectionMainWindow(MainWindow):
         # Section | Map side by side — section gets 60%, map gets 40%
         section_w = int(center_w * 0.60)
         map_w     = int(center_w * 0.40)
-        # v_splitter = [section_tile, zslice_tile, map_tile]; section & z-slice
-        # share a slot (router toggles visibility), so both get section width;
-        # map keeps 40%.
-        self.v_splitter.setSizes([section_w, section_w, map_w])
+        # v_splitter = [section_tile, zslice_tile, map_tile, view3d_tile];
+        # section & z-slice share a slot (router toggles visibility), so both get
+        # section width; map keeps 40%; the (hidden) 3D tile gets a map-sized
+        # slot for when it's toggled on.
+        self.v_splitter.setSizes([section_w, section_w, map_w, map_w])
 
         # Regression guard: this collapsed the map once already, when a tile was
         # added (0067856) without growing the size list. Warn-and-repair any
@@ -3438,6 +3451,15 @@ class SectionMainWindow(MainWindow):
 
     def _toggle_section_tile(self) -> None:
         self.section_tile.setVisible(not self.section_tile.isVisible())
+
+    def _toggle_view3d_tile(self) -> None:
+        # Route through the View-menu action so the checkmark stays in sync and
+        # _set_tile_visible restores the tile's width when it's re-shown.
+        act = getattr(self, "_view3d_view_action", None)
+        if act is not None:
+            act.toggle()
+        else:
+            self._set_tile_visible(self.view3d_tile, self.view3d_tile.isHidden())
 
     def _on_active_slice_route(self, slice_) -> None:
         """Route the active workspace slice to the correct view.
@@ -3537,21 +3559,30 @@ class SectionMainWindow(MainWindow):
         sec_new.toggled.connect(
             lambda checked, t=self.section_tile: self._set_tile_visible(t, checked))
 
+        # 3D: re-homed into view3d_tile (own provisional slot). Fresh checkable
+        # action bound to the tile, default unchecked — the tile shows the lazy
+        # "Enable 3D View" button until the user activates the PyVista context.
+        d3_new = QAction(d3_action.text(), self)
+        d3_new.setCheckable(True)
+        d3_new.setChecked(not self.view3d_tile.isHidden())
+        d3_new.toggled.connect(
+            lambda checked, t=self.view3d_tile: self._set_tile_visible(t, checked))
+
         if view_menu is not None:
             view_menu.insertAction(map_old, map_new)
             view_menu.removeAction(map_old)
             view_menu.insertAction(sec_old, sec_new)
             view_menu.removeAction(sec_old)
+            view_menu.insertAction(d3_action, d3_new)
+            view_menu.removeAction(d3_action)
         self._map_view_action     = map_new
         self._section_view_action = sec_new
+        self._view3d_view_action  = d3_new
 
-        # 3D: still not in the tiling (re-homed in a later phase) — disable.
-        d3_action.setEnabled(False)
-        d3_action.setChecked(False)
-
-        # Retire the now-orphaned Map/Section docks (3D dock kept for re-home).
+        # Retire the now-orphaned docks (their views live in tiles now).
         self._retire_dock("_map_dock", self._map_view, self.map_tile)
         self._retire_dock("_section_dock", self._section_view, self.section_tile)
+        self._retire_dock("_view3d_dock", self._viewer_3d, self.view3d_tile)
 
     def _reset_layout(self) -> None:
         """Game UI has no docks — reset splitter proportions and default tile
@@ -3858,7 +3889,7 @@ class SectionMainWindow(MainWindow):
             "tool_kink":     lambda: self._tool_palette.set_active_tool("kink_band"),
             "mode_section":  lambda: self.set_mode(Mode.SECTION),
             "mode_map":      self._toggle_map_dock,
-            "mode_3d":       lambda: self.set_mode(Mode.THREE_D),
+            "mode_3d":       self._toggle_view3d_tile,
             "view_fit":      self._zoom_to_fit,
             "export_image":  self._on_export_section_image,
             "export_svg":    self._on_export_section_image,
