@@ -3711,15 +3711,41 @@ class SectionMainWindow(MainWindow):
         self._on_tool_changed(old_tool)
 
     def _on_game_escape(self) -> None:
-        """Escape, two-stage and focus-independent (window-level shortcut).
+        """Escape, focus-independent (window-level shortcut). One action per
+        press, in strict priority:
 
-        Stage 1: if a pick stroke is in progress, discard the uncommitted draft
-        and stay in the tool — committed picks are never touched.
-        Stage 2: nothing in progress → return to Select, keeping the ToolManager
-        in sync so the next H/F doesn't toggle off a stale active tool.
+        1. A focused text editor owns Escape — blur it, leave everything else.
+        2. An uncommitted pick draft → discard it, stay in the tool.
+        3. (Select + object selected) or (Nodes + node selected) → clear that
+           selection and empty the properties panel, stay in the tool. A pick
+           tool's armed target is NOT cleared here.
+        4. Otherwise → return to Select.
         """
+        from PySide6.QtWidgets import (QApplication, QLineEdit, QAbstractSpinBox,
+                                        QComboBox, QTextEdit, QPlainTextEdit)
+        fw = QApplication.focusWidget()
+        if isinstance(fw, (QLineEdit, QAbstractSpinBox, QTextEdit, QPlainTextEdit)) \
+                or (isinstance(fw, QComboBox) and fw.isEditable()):
+            fw.clearFocus()          # let the field's Escape blur it; selection untouched
+            return
+
         if self._section_view.discard_pick_draft():
             return
+
+        sv = self._section_view
+        tool = self._tool_palette.active_tool
+        if tool == "node_edit" and sv.has_node_selected():
+            sv.clear_node_selection()
+            self._properties_panel.set_selected_node(None)
+            return
+        if tool == "select" and (sv.has_object_selected()
+                                 or self._state.selected_entity_index >= 0):
+            sv.clear_object_selection()
+            self._state.set_selected_entity("", -1)
+            self._properties_panel.set_selected_object("", -1)
+            self._properties_panel.set_selected_node(None)
+            return
+
         self._tool_mgr.reset()
         self._tool_palette.set_active_tool("select")
 

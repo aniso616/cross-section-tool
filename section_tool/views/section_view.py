@@ -3094,6 +3094,30 @@ class SectionView(QWidget):
         self.render()
         return True
 
+    # ---- selection state (for window-level Escape) --------------------
+
+    def has_node_selected(self) -> bool:
+        """A pick node is selected (Nodes/edit mode)."""
+        return self._pick_selected is not None
+
+    def has_object_selected(self) -> bool:
+        """A whole object (horizon/fault/polygon) is selected."""
+        return self._selected_object is not None
+
+    def clear_node_selection(self) -> None:
+        """Deselect the current node; stay in the tool. No model change."""
+        self._pick_selected = None
+        self._pick_copy     = None
+        self.render()
+
+    def clear_object_selection(self) -> None:
+        """Deselect the current object/node; stay in the tool. No model change."""
+        self._pick_selected = None
+        self._pick_copy     = None
+        self._sv_mode       = "idle"
+        self._set_selected_object(None)
+        self.render()
+
     # ------------------------------------------------------------------
     # Seismic cache
     # ------------------------------------------------------------------
