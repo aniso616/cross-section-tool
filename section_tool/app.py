@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import traceback
@@ -3387,6 +3388,21 @@ class SectionMainWindow(MainWindow):
         # share a slot (router toggles visibility), so both get section width;
         # map keeps 40%.
         self.v_splitter.setSizes([section_w, section_w, map_w])
+
+        # Regression guard: this collapsed the map once already, when a tile was
+        # added (0067856) without growing the size list. Warn-and-repair any
+        # visible tile left at 0 width so a future mismatch is loud in the
+        # console but never ships a 0-width pane to the user.
+        sizes = self.v_splitter.sizes()
+        for i in range(self.v_splitter.count()):
+            wdg = self.v_splitter.widget(i)
+            if wdg.isVisible() and i < len(sizes) and sizes[i] == 0:
+                logging.getLogger(__name__).warning(
+                    "v_splitter: visible tile %r got 0 width "
+                    "(%d sizes / %d widgets). Repairing.",
+                    wdg.objectName() or wdg, len(sizes), self.v_splitter.count())
+                sizes[i] = max(int(self.width() * 0.20), 200)
+                self.v_splitter.setSizes(sizes)
 
     # ------------------------------------------------------------------
     # Tiled toolbar action stubs
