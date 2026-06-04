@@ -3297,10 +3297,24 @@ class SectionMainWindow(MainWindow):
         self.h_splitter.addWidget(self._tool_palette)
         self._tool_palette.setVisible(True)
 
-        # Left: project panel (reuse existing, no title bar)
+        # Left panel: vertical splitter — project tree on top, properties below.
+        # Both reuse the existing live docks (detached in _convert_to_game_ui);
+        # properties used to sit on the far right, moved here so section/map
+        # reclaim that width. Moving the live widgets, not rebuilding them.
         self._project_panel.setTitleBarWidget(QWidget(self._project_panel))
         self._project_panel.setVisible(True)
-        self.h_splitter.addWidget(self._project_panel)
+        self._properties_panel.setTitleBarWidget(QWidget(self._properties_panel))
+        self._properties_panel.setMinimumWidth(0)
+        self._properties_panel.setVisible(True)
+
+        self.left_panel = QSplitter(Qt.Orientation.Vertical, self)
+        self.left_panel.setHandleWidth(3)
+        self.left_panel.setStyleSheet(_splitter_style)
+        self.left_panel.addWidget(self._project_panel)
+        self.left_panel.addWidget(self._properties_panel)
+        self.left_panel.setStretchFactor(0, 3)   # project tree ~60%
+        self.left_panel.setStretchFactor(1, 2)   # properties ~40%
+        self.h_splitter.addWidget(self.left_panel)
 
         # Center: vertical [section tile | map tile]
         self.v_splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -3374,12 +3388,6 @@ class SectionMainWindow(MainWindow):
         # show() AFTER re-parenting (re-parent hides the widget).
         self._ctx.setVisible(True)
 
-        # Right: properties panel (reuse existing, no title bar)
-        self._properties_panel.setTitleBarWidget(QWidget(self._properties_panel))
-        self._properties_panel.setMinimumWidth(200)
-        self._properties_panel.setVisible(True)
-        self.h_splitter.addWidget(self._properties_panel)
-
         # Keep the tool rail a fixed thin strip: never let the splitter
         # collapse or stretch it.
         self.h_splitter.setCollapsible(0, False)
@@ -3391,8 +3399,14 @@ class SectionMainWindow(MainWindow):
         """Set default panel proportions after the window has real geometry."""
         w        = self.width()
         rail_w   = self._tool_palette.width()   # fixed thin tool rail (56 px)
-        center_w = max(w - 480 - rail_w, 400)
-        self.h_splitter.setSizes([rail_w, 220, center_w, 260])
+        left_w   = 280                          # project tree + properties stack
+        center_w = max(w - left_w - rail_w, 400)
+        # h_splitter = [tool_palette, left_panel, central]; properties moved into
+        # left_panel, so the old right slot is gone and center reclaims it.
+        self.h_splitter.setSizes([rail_w, left_w, center_w])
+        # Left panel: project tree ~60% over properties ~40% (vertical).
+        h = max(self.height(), 600)
+        self.left_panel.setSizes([int(h * 0.60), int(h * 0.40)])
         # Section | Map side by side — section gets 60%, map gets 40%
         section_w = int(center_w * 0.60)
         map_w     = int(center_w * 0.40)
@@ -3402,20 +3416,25 @@ class SectionMainWindow(MainWindow):
         # slot for when it's toggled on.
         self.v_splitter.setSizes([section_w, section_w, map_w, map_w])
 
-        # Regression guard: this collapsed the map once already, when a tile was
-        # added (0067856) without growing the size list. Warn-and-repair any
-        # visible tile left at 0 width so a future mismatch is loud in the
-        # console but never ships a 0-width pane to the user.
-        sizes = self.v_splitter.sizes()
-        for i in range(self.v_splitter.count()):
-            wdg = self.v_splitter.widget(i)
+        # Regression guard: a tile added without growing the size list collapsed
+        # the map once already (0067856). Warn-and-repair any visible pane left
+        # at 0 width — loud in the console, but the user still gets a working
+        # layout. Covers both splitters now that left_panel stacks two docks.
+        self._repair_collapsed_panes(self.h_splitter, "h_splitter")
+        self._repair_collapsed_panes(self.v_splitter, "v_splitter")
+
+    def _repair_collapsed_panes(self, splitter, label: str) -> None:
+        """Warn + repair any visible pane in *splitter* that got 0 extent."""
+        sizes = splitter.sizes()
+        for i in range(splitter.count()):
+            wdg = splitter.widget(i)
             if wdg.isVisible() and i < len(sizes) and sizes[i] == 0:
                 logging.getLogger(__name__).warning(
-                    "v_splitter: visible tile %r got 0 width "
-                    "(%d sizes / %d widgets). Repairing.",
-                    wdg.objectName() or wdg, len(sizes), self.v_splitter.count())
+                    "%s: visible pane %r got 0 extent (%d sizes / %d widgets). "
+                    "Repairing.", label, wdg.objectName() or wdg,
+                    len(sizes), splitter.count())
                 sizes[i] = max(int(self.width() * 0.20), 200)
-                self.v_splitter.setSizes(sizes)
+                splitter.setSizes(sizes)
 
     # ------------------------------------------------------------------
     # Tiled toolbar action stubs
