@@ -2773,9 +2773,11 @@ class SectionView(QWidget):
         return float(pt[0, 0]), float(pt[0, 1])
 
     def _find_nearest_pick_px(
-        self, event_x: float, event_y: float
+        self, event_x: float, event_y: float,
+        radius_px: float = _PICK_HIT_PX,
     ) -> tuple[str, int, int] | None:
-        """Return (category, obj_idx, FULL_pt_idx) for nearest pick in current section."""
+        """Return (category, obj_idx, FULL_pt_idx) for nearest pick in current
+        section within *radius_px* screen pixels (default _PICK_HIT_PX)."""
         section = self._state.active_section
         sec_name = section.name if section is not None else ""
         ex, ey = self._to_screen_px_sv(event_x, event_y)
@@ -2791,7 +2793,7 @@ class SectionView(QWidget):
                         float(hp._distances[fi_full]), float(hp._depths[fi_full])
                     )
                     d = math.hypot(ex - nx, ey - ny)
-                    if d <= _PICK_HIT_PX and d < best_dist:
+                    if d <= radius_px and d < best_dist:
                         best_dist = d
                         best = (category, oi, int(fi_full))
 
@@ -3454,8 +3456,10 @@ class SectionView(QWidget):
         if event.button == 1 and tool in ("select", "node_edit"):
             is_dbl = getattr(event, "dblclick", False)
 
-            # Check for nearby pick node FIRST (any mode)
-            hit_node = self._find_nearest_pick_px(x, y)
+            # Check for nearby pick node FIRST (any mode). Use the snap radius
+            # (forgiving) so an on-vertex click in Nodes mode reliably SELECTS
+            # the node rather than falling through to a segment-insert.
+            hit_node = self._find_nearest_pick_px(x, y, radius_px=_SNAP_THRESHOLD)
             if hit_node is not None:
                 cat, oi, pi = hit_node
                 if tool == "node_edit" or self._sv_mode == "edit_mode":
@@ -3556,7 +3560,7 @@ class SectionView(QWidget):
         # ---- Right-click context on pick node (edit mode only) ----
         if event.button == 3 and tool in ("select", "node_edit"):
             if self._sv_mode == "edit_mode":
-                hit = self._find_nearest_pick_px(x, y)
+                hit = self._find_nearest_pick_px(x, y, radius_px=_SNAP_THRESHOLD)
                 if hit is not None:
                     self._show_pick_context_menu(hit, event)
 
