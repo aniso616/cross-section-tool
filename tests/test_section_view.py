@@ -333,7 +333,8 @@ class TestPickingMode:
         assert not view._picking_active
 
     def test_picking_click_adds_to_active_target(self, view, state):
-        """When picking active + target set, click writes to horizon pick."""
+        """A click buffers an uncommitted draft point; it commits only on stroke
+        end (right-click / double-click / Enter / tool switch)."""
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
         hp = HorizonPick([500.0], [1000.0], name="H1")
@@ -350,7 +351,13 @@ class TestPickingMode:
             ydata = 500.0
 
         view._on_sv_press(FakeEvent())
+        # Draft buffered, NOT yet committed.
+        assert len(view._pick_draft) == 1
+        assert state.project.horizon_picks[0].n_picks == 1
+        # Ending the stroke commits the draft.
+        view.commit_pick_draft()
         assert state.project.horizon_picks[0].n_picks == 2
+        assert view._pick_draft == []
 
     def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())

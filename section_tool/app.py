@@ -3711,8 +3711,17 @@ class SectionMainWindow(MainWindow):
         self._on_tool_changed(old_tool)
 
     def _on_game_escape(self) -> None:
-        """Escape: reset tool manager (also handled by matplotlib for pick/polygon)."""
-        self._tool_mgr.handle_key(Qt.Key.Key_Escape)
+        """Escape, two-stage and focus-independent (window-level shortcut).
+
+        Stage 1: if a pick stroke is in progress, discard the uncommitted draft
+        and stay in the tool — committed picks are never touched.
+        Stage 2: nothing in progress → return to Select, keeping the ToolManager
+        in sync so the next H/F doesn't toggle off a stale active tool.
+        """
+        if self._section_view.discard_pick_draft():
+            return
+        self._tool_mgr.reset()
+        self._tool_palette.set_active_tool("select")
 
     # ------------------------------------------------------------------
     # HUD feeds

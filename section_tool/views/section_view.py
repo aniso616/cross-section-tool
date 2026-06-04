@@ -328,6 +328,11 @@ class SectionView(QWidget):
         self._picking_active:  bool = False   # horizon_pick tool
         self._fault_picking:   bool = False   # fault_pick tool
         self._polygon_drawing: bool = False
+        # Uncommitted pick-stroke draft (horizon/fault). Points accumulate here
+        # while picking and are written into the target feature only on stroke
+        # end (right-click / double-click / Enter / tool switch). Escape discards
+        # the draft without ever committing it — see commit/discard_pick_draft.
+        self._pick_draft: list[tuple[float, float]] = []
         # Phase 2: reference-line placement tool
         self._ref_line_tool:   str | None = None   # "h_ref"|"v_ref"|"a_ref"|None
         # Phase 2: A-Ref two-click anchor
@@ -940,6 +945,8 @@ class SectionView(QWidget):
 
     def set_picking_active(self, active: bool) -> None:
         """Enable/disable horizon pick mode."""
+        # Leaving / switching picking commits any in-progress draft stroke.
+        self.commit_pick_draft()
         self._picking_active   = active
         self._fault_picking    = False if active else self._fault_picking
         self._polygon_drawing  = False if active else self._polygon_drawing
@@ -949,6 +956,7 @@ class SectionView(QWidget):
 
     def set_fault_picking(self, active: bool) -> None:
         """Enable/disable fault pick mode."""
+        self.commit_pick_draft()
         self._fault_picking    = active
         self._picking_active   = False if active else self._picking_active
         self._polygon_drawing  = False if active else self._polygon_drawing
@@ -1361,6 +1369,7 @@ class SectionView(QWidget):
         self._render_wells(section)
         self._render_intersections(section)
         self._render_construct_preview()
+        self._render_pick_draft(section)
         self._render_rubber_band(section)
         self._render_snap_indicator()
         self._render_polygon_in_progress()
@@ -2467,6 +2476,33 @@ class SectionView(QWidget):
                 self._ax.plot([lx, cx], [ly, cy], "--", color="#9467bd",
                               linewidth=1.0, alpha=0.7, zorder=14))
 
+    def _render_pick_draft(self, section: Section) -> None:
+        """Draw the uncommitted pick-stroke draft: a provisional dashed polyline
+        with open markers, in the target feature's colour. Not part of the model
+        until committed, so it renders distinct from solid committed picks."""
+        if not self._pick_draft:
+            return
+        tgt = self._draft_target()
+        if tgt is None:
+            return
+        _cat, idx, picks = tgt
+        hp = picks[idx]
+        color = getattr(hp, "color", "#ffd166") or "#ffd166"
+        dxs = [p[0] for p in self._pick_draft]
+        dzs = [p[1] for p in self._pick_draft]
+        # Connect from the last committed point on this section, for continuity.
+        line_x, line_z = list(dxs), list(dzs)
+        sec_idxs = hp.section_indices(section.name) if section is not None else []
+        if len(sec_idxs):
+            last = int(sec_idxs[-1])
+            line_x = [float(hp._distances[last])] + line_x
+            line_z = [float(hp._depths[last])] + line_z
+        self._ax.plot(line_x, line_z, linestyle="--", color=color,
+                      linewidth=1.2, alpha=0.9, zorder=9)
+        self._ax.plot(dxs, dzs, linestyle="none", marker="o", markersize=6,
+                      markerfacecolor="none", markeredgecolor=color,
+                      markeredgewidth=1.6, alpha=0.95, zorder=10)
+
     def _render_rubber_band(self, section: Section) -> None:
         """V-shaped dashed ghost line; shows angle-snap guide when Shift held."""
         if not (self._picking_active or self._fault_picking):
@@ -2488,6 +2524,17 @@ class SectionView(QWidget):
         if idx >= len(picks):
             return
         hp = picks[idx]
+        # A draft stroke in progress: the rubber band extends from its LAST
+        # draft point to the cursor (works even before any committed picks).
+        if self._pick_draft:
+            cx, cy = self._cursor_data
+            if shift_held:
+                cx, cy = self._apply_angle_snap(cx, cy)
+            lx, lz = self._pick_draft[-1]
+            self._overlay_artists.extend(self._ax.plot(
+                [lx, cx], [lz, cy], linestyle="--", color=hp.color,
+                linewidth=1.0, alpha=0.6, zorder=8))
+            return
         if hp.n_picks == 0:
             return
         cx, cy   = self._cursor_data
@@ -2902,7 +2949,16 @@ class SectionView(QWidget):
         return hp, float(hp.distances[-1]), float(hp.depths[-1])
 
     def _undo_last_pick(self) -> None:
-        """Middle-click during picking: remove the last placed pick on this section."""
+        """Middle-click during picking: drop the last point.
+
+        Prefers the uncommitted draft (so it never removes committed picks);
+        only when no draft is in progress does it remove the last committed pick.
+        """
+        if self._pick_draft:
+            self._pick_draft.pop()
+            self.render()
+            self._flash_hint(f"Removed last draft point  ({len(self._pick_draft)} in stroke)")
+            return
         cat = self._state.active_pick_category
         idx = self._state.active_pick_index
         if cat is None or idx is None:
@@ -2965,6 +3021,78 @@ class SectionView(QWidget):
         self._state.record_command(
             f"Add pick to {hp_before.name or cat}", undo=_undo, redo=_do
         )
+
+    # ---- draft pick stroke (uncommitted) ------------------------------
+
+    def _draft_target(self):
+        """(category, index, picks_list) for the active pick target, or None."""
+        cat = self._state.active_pick_category
+        idx = self._state.active_pick_index
+        if cat not in ("Horizons", "Faults") or idx is None:
+            return None
+        picks = (self._state.project.horizon_picks if cat == "Horizons"
+                 else self._state.project.fault_picks)
+        if idx >= len(picks):
+            return None
+        return cat, idx, picks
+
+    def _add_draft_point(self, x: float, y: float) -> None:
+        """Append one point to the uncommitted pick draft (not yet in the model)."""
+        if self._draft_target() is None:
+            return
+        self._pick_draft.append((float(x), float(y)))
+        self.render()
+
+    def commit_pick_draft(self) -> None:
+        """Write the draft stroke into the target feature as ONE undo command.
+
+        Idempotent: clears the draft, so a second call is a no-op. Never touches
+        any previously-committed picks — it only appends the draft points.
+        """
+        if not self._pick_draft:
+            return
+        draft = self._pick_draft
+        self._pick_draft = []
+        tgt = self._draft_target()
+        if tgt is None:
+            return
+        cat, idx, picks = tgt
+        section = self._state.active_section
+        sec_name = section.name if section is not None else ""
+        hp_before = copy.deepcopy(picks[idx])
+        hp_after  = copy.deepcopy(hp_before)
+        for (x, y) in draft:
+            map_x, map_y = (section.section_to_map(x) if section is not None
+                            else (float("nan"), float("nan")))
+            hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
+
+        def _do():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(idx, copy.deepcopy(hp_after))
+            else:
+                self._state.update_fault_pick(idx, copy.deepcopy(hp_after))
+        def _undo():
+            if cat == "Horizons":
+                self._state.update_horizon_pick(idx, copy.deepcopy(hp_before))
+            else:
+                self._state.update_fault_pick(idx, copy.deepcopy(hp_before))
+
+        _do()
+        n = len(draft)
+        self._state.record_command(
+            f"Add {n} pick{'s' if n != 1 else ''} to {hp_before.name or cat}",
+            undo=_undo, redo=_do,
+        )
+        self.render()
+
+    def discard_pick_draft(self) -> bool:
+        """Drop the uncommitted draft stroke. Returns True if anything was
+        discarded (i.e. a stroke was in progress). Committed picks are untouched."""
+        if not self._pick_draft:
+            return False
+        self._pick_draft = []
+        self.render()
+        return True
 
     # ------------------------------------------------------------------
     # Seismic cache
@@ -3068,7 +3196,8 @@ class SectionView(QWidget):
             self._state.set_active_pick_target("Horizons", best_idx)
 
     def _end_pick_sequence(self) -> None:
-        """FIX 1: finish picking, return to select mode."""
+        """Finish picking: commit the draft stroke, then return to select mode."""
+        self.commit_pick_draft()
         self._picking_active = False
         self._fault_picking  = False
         self._cursor_data    = None
@@ -3228,9 +3357,9 @@ class SectionView(QWidget):
             from PySide6.QtCore import Qt as _Qt
             if QApplication.keyboardModifiers() & _Qt.KeyboardModifier.ShiftModifier:
                 x, y = self._apply_angle_snap(x, y)
-            self._add_pick_to_active_target(x, y)
+            self._add_draft_point(x, y)
             if is_dbl:
-                self._end_pick_sequence()
+                self._end_pick_sequence()   # commits the draft, then ends
             return
 
         if event.button == 1 and self._polygon_drawing:
@@ -3600,8 +3729,16 @@ class SectionView(QWidget):
         self.request_render()   # debounced — fires 50 ms after last scroll event
 
     def _on_sv_key(self, event) -> None:
+        if event.key in ("enter", "return"):
+            if self._picking_active or self._fault_picking:
+                self._end_pick_sequence()   # commit the draft and finish
+                return
         if event.key == "escape":
             if self._picking_active or self._fault_picking:
+                # Two-stage: 1st Escape discards the uncommitted draft (stay in
+                # tool); with no draft, fall through to end the session.
+                if self.discard_pick_draft():
+                    return
                 self._end_pick_sequence()
                 return
             if self._polygon_drawing:

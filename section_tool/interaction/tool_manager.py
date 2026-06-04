@@ -75,6 +75,12 @@ class ToolManager(QObject):
             self._active = tool
             self.tool_changed.emit(tool)
 
+    def reset(self) -> None:
+        """Clear the active tool WITHOUT emitting — used to resync after an
+        external tool change (e.g. Escape routed through the palette), so the
+        next tool key doesn't toggle off a stale active tool."""
+        self._active = None
+
 
 class ToolKeyFilter(QObject):
     """Event filter that routes tool-key presses through ToolManager.
