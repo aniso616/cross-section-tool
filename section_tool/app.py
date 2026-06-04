@@ -3379,7 +3379,12 @@ class SectionMainWindow(MainWindow):
         center_w = max(w - 480 - rail_w, 400)
         self.h_splitter.setSizes([rail_w, 220, center_w, 260])
         # Section | Map side by side — section gets 60%, map gets 40%
-        self.v_splitter.setSizes([int(center_w * 0.60), int(center_w * 0.40)])
+        section_w = int(center_w * 0.60)
+        map_w     = int(center_w * 0.40)
+        # v_splitter = [section_tile, zslice_tile, map_tile]; section & z-slice
+        # share a slot (router toggles visibility), so both get section width;
+        # map keeps 40%.
+        self.v_splitter.setSizes([section_w, section_w, map_w])
 
     # ------------------------------------------------------------------
     # Tiled toolbar action stubs
