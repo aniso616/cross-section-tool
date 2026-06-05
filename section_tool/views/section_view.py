@@ -1386,9 +1386,21 @@ class SectionView(QWidget):
         total = section.total_length()
         ve    = section.vertical_exaggeration
 
-        # X axis — 3% padding left, 5% right so overhanging picks are reachable
-        _span = max(total, 1.0)
-        self._ax.set_xlim(-0.03 * _span, 1.05 * _span)
+        # X axis — union of the section span [0, total] and any picks that
+        # overhang the ends (beyond-section interpretation), so past-endpoint
+        # picks stay on-axis. With no overhang this is identical to the old
+        # 3%/5% padding of the section.
+        lo, hi = 0.0, total
+        for _picks in (self._state.project.horizon_picks,
+                       self._state.project.fault_picks):
+            for hp in _picks:
+                idxs = hp.section_indices(section.name)
+                if len(idxs):
+                    ds = hp._distances[idxs]
+                    lo = min(lo, float(np.min(ds)))
+                    hi = max(hi, float(np.max(ds)))
+        _span = max(hi - lo, 1.0)
+        self._ax.set_xlim(lo - 0.03 * _span, hi + 0.05 * _span)
 
         # Y axis — depth down, inverted
         max_d = self._compute_max_depth(section)
