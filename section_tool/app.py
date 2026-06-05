@@ -37,7 +37,7 @@ def _global_exception_handler(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _global_exception_handler
 
-from PySide6.QtCore import QObject, Qt, QSize, QSettings, QTimer
+from PySide6.QtCore import QObject, Qt, QSize, QSettings, QTimer, QPoint
 from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -3445,6 +3445,12 @@ class SectionMainWindow(MainWindow):
         self._repair_collapsed_panes(self.h_splitter, "h_splitter")
         self._repair_collapsed_panes(self.v_splitter, "v_splitter")
 
+        # Floating palette: restore its saved spot now the section tile has real
+        # geometry (validates on-canvas; default = inset from the top-left).
+        if hasattr(self, "_floating_palette"):
+            self._floating_palette.restore_position(QPoint(12, 40))
+            self._floating_palette.raise_()
+
     def _repair_collapsed_panes(self, splitter, label: str) -> None:
         """Warn + repair any visible pane in *splitter* that got 0 extent."""
         sizes = splitter.sizes()
@@ -3609,6 +3615,15 @@ class SectionMainWindow(MainWindow):
         d3_new.toggled.connect(
             lambda checked, t=self.view3d_tile: self._set_tile_visible(t, checked))
 
+        # View ▸ Tool Palette — toggle the floating building palette. No bare
+        # hotkey: bare letters are the tool-activation namespace (and would fire
+        # while typing in a field), so this is menu-only by default.
+        pal_act = QAction("Tool &Palette", self)
+        pal_act.setCheckable(True)
+        pal_act.setChecked(not self._floating_palette.isHidden())
+        pal_act.toggled.connect(
+            lambda checked: self._floating_palette.setVisible(checked))
+
         if view_menu is not None:
             view_menu.insertAction(map_old, map_new)
             view_menu.removeAction(map_old)
@@ -3616,9 +3631,12 @@ class SectionMainWindow(MainWindow):
             view_menu.removeAction(sec_old)
             view_menu.insertAction(d3_action, d3_new)
             view_menu.removeAction(d3_action)
+            view_menu.addSeparator()
+            view_menu.addAction(pal_act)
         self._map_view_action     = map_new
         self._section_view_action = sec_new
         self._view3d_view_action  = d3_new
+        self._palette_view_action = pal_act
 
         # Retire the now-orphaned docks (their views live in tiles now).
         self._retire_dock("_map_dock", self._map_view, self.map_tile)
