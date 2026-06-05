@@ -337,6 +337,7 @@ class MapView(QWidget):
         self._render_surfaces()
         self._render_aoi()
         self._render_sections()
+        self._render_beyond_picks()
         self._render_wells()
         self._render_new_section_preview()
 
@@ -396,6 +397,10 @@ class MapView(QWidget):
             if ref.extent_x_max != ref.extent_x_min:
                 all_x.extend([ref.extent_x_min, ref.extent_x_max])
                 all_y.extend([ref.extent_y_min, ref.extent_y_max])
+        # Beyond-section pick reach (off-AOI included) so it stays on-screen.
+        for bx, by in getattr(self, "_beyond_xy", []):
+            all_x.append(bx)
+            all_y.append(by)
 
         if not all_x:
             self._ax.set_xlim(-500, 10500)
@@ -456,6 +461,46 @@ class MapView(QWidget):
                           fontsize=6, color="#44AAFF", va="bottom", zorder=5)
         except Exception:
             pass
+
+    def _render_beyond_picks(self) -> None:
+        """Plot the beyond-section reach of picks on the map: a dashed ghost line
+        + open markers at the extrapolated XY (distance < 0 extends from the
+        start node, > total_length from the end node). Off-AOI rule: drawn at
+        their true XY with NO clipping, and included in the fit-all extent, so a
+        pick whose XY falls outside the AOI is honestly shown beyond the outline."""
+        proj = self._state.project
+        self._beyond_xy = []
+        for picks in (proj.horizon_picks, proj.fault_picks):
+            for hp in picks:
+                color = getattr(hp, "color", "#aaaaaa") or "#aaaaaa"
+                for sec in proj.sections:
+                    idxs = hp.section_indices(sec.name)
+                    if len(idxs) == 0:
+                        continue
+                    d  = np.asarray(hp._distances[idxs], dtype=float)
+                    mx = np.asarray(hp._map_x[idxs], dtype=float)
+                    my = np.asarray(hp._map_y[idxs], dtype=float)
+                    total = sec.total_length()
+                    for mask, anchor in ((d < 0.0, sec.nodes[0]),
+                                         (d > total, sec.nodes[-1])):
+                        if not mask.any():
+                            continue
+                        dd, xx, yy = d[mask], mx[mask], my[mask]
+                        ok = ~(np.isnan(xx) | np.isnan(yy))
+                        if not ok.any():
+                            continue
+                        dd, xx, yy = dd[ok], xx[ok], yy[ok]
+                        order = np.argsort(np.abs(dd))   # nearest the endpoint first
+                        xx, yy = xx[order], yy[order]
+                        lx = np.concatenate([[float(anchor[0])], xx])
+                        ly = np.concatenate([[float(anchor[1])], yy])
+                        self._ax.plot(lx, ly, linestyle=(0, (4, 3)), color=color,
+                                      linewidth=1.0, alpha=0.6, zorder=3.4)
+                        self._ax.plot(xx, yy, linestyle="none", marker="o",
+                                      markerfacecolor="none", markeredgecolor=color,
+                                      markersize=4, markeredgewidth=1.2, alpha=0.75,
+                                      zorder=3.6)
+                        self._beyond_xy.extend(zip(xx.tolist(), yy.tolist()))
 
     def _render_sections(self) -> None:
         active = self._state.active_section
