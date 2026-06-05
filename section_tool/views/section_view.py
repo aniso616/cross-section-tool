@@ -1781,6 +1781,54 @@ class SectionView(QWidget):
         return (self._state.active_pick_category == category and
                 self._state.active_pick_index == obj_idx)
 
+    def _render_pick_line_split(self, d_sec, z_sec, section, *,
+                                color, lw, ls, zorder) -> None:
+        """Draw a pick polyline, styling the reach BEYOND the section endpoints
+        (distance < 0 or > total_length) as a dashed ghost — visually distinct
+        from the solid in-section line, so beyond-section interpretation reads as
+        the lower-certainty extrapolation it is. Honest epistemic status."""
+        d = np.asarray(d_sec, dtype=float)
+        z = np.asarray(z_sec, dtype=float)
+        total = section.total_length()
+        ghost_ls = (0, (4, 3))     # dashed
+        ghost_alpha = 0.6
+        if len(d) < 2:
+            beyond = len(d) == 1 and (d[0] < 0.0 or d[0] > total)
+            self._overlay_artists.extend(self._ax.plot(
+                d, z, color=color, linewidth=lw,
+                linestyle=ghost_ls if beyond else ls,
+                alpha=ghost_alpha if beyond else 1.0, zorder=zorder))
+            return
+
+        # Insert exact crossing points at the endpoints so the solid↔ghost
+        # transition lands on the boundary (picks are stored ascending in d).
+        extra = [b for b in (0.0, total)
+                 if d[0] < b < d[-1] and not np.any(np.isclose(d, b))]
+        if extra:
+            ez = [float(np.interp(b, d, z)) for b in extra]
+            d = np.concatenate([d, extra]); z = np.concatenate([z, ez])
+            order = np.argsort(d, kind="stable"); d = d[order]; z = z[order]
+
+        eps = 1e-9
+        seg_beyond = [(0.5 * (d[i] + d[i + 1]) < -eps
+                       or 0.5 * (d[i] + d[i + 1]) > total + eps)
+                      for i in range(len(d) - 1)]
+        i = 0
+        while i < len(seg_beyond):
+            j = i
+            while j + 1 < len(seg_beyond) and seg_beyond[j + 1] == seg_beyond[i]:
+                j += 1
+            run_d, run_z = d[i:j + 2], z[i:j + 2]
+            if seg_beyond[i]:
+                self._overlay_artists.extend(self._ax.plot(
+                    run_d, run_z, color=color, linewidth=lw,
+                    linestyle=ghost_ls, alpha=ghost_alpha, zorder=zorder))
+            else:
+                self._overlay_artists.extend(self._ax.plot(
+                    run_d, run_z, color=color, linewidth=lw,
+                    linestyle=ls, zorder=zorder))
+            i = j + 1
+
     def _render_pick_object(
         self, category: str, obj_idx: int, hp: HorizonPick,
         section: Section, marker: str, default_ls: str,
@@ -1859,9 +1907,9 @@ class SectionView(QWidget):
                     self._ax.plot([d_sec[-1]], [z_sec[-1]], **ep_kw))
 
         if not decorated:
-            self._overlay_artists.extend(
-                self._ax.plot(d_sec, z_sec, color=hp.color,
-                              linewidth=render_lw, linestyle=ls, zorder=zorder))
+            self._render_pick_line_split(d_sec, z_sec, section,
+                                         color=hp.color, lw=render_lw,
+                                         ls=ls, zorder=zorder)
 
         if len(d_sec) >= 2:
             self._render_line_decoration(hp, d_sec, z_sec, category, lw)
