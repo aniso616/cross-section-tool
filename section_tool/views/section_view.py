@@ -3004,8 +3004,10 @@ class SectionView(QWidget):
             return
         hp_before = copy.deepcopy(picks[idx])
         hp_after  = copy.deepcopy(hp_before)
-        # Convert section distance → map coordinates (source of truth for future reprojection)
-        map_x, map_y = section.section_to_map(x) if section is not None else (float("nan"), float("nan"))
+        # Convert section distance → map coordinates (source of truth for future
+        # reprojection). extrapolate=True so beyond-endpoint picks store true XY.
+        map_x, map_y = (section.section_to_map(x, extrapolate=True)
+                        if section is not None else (float("nan"), float("nan")))
         hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
 
         def _do():
@@ -3064,8 +3066,8 @@ class SectionView(QWidget):
         hp_before = copy.deepcopy(picks[idx])
         hp_after  = copy.deepcopy(hp_before)
         for (x, y) in draft:
-            map_x, map_y = (section.section_to_map(x) if section is not None
-                            else (float("nan"), float("nan")))
+            map_x, map_y = (section.section_to_map(x, extrapolate=True)
+                            if section is not None else (float("nan"), float("nan")))
             hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
 
         def _do():
@@ -3494,8 +3496,8 @@ class SectionView(QWidget):
                         section = self._state.active_section
                         sec_name = section.name if section else ""
                         hp = copy.deepcopy(picks[oi])
-                        map_x, map_y = (section.section_to_map(x) if section is not None
-                                        else (float("nan"), float("nan")))
+                        map_x, map_y = (section.section_to_map(x, extrapolate=True)
+                                        if section is not None else (float("nan"), float("nan")))
                         hp.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
                         if cat == "Horizons":
                             self._state.update_horizon_pick(oi, hp)
@@ -3592,7 +3594,7 @@ class SectionView(QWidget):
             section = self._state.active_section
             if section is not None:
                 try:
-                    mx, my = section.section_to_map(cx)
+                    mx, my = section.section_to_map(cx, extrapolate=True)
                     self.cursor_map_pos.emit(mx, my)
                 except Exception:
                     pass
@@ -4865,8 +4867,8 @@ class SectionView(QWidget):
             section = self._state.active_section
             if section is None:
                 return
-            # Back-calculate map X,Y from distance along section
-            x, y = section.section_to_map(dist)
+            # Back-calculate map X,Y from distance along section (honest past ends)
+            x, y = section.section_to_map(dist, extrapolate=True)
             units = getattr(section, "depth_units", "m")
             if units == "m+ft":
                 depth_str = f"{depth:.0f} m  ({depth * 3.28084:.0f} ft)"

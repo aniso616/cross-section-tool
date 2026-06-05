@@ -263,6 +263,50 @@ class TestSectionToMap:
         assert pytest.approx(x) == 0.0
         assert pytest.approx(y) == 0.0
 
+    # extrapolate=True — beyond-section interpretation maps to real XY
+
+    def test_extrapolate_beyond_end_straight(self):
+        sec = straight_section(1000.0)
+        x, y = sec.section_to_map(1500.0, extrapolate=True)
+        assert pytest.approx(x) == 1500.0
+        assert pytest.approx(y) == 0.0
+
+    def test_extrapolate_before_start_straight(self):
+        sec = straight_section(1000.0)
+        x, y = sec.section_to_map(-200.0, extrapolate=True)
+        assert pytest.approx(x) == -200.0
+        assert pytest.approx(y) == 0.0
+
+    def test_extrapolate_beyond_end_bent_follows_last_segment(self):
+        # dogleg ends heading north; 300 m past the end continues north.
+        sec = dogleg_section()
+        x, y = sec.section_to_map(2300.0, extrapolate=True)
+        assert pytest.approx(x) == 1000.0
+        assert pytest.approx(y) == 1300.0
+
+    def test_extrapolate_before_start_bent_follows_first_segment(self):
+        # dogleg starts heading east; 200 m before the start continues west.
+        sec = dogleg_section()
+        x, y = sec.section_to_map(-200.0, extrapolate=True)
+        assert pytest.approx(x) == -200.0
+        assert pytest.approx(y) == 0.0
+
+    def test_extrapolate_inverse_of_project_point(self):
+        # section_to_map(extrapolate) is the inverse of project_point past ends.
+        sec = dogleg_section()
+        for d in (-350.0, 2400.0):
+            x, y = sec.section_to_map(d, extrapolate=True)
+            d_back, perp = sec.project_point(x, y)
+            assert pytest.approx(d_back, abs=1e-6) == d
+            assert pytest.approx(perp, abs=1e-6) == 0.0
+
+    def test_extrapolate_in_range_matches_clamped(self):
+        # Inside the section, the flag makes no difference.
+        sec = dogleg_section()
+        for d in (0.0, 500.0, 1500.0, 2000.0):
+            assert sec.section_to_map(d, extrapolate=True) == \
+                   pytest.approx(sec.section_to_map(d))
+
     def test_roundtrip_on_section(self):
         """Points on the section line should round-trip exactly."""
         sec = dogleg_section()

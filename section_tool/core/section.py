@@ -291,13 +291,39 @@ class Section:
 
         return best_s, best_perp
 
-    def section_to_map(self, distance_along: float) -> tuple[float, float]:
+    def section_to_map(self, distance_along: float,
+                       extrapolate: bool = False) -> tuple[float, float]:
         """Convert distance_along_section → (x, y) map coordinates.
 
-        Clamps to [0, total_length] if out of range.
+        By default clamps to ``[0, total_length]`` (the long-standing contract).
+        With *extrapolate=True* this is the exact inverse of :meth:`project_point`
+        for out-of-range distances: a distance < 0 extends the FIRST segment
+        backwards and a distance > total_length extends the LAST segment forwards
+        (for a bent section, along that segment's bearing). This is what
+        beyond-section picks need so their real-world XY follows the azimuth.
         """
         cum = self.cumulative_distances()
-        distance_along = float(np.clip(distance_along, 0.0, cum[-1]))
+
+        if extrapolate and distance_along < 0.0:
+            ax, ay = self._nodes[0]
+            bx, by = self._nodes[1]
+            seg_len = float(cum[1])              # length of the first segment
+            if seg_len == 0.0:
+                return float(ax), float(ay)
+            t = distance_along / seg_len         # negative
+            return float(ax + t * (bx - ax)), float(ay + t * (by - ay))
+
+        if extrapolate and distance_along > cum[-1]:
+            ax, ay = self._nodes[-2]
+            bx, by = self._nodes[-1]
+            seg_len = float(cum[-1] - cum[-2])   # length of the last segment
+            if seg_len == 0.0:
+                return float(bx), float(by)
+            t = (distance_along - cum[-2]) / seg_len   # > 1
+            return float(ax + t * (bx - ax)), float(ay + t * (by - ay))
+
+        if not extrapolate:
+            distance_along = float(np.clip(distance_along, 0.0, cum[-1]))
 
         for i in range(self.n_segments):
             if cum[i + 1] >= distance_along - 1e-10:
