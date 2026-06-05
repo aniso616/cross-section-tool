@@ -3403,6 +3403,20 @@ class SectionMainWindow(MainWindow):
 
         self.setCentralWidget(self.h_splitter)
 
+        # Floating building-tool palette — a frameless overlay on the section
+        # canvas. It owns no activation logic: clicks route through the one true
+        # path (_tool_palette.set_active_tool), and its highlight tracks
+        # AppState.tool_changed so it agrees with rail + hotkeys.
+        from section_tool.views.floating_tool_palette import FloatingToolPalette
+        self._floating_palette = FloatingToolPalette(self.section_tile)
+        self._floating_palette.tool_activation_requested.connect(
+            self._tool_palette.set_active_tool)
+        self._state.tool_changed.connect(self._floating_palette.set_active)
+        self._floating_palette.set_active(self._state.active_tool)
+        self._floating_palette.move(12, 40)      # default inset; persisted in Phase 2
+        self._floating_palette.show()
+        self._floating_palette.raise_()
+
     def _apply_default_proportions(self) -> None:
         """Set default panel proportions after the window has real geometry."""
         w        = self.width()
