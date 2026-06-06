@@ -359,6 +359,24 @@ class TestPickingMode:
         assert state.project.horizon_picks[0].n_picks == 2
         assert view._pick_draft == []
 
+    def test_pick_beyond_endpoint_stores_extrapolated_world_xy(self, view, state):
+        """Flow→function contract: a pick committed PAST the section end stores
+        the extrapolated world XY (via pick_to_world), not the clamped endpoint.
+        Fails if a pick path bypasses pick_to_world / forgets the extrapolate flag."""
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1")
+        state.add_section(sec)
+        state.set_active_section(sec)
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
+        view.set_picking_active(True)
+        view._add_draft_point(1500.0, 800.0)     # 500 m past the end
+        view.commit_pick_draft()
+        hp = state.project.horizon_picks[0]
+        i = hp.section_indices("L1")[-1]
+        assert hp._distances[i] == pytest.approx(1500.0)
+        assert hp._map_x[i] == pytest.approx(1500.0)   # extrapolated, NOT 1000 (clamped)
+        assert hp._map_y[i] == pytest.approx(0.0)
+
     def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])

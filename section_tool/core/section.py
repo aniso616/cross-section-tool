@@ -339,6 +339,15 @@ class Section:
         # Exactly at the last node
         return float(self._nodes[-1, 0]), float(self._nodes[-1, 1])
 
+    def pick_to_world(self, distance_along: float) -> tuple[float, float]:
+        """World XY for a PICK at *distance_along* — always extrapolates past the
+        section ends (``section_to_map(d, extrapolate=True)``). The single entry
+        point every model-writing pick path uses, so no call site can forget the
+        flag and clamp a beyond-section pick back to the endpoint. Non-pick
+        callers that genuinely want clamping keep calling section_to_map directly.
+        """
+        return self.section_to_map(distance_along, extrapolate=True)
+
     # ------------------------------------------------------------------
     # Slice protocol (a Section is a *vertical* slice)
     # ------------------------------------------------------------------

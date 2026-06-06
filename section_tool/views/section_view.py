@@ -3064,9 +3064,9 @@ class SectionView(QWidget):
             return
         hp_before = copy.deepcopy(picks[idx])
         hp_after  = copy.deepcopy(hp_before)
-        # Convert section distance → map coordinates (source of truth for future
-        # reprojection). extrapolate=True so beyond-endpoint picks store true XY.
-        map_x, map_y = (section.section_to_map(x, extrapolate=True)
+        # World coords are the reprojection source of truth; pick_to_world always
+        # extrapolates so beyond-endpoint picks store true XY (not the endpoint).
+        map_x, map_y = (section.pick_to_world(x)
                         if section is not None else (float("nan"), float("nan")))
         hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
 
@@ -3126,7 +3126,7 @@ class SectionView(QWidget):
         hp_before = copy.deepcopy(picks[idx])
         hp_after  = copy.deepcopy(hp_before)
         for (x, y) in draft:
-            map_x, map_y = (section.section_to_map(x, extrapolate=True)
+            map_x, map_y = (section.pick_to_world(x)
                             if section is not None else (float("nan"), float("nan")))
             hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
 
@@ -3556,7 +3556,7 @@ class SectionView(QWidget):
                         section = self._state.active_section
                         sec_name = section.name if section else ""
                         hp = copy.deepcopy(picks[oi])
-                        map_x, map_y = (section.section_to_map(x, extrapolate=True)
+                        map_x, map_y = (section.pick_to_world(x)
                                         if section is not None else (float("nan"), float("nan")))
                         hp.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
                         if cat == "Horizons":
