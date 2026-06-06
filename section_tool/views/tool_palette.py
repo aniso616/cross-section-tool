@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -107,6 +109,37 @@ _TOOL_DEFS: list[tuple[str, str, str, str] | str | None] = [
 ]
 
 _TOOL_IDS: list[str] = [t[0] for t in _TOOL_DEFS if isinstance(t, tuple)]
+
+# ---------------------------------------------------------------------------
+# Single source of truth for tool hotkeys (display + registration)
+# ---------------------------------------------------------------------------
+# Both the shortcut registration (app._register_shortcuts) and every tooltip
+# read this map, so a tooltip can never drift from the real binding again.
+# Tools without a single-letter binding (e.g. pan) are absent → label-only.
+# h_ref/v_ref/a_ref share the R cycle (display only; bound via _cycle_ref_line_tool).
+TOOL_HOTKEYS: dict[str, str] = {
+    "select": "V", "node_edit": "A",
+    "horizon_pick": "H", "fault_pick": "F", "polygon": "G", "measure": "M",
+    "extend": "E", "trim": "T", "parallel": "P",
+    "dip_constrained": "D", "kink_band": "K",
+    "zoom": "Z", "new_section": "S", "plan_fault": "L",
+    "h_ref": "R", "v_ref": "R", "a_ref": "R",
+}
+
+_KEY_HINT_RE = re.compile(r"\s*\([^)]*\)")
+
+
+def compose_tooltip(tool_id: str, tooltip: str) -> str:
+    """Return *tooltip* with its first-line hotkey hint replaced by the real
+    binding from TOOL_HOTKEYS, so the two can't drift. Any hardcoded ``(...)``
+    on the first line is stripped; the live key is appended as ``(KEY)``. Tools
+    with no hotkey render label-only (no empty parens)."""
+    key = TOOL_HOTKEYS.get(tool_id)
+    first, sep, rest = tooltip.partition("\n")
+    first = _KEY_HINT_RE.sub("", first).rstrip()
+    if key:
+        first = f"{first}  ({key})"
+    return first + (sep + rest if sep else "")
 
 # ---------------------------------------------------------------------------
 # Styles
@@ -287,7 +320,8 @@ class ToolPalette(QWidget):
                 continue
 
             tool_id, icon, label, tooltip = item
-            tbtn = _ToolButton(tool_id, icon, label, tooltip)
+            tbtn = _ToolButton(tool_id, icon, label,
+                               compose_tooltip(tool_id, tooltip))
             tbtn.clicked.connect(
                 lambda tid=tool_id: self._on_button_clicked(tid)
             )

@@ -3025,33 +3025,32 @@ class SectionMainWindow(MainWindow):
         _sc("Ctrl+0",       self._zoom_to_fit)
 
         # Tool shortcuts — ApplicationShortcut so they fire even when the canvas
-        # doesn't have focus (e.g. user clicked in project tree or properties).
-        # _tool_mgr is created later; use getattr for safety.
-        def _tk(qt_key):
-            return lambda: (getattr(self, "_tool_mgr", None) or _noop()).handle_key(qt_key) \
-                if hasattr(self, "_tool_mgr") else None
+        # doesn't have focus. Letters come from TOOL_HOTKEYS (the single source
+        # the tooltips also read), so a binding and its tooltip can never drift.
+        # tool_mgr-routed tools go through handle_key (Qt.Key mapped by TOOL_KEYS,
+        # reconciled by a test); the rest activate the palette tool directly.
+        from section_tool.views.tool_palette import TOOL_HOTKEYS
+        _TOOLMGR_IDS = {"select", "node_edit", "horizon_pick",
+                        "fault_pick", "polygon", "measure"}
+        _DIRECT_IDS  = {"trim", "dip_constrained", "extend", "kink_band",
+                        "parallel", "zoom", "new_section", "plan_fault"}
 
-        class _noop:
-            def handle_key(self, _): pass
+        def _mk_tk(qt_key):
+            return lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(qt_key)
 
-        _sc("V", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_V))
-        _sc("A", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_A))
-        _sc("H", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_H))
-        _sc("F", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_F))
-        _sc("G", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_G))
-        _sc("M", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_M))
+        def _mk_direct(tool_id):
+            return lambda: self._tool_palette.set_active_tool(tool_id)
+
+        for _tid, _letter in TOOL_HOTKEYS.items():
+            if _tid in _TOOLMGR_IDS:
+                _sc(_letter, _mk_tk(getattr(Qt.Key, f"Key_{_letter}")))
+            elif _tid in _DIRECT_IDS:
+                _sc(_letter, _mk_direct(_tid))
+            # h_ref/v_ref/a_ref ("R") are display-only here; bound via the cycle.
+
+        # Secondary / non-single-tool bindings kept explicit:
         _sc("W", lambda: hasattr(self, "_tool_mgr") and self._tool_mgr.handle_key(Qt.Key.Key_W))
-        _sc("R", self._cycle_ref_line_tool)
-        # Construction tools — not in ToolManager key map, so route via _tool_palette directly
-        _sc("T", lambda: self._tool_palette.set_active_tool("trim"))
-        _sc("D", lambda: self._tool_palette.set_active_tool("dip_constrained"))
-        _sc("E", lambda: self._tool_palette.set_active_tool("extend"))
-        _sc("K", lambda: self._tool_palette.set_active_tool("kink_band"))
-        _sc("P", lambda: self._tool_palette.set_active_tool("parallel"))
-        _sc("Z", lambda: self._tool_palette.set_active_tool("zoom"))
-        _sc("S", lambda: self._tool_palette.set_active_tool("new_section"))
-        # Plan fault-draw (z-slice workspace) — palette greys it out off a z-slice
-        _sc("L", lambda: self._tool_palette.set_active_tool("plan_fault"))
+        _sc("R", self._cycle_ref_line_tool)   # cycles h_ref / v_ref / a_ref
 
     # ------------------------------------------------------------------
     # Override: remove Space-bar temporary pan

@@ -17,18 +17,20 @@ from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QGridLayout,
                                QLayout, QVBoxLayout, QWidget)
 
 from section_tool.style import C_RULE
-from section_tool.views.tool_palette import _TOOL_DEFS, _ToolButton, _rgba
+from section_tool.views.tool_palette import (
+    _TOOL_DEFS, _ToolButton, _rgba, TOOL_HOTKEYS, compose_tooltip)
 
-# The curated building set — a single editable list of (tool_id, hotkey_letter).
-# Tune freely; ids and hotkeys are the real ones (see app._register_shortcuts).
-# Reference lines (h_ref/v_ref/a_ref) are intentionally omitted; they would slot
-# in with the same (id, "R") pattern but share the single R-cycle hotkey.
-BUILDING_TOOLS: list[tuple[str, str]] = [
-    ("select",          "V"), ("node_edit",      "A"),
-    ("horizon_pick",    "H"), ("fault_pick",     "F"),
-    ("polygon",         "G"), ("extend",         "E"),
-    ("trim",            "T"), ("parallel",       "P"),
-    ("dip_constrained", "D"), ("kink_band",      "K"),
+# The curated building set — a single editable list of tool_ids. The hotkey
+# letter shown on each button and in its tooltip is pulled from TOOL_HOTKEYS
+# (the single source of truth), so the palette can't drift from the bindings.
+# Reference lines (h_ref/v_ref/a_ref) are intentionally omitted; they share the
+# single R-cycle hotkey.
+BUILDING_TOOLS: list[str] = [
+    "select", "node_edit",
+    "horizon_pick", "fault_pick",
+    "polygon", "extend",
+    "trim", "parallel",
+    "dip_constrained", "kink_band",
 ]
 
 # tool_id -> (icon, label, tooltip), reused from the rail so icons stay in sync.
@@ -93,9 +95,11 @@ class FloatingToolPalette(QWidget):
         grid = QGridLayout()
         grid.setContentsMargins(4, 4, 4, 4)
         grid.setSpacing(2)
-        for i, (tid, key) in enumerate(BUILDING_TOOLS):
+        for i, tid in enumerate(BUILDING_TOOLS):
             icon, _label, tip = _DEF.get(tid, ("?", tid, tid))
-            btn = _ToolButton(tid, icon, key, tip)   # short-label IS the hotkey
+            key = TOOL_HOTKEYS.get(tid, "")           # single source of truth
+            btn = _ToolButton(tid, icon, key,         # short-label IS the hotkey
+                              compose_tooltip(tid, tip))
             btn.clicked.connect(lambda t=tid: self.tool_activation_requested.emit(t))
             self._buttons[tid] = btn
             grid.addWidget(btn, i // 2, i % 2, alignment=Qt.AlignmentFlag.AlignHCenter)
