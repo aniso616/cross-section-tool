@@ -2276,6 +2276,21 @@ class SectionView(QWidget):
         z_axis, dimg = stretch_image_to_depth(amp, dt_s, model, z_bot, dz, t0=t0_s)
         return dimg.T, 0.0, float(z_axis[-1])        # back to (n_samples, n_traces)
 
+    def _velocity_signature(self) -> str:
+        """A short string that changes whenever the applied velocity model would
+        change the depth stretch — so the seismic-layer cache key invalidates on
+        Apply or live v0/k tuning.  Empty when no model is installed."""
+        vm = getattr(self._state.project, "velocity_model", None)
+        if vm is None or getattr(vm, "is_empty", True):
+            return ""
+        parts = []
+        for L in getattr(vm, "layers", []):
+            fn = getattr(L, "function", None)
+            parts.append(f"{getattr(L,'top_twt_s',0.0):.4f}|"
+                         f"{getattr(fn,'v0',0.0):.2f}|"
+                         f"{getattr(fn,'k',0.0):.4f}|{getattr(fn,'method','')}")
+        return ";".join(parts)
+
     # ------------------------------------------------------------------
     # pyqtgraph seismic layer helpers
     # ------------------------------------------------------------------
@@ -2323,8 +2338,11 @@ class SectionView(QWidget):
             ex_meta = {"dist_min": float(distances[0]), "dist_max": float(distances[-1]),
                        "samples": samples, "domain": domain}
 
-        # Build a per-render cache key so we only re-upload when data changes
-        new_key = f"{section.name}:{ex_meta.get('dist_min',0):.0f}"
+        # Build a per-render cache key so we only re-upload when data changes.
+        # The velocity-model signature MUST be part of the key: applying or tuning
+        # a model changes the depth stretch but not the trace data, so without it
+        # the early-return below would skip the re-stretch (the Apply "no-op").
+        new_key = f"{section.name}:{ex_meta.get('dist_min',0):.0f}:{self._velocity_signature()}"
         if new_key == self._seismic_layer_key:
             return  # already uploaded — just sync the viewbox later
 

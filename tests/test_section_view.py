@@ -422,6 +422,18 @@ class TestPickingMode:
         assert y_bot == pytest.approx(1000.0)                  # 1.0 s @ 2000 m/s
         assert view._model_depth_stretch(data, samples_ms, VelocityModel()) is None
 
+    def test_velocity_signature_invalidates_seismic_cache(self, view, state):
+        """The seismic-layer cache key must fold in a model signature: applying
+        or tuning a model changes the depth stretch but not the trace data, so
+        without this the cache short-circuits the re-stretch (the Apply no-op)."""
+        from section_tool.core.conversion import build_bulk, build_average_vz
+        assert view._velocity_signature() == ""            # no model → empty
+        state.project.velocity_model = build_bulk(2400.0)
+        sig_bulk = view._velocity_signature()
+        assert sig_bulk != ""                              # model installed → changes
+        state.project.velocity_model = build_average_vz(1800.0, 0.6)
+        assert view._velocity_signature() != sig_bulk      # tuning re-invalidates
+
     def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
