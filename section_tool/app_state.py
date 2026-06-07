@@ -707,6 +707,11 @@ class AppState(QObject):
         # Restoration sequence
         proj.restoration_sequence = db.get_restoration_sequence()
 
+        # Velocity model (JSON blob in the velocity_model KV table; empty dict
+        # → a fresh unconverted model. from_dict migrates the v1 schema.)
+        from section_tool.core.velocity_model import VelocityModel
+        proj.velocity_model = VelocityModel.from_dict(data.get("velocity_model", {}))
+
         # Vector layers (re-read features from source files on load)
         try:
             self._vector_layers = db.load_vector_layers()
@@ -720,6 +725,7 @@ class AppState(QObject):
         if self._project_path is None:
             raise ValueError("No project path set; use save_project_as() first")
         if self._pm.is_open:
+            self._pm.db.save_velocity_model(self._project.velocity_model)
             self._pm.save()
         else:
             self._project.save(self._project_path)
@@ -767,6 +773,7 @@ class AppState(QObject):
                 self._save_surface_to_db(surface)
             for lyr in self._vector_layers:
                 self._pm.db.upsert_vector_layer(lyr)
+            self._pm.db.save_velocity_model(self._project.velocity_model)
             self._pm.save()
             self._project_path = new_path
         else:

@@ -622,6 +622,31 @@ class ProjectDatabase:
         ).fetchone()
         return row["value"] if row else default
 
+    # ------------------------------------------------------------------
+    # Velocity model (single project-level entity, stored as a JSON blob in
+    # the velocity_model key/value table — no per-layer table)
+    # ------------------------------------------------------------------
+
+    def save_velocity_model(self, model) -> None:
+        import json as _json
+        self.conn.execute(
+            "INSERT OR REPLACE INTO velocity_model(key, value) VALUES('model', ?)",
+            (_json.dumps(model.to_dict()),),
+        )
+        self.conn.commit()
+
+    def load_velocity_model(self) -> dict:
+        import json as _json
+        row = self.conn.execute(
+            "SELECT value FROM velocity_model WHERE key='model'"
+        ).fetchone()
+        if not row or not row["value"]:
+            return {}
+        try:
+            return _json.loads(row["value"])
+        except Exception:
+            return {}
+
     def set_project_settings(self, name: str, crs_epsg: int, depth_units: str,
                               depth_domain: str, default_depth_min: float,
                               default_depth_max: float) -> None:
@@ -1516,6 +1541,7 @@ class ProjectDatabase:
             "annotations":       self.get_all_annotations(),
             "aoi":               self.get_aoi(),
             "surfaces":          self.get_all_surfaces(),
+            "velocity_model":    self.load_velocity_model(),
         }
 
     # ------------------------------------------------------------------
