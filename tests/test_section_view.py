@@ -407,6 +407,21 @@ class TestPickingMode:
         assert not hp.seismic_tied
         assert np.isnan(hp._twt_anchor[-1])
 
+    def test_model_depth_stretch_resamples_to_depth(self, view):
+        """The seismic backdrop stretch resamples each trace through the model
+        (true vertical stretch); empty model → None (caller uses bulk fallback)."""
+        from section_tool.core.conversion import build_bulk
+        from section_tool.core.velocity_model import VelocityModel
+        samples_ms = np.arange(0.0, 1004.0, 4.0)               # 0..1000 ms
+        data = np.random.RandomState(0).randn(len(samples_ms), 8)  # (n_samples, n_traces)
+        out = view._model_depth_stretch(data, samples_ms, build_bulk(2000.0))
+        assert out is not None
+        dimg, y_top, y_bot = out
+        assert dimg.shape[1] == 8                              # traces preserved
+        assert y_top == 0.0
+        assert y_bot == pytest.approx(1000.0)                  # 1.0 s @ 2000 m/s
+        assert view._model_depth_stretch(data, samples_ms, VelocityModel()) is None
+
     def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])

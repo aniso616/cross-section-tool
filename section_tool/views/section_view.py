@@ -2193,10 +2193,20 @@ class SectionView(QWidget):
             samples = np.asarray(ex_meta["samples"])
             domain  = ex_meta.get("domain", "twt")
             if stretch == "linear" and domain == "twt":
-                scale = v_ms / 2000.0
-                # First sample sits at its true recording-delay depth
-                # (samples[0]*scale below sea level), not stretched onto y=0.
-                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+                # Prefer the project velocity model (layered / V(z)-aware true
+                # per-trace resample); fall back to the inline bulk extent-scale
+                # when no model is applied (no regression to existing behaviour).
+                vm = getattr(self._state.project, "velocity_model", None)
+                stretched = (self._model_depth_stretch(ex_data, samples, vm)
+                             if vm is not None and not getattr(vm, "is_empty", True)
+                             else None)
+                if stretched is not None:
+                    ex_data, y_top, y_bot = stretched
+                else:
+                    scale = v_ms / 2000.0
+                    # First sample sits at its true recording-delay depth
+                    # (samples[0]*scale below sea level), not stretched onto y=0.
+                    y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
             else:
                 y_top, y_bot = float(samples[0]), float(samples[-1])
             if ex_data.shape[1] >= 2:
@@ -2238,6 +2248,33 @@ class SectionView(QWidget):
                 _imshow(data.T, dist0f, dist1f, y_top, y_bot)
                 # Dim seismic outside section bounds (same as extracted path)
                 self._apply_seismic_boundary_mask(section, dist0f, dist1f)
+
+    def _model_depth_stretch(self, data, samples_ms, model):
+        """Resample an extracted TWT image to a uniform depth axis through the
+        velocity *model* — the true per-trace vertical stretch (layered / V(z)-
+        aware), unlike the constant-velocity extent rescale.
+
+        *data* is (n_samples, n_traces); *samples_ms* the TWT sample values (ms).
+        Returns (depth_data[n_samples, n_traces], y_top, y_bot) or None if it
+        can't (then the caller falls back to the bulk extent-scale)."""
+        from section_tool.core.conversion import stretch_image_to_depth
+        samples = np.asarray(samples_ms, dtype=float)
+        if len(samples) < 2:
+            return None
+        dt_s = (samples[1] - samples[0]) / 1000.0
+        t0_s = samples[0] / 1000.0
+        if dt_s <= 0:
+            return None
+        try:
+            z_bot = float(model.twt_to_depth(samples[-1] / 1000.0))
+        except Exception:
+            return None
+        if not (z_bot > 0):
+            return None
+        dz = z_bot / max(len(samples) - 1, 1)        # keep ~the same sample count
+        amp = np.asarray(data, dtype=float).T        # (n_traces, n_samples)
+        z_axis, dimg = stretch_image_to_depth(amp, dt_s, model, z_bot, dz, t0=t0_s)
+        return dimg.T, 0.0, float(z_axis[-1])        # back to (n_samples, n_traces)
 
     # ------------------------------------------------------------------
     # pyqtgraph seismic layer helpers
@@ -2301,12 +2338,21 @@ class SectionView(QWidget):
         samples = np.asarray(ex_meta["samples"])
         domain  = ex_meta.get("domain", "twt")
         if stretch == "linear" and domain == "twt":
-            scale = vel / 2000.0
-            # Hang the seismic at its true datum: the first recorded sample is at
-            # TWT=samples[0] (the recording delay), so it sits samples[0]*scale
-            # below sea level (y=0).  TWT=0 / sea level is correctly ABOVE the
-            # data, not stretched onto the first sample.
-            y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
+            # Model-driven true per-trace stretch when a velocity model is applied;
+            # otherwise the inline bulk extent-scale (unchanged — no regression).
+            vm = getattr(self._state.project, "velocity_model", None)
+            stretched = (self._model_depth_stretch(ex_data, samples, vm)
+                         if vm is not None and not getattr(vm, "is_empty", True)
+                         else None)
+            if stretched is not None:
+                ex_data, y_top, y_bot = stretched
+            else:
+                scale = vel / 2000.0
+                # Hang the seismic at its true datum: the first recorded sample is at
+                # TWT=samples[0] (the recording delay), so it sits samples[0]*scale
+                # below sea level (y=0).  TWT=0 / sea level is correctly ABOVE the
+                # data, not stretched onto the first sample.
+                y_top, y_bot = float(samples[0]) * scale, float(samples[-1]) * scale
         else:
             y_top, y_bot = float(samples[0]), float(samples[-1])
 
