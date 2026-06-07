@@ -3049,6 +3049,19 @@ class SectionView(QWidget):
         remaining = len(hp2.section_indices(sec_name))
         self._flash_hint(f"Removed last pick  ({remaining} remaining)")
 
+    def _pick_anchor(self, depth_y: float):
+        """Recover a pick's TWT anchor through the active velocity model (seismic
+        tie at pick/edit time): anchor = model.depth_to_twt(depth). Returns
+        (anchor_s, tied). When no model is applied (still bootstrapping with no
+        depth conversion) the pick is depth-native — (NaN, False)."""
+        model = getattr(self._state.project, "velocity_model", None)
+        if model is not None and not getattr(model, "is_empty", True):
+            try:
+                return float(model.depth_to_twt(float(depth_y))), True
+            except Exception:
+                pass
+        return float("nan"), False
+
     def _add_pick_to_active_target(self, x: float, y: float) -> None:
         """Insert a pick point tagged with current section name."""
         cat = self._state.active_pick_category
@@ -3067,7 +3080,10 @@ class SectionView(QWidget):
         # extrapolates so beyond-endpoint picks store true XY (not the endpoint).
         map_x, map_y = (section.pick_to_world(x)
                         if section is not None else (float("nan"), float("nan")))
-        hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
+        anchor, tied = self._pick_anchor(y)
+        hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y, twt_anchor=anchor)
+        if tied:
+            hp_after.seismic_tied = True
 
         def _do():
             if cat == "Horizons":
@@ -3127,7 +3143,11 @@ class SectionView(QWidget):
         for (x, y) in draft:
             map_x, map_y = (section.pick_to_world(x)
                             if section is not None else (float("nan"), float("nan")))
-            hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
+            anchor, tied = self._pick_anchor(y)
+            hp_after.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y,
+                                 twt_anchor=anchor)
+            if tied:
+                hp_after.seismic_tied = True
 
         def _do():
             if cat == "Horizons":
@@ -3557,7 +3577,11 @@ class SectionView(QWidget):
                         hp = copy.deepcopy(picks[oi])
                         map_x, map_y = (section.pick_to_world(x)
                                         if section is not None else (float("nan"), float("nan")))
-                        hp.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y)
+                        anchor, tied = self._pick_anchor(y)
+                        hp.insert_pick(x, y, sec_name, map_x=map_x, map_y=map_y,
+                                       twt_anchor=anchor)
+                        if tied:
+                            hp.seismic_tied = True
                         if cat == "Horizons":
                             self._state.update_horizon_pick(oi, hp)
                         else:

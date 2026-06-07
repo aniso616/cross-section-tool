@@ -377,6 +377,36 @@ class TestPickingMode:
         assert hp._map_x[i] == pytest.approx(1500.0)   # extrapolated, NOT 1000 (clamped)
         assert hp._map_y[i] == pytest.approx(0.0)
 
+    def test_pick_with_active_model_sets_anchor(self, view, state):
+        """Picking while a velocity model is applied recovers the TWT anchor
+        through it (the pick is seismic-tied)."""
+        from section_tool.core.conversion import build_average_vz
+        sec = Section([(0, 0), (1000, 0)], name="L1")
+        state.add_section(sec); state.set_active_section(sec)
+        state.project.velocity_model = build_average_vz(1800.0, 0.5)
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
+        view.set_picking_active(True)
+        view._add_draft_point(300.0, 1000.0)     # distance 300, depth 1000
+        view.commit_pick_draft()
+        hp = state.project.horizon_picks[0]
+        assert hp.seismic_tied
+        i = hp.section_indices("L1")[-1]
+        assert hp._twt_anchor[i] == pytest.approx(
+            state.project.velocity_model.depth_to_twt(1000.0))
+
+    def test_pick_without_model_is_depth_native(self, view, state):
+        sec = Section([(0, 0), (1000, 0)], name="L1")
+        state.add_section(sec); state.set_active_section(sec)
+        state.add_horizon_pick(HorizonPick.empty(name="H1"))
+        state.set_active_pick_target("Horizons", 0)
+        view.set_picking_active(True)
+        view._add_draft_point(300.0, 1000.0)
+        view.commit_pick_draft()
+        hp = state.project.horizon_picks[0]
+        assert not hp.seismic_tied
+        assert np.isnan(hp._twt_anchor[-1])
+
     def test_click_outside_axes_noop(self, view, state):
         state.add_section(_east_section())
         state.set_active_section(state.project.sections[0])
