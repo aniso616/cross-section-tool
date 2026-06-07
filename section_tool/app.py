@@ -741,6 +741,9 @@ class MainWindow(QMainWindow):
         self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
         tools_menu.addAction(self._clear_aoi_action)
         tools_menu.addSeparator()
+        self._depth_stretch_action = QAction("&Depth Stretch (Time→Depth)…", self)
+        self._depth_stretch_action.triggered.connect(self._on_depth_stretch)
+        tools_menu.addAction(self._depth_stretch_action)
         self._thermal_action = QAction("&Thermal Modeling…", self)
         self._thermal_action.triggered.connect(self._on_thermal_modeling)
         tools_menu.addAction(self._thermal_action)
@@ -1420,6 +1423,31 @@ class MainWindow(QMainWindow):
         """Tools → Topology Audit: check interpretation hygiene for the active section."""
         from section_tool.views.topology_audit_dialog import TopologyAuditDialog
         dlg = TopologyAuditDialog(self._state, parent=self)
+        dlg.exec()
+
+    def _on_depth_stretch(self) -> None:
+        """Tools → Depth Stretch: configure and apply a time→depth conversion.
+
+        Applying installs the velocity model and re-derives seismic-tied geometry
+        from its TWT anchors (depth-native stays fixed); re-render shows it.
+        """
+        from section_tool.views.depth_stretch_dialog import DepthStretchDialog
+
+        def _applied():
+            try:
+                self._state._set_modified(True)
+            except Exception:
+                pass
+            try:
+                self._section_view.render()
+            except Exception:
+                pass
+            try:
+                self._map_view.request_render()
+            except Exception:
+                pass
+
+        dlg = DepthStretchDialog(self._state, on_apply=_applied, parent=self)
         dlg.exec()
 
     def _on_thermal_modeling(self) -> None:
