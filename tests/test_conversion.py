@@ -102,6 +102,39 @@ def test_depth_native_geometry_untouched_by_iteration():
 # Anchor persists across save/load (SQLite KV — the primary store)
 # ---------------------------------------------------------------------------
 
+def test_restretch_moves_tied_leaves_native():
+    """The re-stretch contract: applying a new model re-derives seismic-tied
+    geometry from anchors (it follows the backdrop) and leaves depth-native
+    geometry fixed."""
+    from types import SimpleNamespace
+    from section_tool.core.conversion import restretch_project
+
+    tied = _depth_horizon()
+    set_anchors(tied, build_bulk(2000.0))      # anchors at t = z/1000
+    native = _depth_horizon()                  # never tied
+    native_before = native._depths.copy()
+
+    proj = SimpleNamespace(horizon_picks=[tied, native], fault_picks=[])
+    n = restretch_project(proj, build_average_vz(1800.0, 0.5))
+    assert n == 1                              # only the tied one moved
+    assert np.allclose(native._depths, native_before)        # native fixed
+    assert not np.allclose(tied._depths, [1000.0, 1200.0])   # tied re-derived
+
+def test_live_iteration_keeps_horizon_glued():
+    """Tuning velocity twice: depth tracks the model each time, anchor invariant."""
+    from types import SimpleNamespace
+    from section_tool.core.conversion import restretch_project
+
+    hp = _depth_horizon()
+    set_anchors(hp, build_bulk(2000.0))
+    anchors = hp._twt_anchor.copy()
+    proj = SimpleNamespace(horizon_picks=[hp], fault_picks=[])
+    for v in (2200.0, 2600.0, 3000.0):
+        restretch_project(proj, build_bulk(v))
+        assert np.allclose(hp._twt_anchor, anchors)                      # invariant
+        assert np.allclose(hp._depths, [build_bulk(v).twt_to_depth(a) for a in anchors])
+
+
 def test_anchor_persists_via_db(tmp_path):
     from section_tool.io.database import ProjectDatabase
     db = ProjectDatabase(str(tmp_path / "p.db"))

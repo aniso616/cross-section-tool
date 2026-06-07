@@ -121,3 +121,31 @@ def apply_depths_from_anchors(hp, model: VelocityModel) -> None:
     the horizon stays glued to its reflector).  No-op for depth-native geometry."""
     if getattr(hp, "seismic_tied", False) and len(getattr(hp, "_twt_anchor", [])):
         hp._depths = derive_depths(hp, model)
+
+
+# ---------------------------------------------------------------------------
+# Velocity iteration / re-stretch — apply a model across a section's geometry
+# ---------------------------------------------------------------------------
+
+def restretch_picks(picks, model: VelocityModel) -> int:
+    """Re-derive every SEISMIC-TIED pick's depths from its invariant TWT anchors
+    through *model*; depth-native picks stay fixed.  This is the velocity-
+    iteration step — and the re-stretch contract: tied geometry follows its TWT
+    through the new model (staying glued to its reflector, moving with the
+    seismic backdrop), while depth-native geometry (freehand surfaces,
+    well-marker horizons, imported depth surfaces) does not move.  Returns the
+    number of picks re-derived."""
+    moved = 0
+    for hp in picks:
+        if getattr(hp, "seismic_tied", False) and len(getattr(hp, "_twt_anchor", [])):
+            apply_depths_from_anchors(hp, model)
+            moved += 1
+    return moved
+
+
+def restretch_project(project, model: VelocityModel) -> int:
+    """Apply *model* across a project's horizons and faults (tied geometry
+    re-derives from anchors; depth-native untouched).  Returns count re-derived.
+    The seismic backdrop is re-stretched separately via stretch_image_to_depth."""
+    return (restretch_picks(getattr(project, "horizon_picks", []), model)
+            + restretch_picks(getattr(project, "fault_picks", []), model))
