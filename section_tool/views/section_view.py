@@ -3039,8 +3039,7 @@ class SectionView(QWidget):
         last_idx = int(sec_idxs[-1])
         hp2 = copy.deepcopy(hp)
         if hp2.n_picks > 1:
-            for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                         "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+            for attr in hp2._POINT_ARRAYS:
                 arr = getattr(hp2, attr)
                 setattr(hp2, attr, np.delete(arr, last_idx))
         if cat == "Horizons":
@@ -3703,14 +3702,14 @@ class SectionView(QWidget):
             cat, oi, pi = self._pick_selected
             self._pick_copy._distances[pi] = x
             self._pick_copy._depths[pi]    = y
-            # Null map coords for dragged node: position is now in section space
-            for _mc in ("_map_x", "_map_y"):
+            # Null map coords + TWT anchor for the dragged node: it moved in
+            # depth, so both are stale and will be re-derived against the model.
+            for _mc in ("_map_x", "_map_y", "_twt_anchor"):
                 mc_arr = getattr(self._pick_copy, _mc, None)
                 if mc_arr is not None and pi < len(mc_arr):
                     mc_arr[pi] = float('nan')
             order = np.argsort(self._pick_copy._distances, kind="stable")
-            for _attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                          "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+            for _attr in self._pick_copy._POINT_ARRAYS:
                 arr = getattr(self._pick_copy, _attr, None)
                 if arr is not None and len(arr) == len(order):
                     setattr(self._pick_copy, _attr, arr[order])

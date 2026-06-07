@@ -374,6 +374,14 @@ class HorizonPick:
     Distances are always kept in ascending sorted order.
     """
 
+    # The canonical list of per-point parallel arrays. Every op that inserts,
+    # deletes, or re-sorts points MUST iterate this so they stay length-aligned;
+    # adding a per-point field means adding it here once. (M2 added _twt_anchor.)
+    _POINT_ARRAYS: tuple[str, ...] = (
+        "_distances", "_depths", "_section_names", "_slice_kinds",
+        "_confidence", "_quality", "_note", "_map_x", "_map_y", "_twt_anchor",
+    )
+
     def __init__(
         self,
         distances: list | np.ndarray,
@@ -387,6 +395,8 @@ class HorizonPick:
         map_x: list | np.ndarray | None = None,
         map_y: list | np.ndarray | None = None,
         slice_kinds: list | np.ndarray | None = None,
+        twt_anchor: list | np.ndarray | None = None,
+        seismic_tied: bool = False,
         uuid: str | None = None,
         # Phase A: horizon / contact attributes
         contact_type: str = "conformable",
@@ -446,6 +456,18 @@ class HorizonPick:
         self._confidence: np.ndarray = np.ones(n, dtype=float)
         self._quality: np.ndarray    = np.array(["picked"] * n, dtype=object)
         self._note: np.ndarray       = np.array([""] * n, dtype=object)
+        # M2 — seismic tie: per-node TWT anchor (SECONDS) is the CANONICAL value
+        # for seismic-tied geometry; depth is derived = model.twt_to_depth(anchor).
+        # NaN = no anchor (depth-native). The anchor is invariant under velocity
+        # iteration; it changes only when the node is actively re-picked/edited.
+        if twt_anchor is None:
+            self._twt_anchor: np.ndarray = np.full(n, np.nan)
+        else:
+            ta = np.asarray(twt_anchor, dtype=float).ravel()
+            if len(ta) != len(distances):
+                raise ValueError("twt_anchor must have the same length as distances")
+            self._twt_anchor = ta[order].copy()
+        self.seismic_tied: bool = bool(seismic_tied)
         self.name = name
         # Stable entity identity — rename-safe. Generated on creation; preserved
         # across save/reload and deepcopy. Distinct from the (mutable) name.
@@ -574,7 +596,8 @@ class HorizonPick:
                     note: str = "",
                     map_x: float = float("nan"),
                     map_y: float = float("nan"),
-                    slice_kind: str = "section") -> None:
+                    slice_kind: str = "section",
+                    twt_anchor: float = float("nan")) -> None:
         """Insert a pick, maintaining ascending distance order."""
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
@@ -586,6 +609,7 @@ class HorizonPick:
         self._note          = np.insert(self._note, idx, note)
         self._map_x         = np.insert(self._map_x, idx, map_x)
         self._map_y         = np.insert(self._map_y, idx, map_y)
+        self._twt_anchor    = np.insert(self._twt_anchor, idx, twt_anchor)
 
     def delete_pick(self, index: int) -> None:
         """Delete the pick at *index*."""
@@ -593,12 +617,12 @@ class HorizonPick:
             raise ValueError("Cannot delete: HorizonPick must retain at least one pick")
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
-        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+        for attr in self._POINT_ARRAYS:
             setattr(self, attr, np.delete(getattr(self, attr), index))
 
     def move_pick(self, index: int, distance: float, depth: float,
-                  map_x: float = float("nan"), map_y: float = float("nan")) -> None:
+                  map_x: float = float("nan"), map_y: float = float("nan"),
+                  twt_anchor: float = float("nan")) -> None:
         """Move the pick at *index* to (distance, depth), re-sorting as needed."""
         if not (0 <= index < self.n_picks):
             raise IndexError(f"index {index} out of range for {self.n_picks} picks")
@@ -607,8 +631,7 @@ class HorizonPick:
         conf = self._confidence[index]
         qual = self._quality[index]
         note = self._note[index]
-        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+        for attr in self._POINT_ARRAYS:
             setattr(self, attr, np.delete(getattr(self, attr), index))
         idx = int(np.searchsorted(self._distances, distance))
         self._distances     = np.insert(self._distances, idx, distance)
@@ -620,6 +643,7 @@ class HorizonPick:
         self._note          = np.insert(self._note, idx, note)
         self._map_x         = np.insert(self._map_x, idx, map_x)
         self._map_y         = np.insert(self._map_y, idx, map_y)
+        self._twt_anchor    = np.insert(self._twt_anchor, idx, twt_anchor)
 
     # ------------------------------------------------------------------
     # Coordinate transforms
@@ -640,8 +664,7 @@ class HorizonPick:
             self._distances[i] = dist
         # Re-sort after distances changed
         order = np.argsort(self._distances, kind="stable")
-        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+        for attr in self._POINT_ARRAYS:
             setattr(self, attr, getattr(self, attr)[order])
 
     def to_map_coords(self, section) -> list[tuple[float, float, float]]:
@@ -696,6 +719,8 @@ class HorizonPick:
         obj._note          = np.array([], dtype=object)
         obj._map_x         = np.array([], dtype=float)
         obj._map_y         = np.array([], dtype=float)
+        obj._twt_anchor    = np.array([], dtype=float)
+        obj.seismic_tied   = False
         obj.name       = name
         obj.uuid       = new_entity_uuid()
         obj.z_units    = z_units

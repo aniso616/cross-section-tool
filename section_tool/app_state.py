@@ -494,6 +494,8 @@ class AppState(QObject):
                                     for p in picks], dtype=float)
                 map_ys  = np.array([p.get("y") if p.get("y") is not None else float("nan")
                                     for p in picks], dtype=float)
+                anchors = np.array([p.get("twt_anchor") if p.get("twt_anchor") is not None
+                                    else float("nan") for p in picks], dtype=float)
                 hp = HorizonPick(
                     dists, depths,
                     name=hrow["name"],
@@ -504,6 +506,8 @@ class AppState(QObject):
                     map_x=map_xs,
                     map_y=map_ys,
                     slice_kinds=skinds,
+                    twt_anchor=anchors,
+                    seismic_tied=bool(hrow.get("seismic_tied", 0)),
                     uuid=hrow.get("uuid"),
                     contact_type=hrow.get("contact_type", "conformable"),
                     formation_above=hrow.get("formation_above", ""),
@@ -523,6 +527,7 @@ class AppState(QObject):
                 hp.contact_type    = hrow.get("contact_type", "conformable")
                 hp.formation_above = hrow.get("formation_above", "")
                 hp.formation_below = hrow.get("formation_below", "")
+                hp.seismic_tied    = bool(hrow.get("seismic_tied", 0))
             _restore_construction_rule(hp, hrow.get("construction_rule_json"))
             proj.horizon_picks.append(hp)
 
@@ -540,6 +545,8 @@ class AppState(QObject):
                                    for p in picks], dtype=float)
                 map_ys = np.array([p.get("y") if p.get("y") is not None else float("nan")
                                    for p in picks], dtype=float)
+                anchors = np.array([p.get("twt_anchor") if p.get("twt_anchor") is not None
+                                    else float("nan") for p in picks], dtype=float)
                 fp = HorizonPick(
                     dists, depths,
                     name=frow["name"],
@@ -550,6 +557,8 @@ class AppState(QObject):
                     map_x=map_xs,
                     map_y=map_ys,
                     slice_kinds=skinds,
+                    twt_anchor=anchors,
+                    seismic_tied=bool(frow.get("seismic_tied", 0)),
                     uuid=frow.get("uuid"),
                 )
             else:
@@ -562,6 +571,7 @@ class AppState(QObject):
                 )
                 if frow.get("uuid"):
                     fp.uuid = frow["uuid"]
+                fp.seismic_tied = bool(frow.get("seismic_tied", 0))
             _restore_construction_rule(fp, frow.get("construction_rule_json"))
             proj.fault_picks.append(fp)
 

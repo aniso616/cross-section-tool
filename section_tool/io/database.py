@@ -476,6 +476,12 @@ class ProjectDatabase:
             ("horizon_picks", "slice_ref",  "TEXT"),
             ("fault_picks",   "slice_kind", "TEXT DEFAULT 'section'"),
             ("fault_picks",   "slice_ref",  "TEXT"),
+            # M2 — seismic tie: per-pick TWT anchor (seconds) + per-entity flag.
+            # NULL anchor = depth-native (default, fully backward compatible).
+            ("horizon_picks", "twt_anchor", "REAL"),
+            ("fault_picks",   "twt_anchor", "REAL"),
+            ("horizons", "seismic_tied", "INTEGER DEFAULT 0"),
+            ("faults",   "seismic_tied", "INTEGER DEFAULT 0"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -769,16 +775,20 @@ class ProjectDatabase:
             depths = pick._depths[idxs]
             map_xs = pick._map_x[idxs]
             map_ys = pick._map_y[idxs]
-            for order, (d, z, mx, my) in enumerate(zip(dists, depths, map_xs, map_ys)):
+            anchors = getattr(pick, "_twt_anchor", None)
+            anch = anchors[idxs] if anchors is not None else [float("nan")] * len(idxs)
+            for order, (d, z, mx, my, ta) in enumerate(
+                    zip(dists, depths, map_xs, map_ys, anch)):
                 self.conn.execute(
                     f"""INSERT INTO {table}
                        ({owner_col}, section_name, slice_kind, slice_ref,
-                        distance_along, depth, elevation, x, y, sort_order)
-                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                        distance_along, depth, elevation, x, y, twt_anchor, sort_order)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                     (owner_id, ref, kind, ref,
                      float(d), float(z), float(-z),
                      None if (mx != mx) else float(mx),
                      None if (my != my) else float(my),
+                     None if (ta != ta) else float(ta),
                      order)
                 )
 
@@ -802,7 +812,7 @@ class ProjectDatabase:
                 """UPDATE horizons SET uuid=COALESCE(uuid, ?), color=?,
                    line_width=?, line_style=?,
                    contact_type=?, formation_above=?, formation_below=?,
-                   confidence=?, construction_rule_json=?
+                   confidence=?, construction_rule_json=?, seismic_tied=?
                    WHERE id=?""",
                 (entity_uuid,
                  pick.color,
@@ -813,14 +823,15 @@ class ProjectDatabase:
                  getattr(pick, "formation_below", ""),
                  getattr(pick, "confidence", 1.0),
                  rule_json,
+                 int(getattr(pick, "seismic_tied", False)),
                  hid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO horizons(name, uuid, color, line_width, line_style,
                    contact_type, formation_above, formation_below, confidence,
-                   construction_rule_json)
-                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                   construction_rule_json, seismic_tied)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (pick.name, entity_uuid, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
@@ -828,7 +839,8 @@ class ProjectDatabase:
                  getattr(pick, "formation_above", ""),
                  getattr(pick, "formation_below", ""),
                  getattr(pick, "confidence", 1.0),
-                 rule_json)
+                 rule_json,
+                 int(getattr(pick, "seismic_tied", False)))
             )
             hid = cur.lastrowid
 
@@ -875,7 +887,7 @@ class ProjectDatabase:
                 """UPDATE faults SET uuid=COALESCE(uuid, ?), color=?,
                    line_width=?, line_style=?,
                    fault_type=?, dip_direction=?, confidence=?,
-                   construction_rule_json=?
+                   construction_rule_json=?, seismic_tied=?
                    WHERE id=?""",
                 (entity_uuid,
                  pick.color,
@@ -885,21 +897,23 @@ class ProjectDatabase:
                  getattr(pick, "dip_direction", "right"),
                  getattr(pick, "confidence", 1.0),
                  rule_json,
+                 int(getattr(pick, "seismic_tied", False)),
                  fid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO faults(name, uuid, color, line_width, line_style,
                    fault_type, dip_direction, confidence,
-                   construction_rule_json)
-                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                   construction_rule_json, seismic_tied)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (pick.name, entity_uuid, pick.color,
                  getattr(pick, "line_width", 1.5),
                  getattr(pick, "line_style", "solid"),
                  getattr(pick, "fault_type", "normal"),
                  getattr(pick, "dip_direction", "right"),
                  getattr(pick, "confidence", 1.0),
-                 rule_json)
+                 rule_json,
+                 int(getattr(pick, "seismic_tied", False)))
             )
             fid = cur.lastrowid
 

@@ -198,8 +198,7 @@ def _replace_section_points(
     hp_new = copy.deepcopy(hp)
     sec_idxs = hp_new.section_indices(sec_name)
     for idx_r in sorted(sec_idxs, reverse=True):
-        for attr in ("_distances", "_depths", "_section_names", "_slice_kinds",
-                     "_confidence", "_quality", "_note", "_map_x", "_map_y"):
+        for attr in hp_new._POINT_ARRAYS:
             setattr(hp_new, attr, np.delete(getattr(hp_new, attr), idx_r))
     for d, z in zip(new_d, new_z):
         hp_new.insert_pick(float(d), float(z), sec_name)
