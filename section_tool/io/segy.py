@@ -285,37 +285,62 @@ def extract_seismic_along_section(
     segy_path       = str(segy_path)
     output_npy_path = str(output_npy_path)
 
-    # Half-progress: reading SEG-Y data
-    def _read_prog(p: int) -> None:
+    # ---- Geometry-first, memory-light extraction -------------------------
+    # Reading the *entire* volume into RAM just to pull one section line is what
+    # made large surveys (e.g. F3) thrash swap and crash with a native OOM.
+    # Instead: read trace headers (cheap 1-D coordinate arrays), select only the
+    # traces inside the section corridor, then read sample data for THOSE traces
+    # alone.  Peak memory is O(n_selected · n_samples), not O(n_total · n_samples).
+    with segyio.open(segy_path, ignore_geometry=True) as f:
+        n_traces = int(f.tracecount)
+        if n_traces == 0:
+            raise ValueError("No traces in SEG-Y file")
+        samples   = np.asarray(f.samples, dtype=float)
+        n_samples = len(samples)
+        dt_ms     = float(segyio.tools.dt(f)) / 1000.0
+        domain, depth_units = detect_domain(float(segyio.tools.dt(f)))
+
+        x_raw = f.attributes(x_field)[:].astype(float)
+        y_raw = f.attributes(y_field)[:].astype(float)
+        if apply_scalar:
+            scalars = f.attributes(scalar_field)[:].astype(float)
+            trace_x = _apply_scalar(x_raw, scalars)
+            trace_y = _apply_scalar(y_raw, scalars)
+        else:
+            trace_x, trace_y = x_raw, y_raw
         if progress_callback:
-            progress_callback(p // 2)
+            progress_callback(15)                       # headers read
 
-    ds = read_segy(
-        segy_path,
-        x_field=x_field,
-        y_field=y_field,
-        scalar_field=scalar_field,
-        apply_scalar=apply_scalar,
-        crs_epsg=crs_epsg,
-        progress_callback=_read_prog,
-    )
+        # Project every trace onto the section (1-D math; no sample data yet).
+        total = section.total_length()
+        dists = np.empty(n_traces, dtype=float)
+        perps = np.empty(n_traces, dtype=float)
+        for i in range(n_traces):
+            d, p = section.project_point(trace_x[i], trace_y[i])
+            dists[i] = d
+            perps[i] = p
+            if progress_callback and (i & 0x3FFF) == 0:   # every 16384 traces
+                progress_callback(15 + int(i * 35 / n_traces))
 
-    if ds.n_traces == 0:
-        raise ValueError("No traces in SEG-Y file")
+        sel = np.nonzero((dists >= 0.0) & (dists <= total)
+                         & (np.abs(perps) <= max_offset))[0]
+        if len(sel) < 2:
+            raise ValueError(
+                f"Fewer than 2 traces within {max_offset} m of the section line"
+            )
+        order     = sel[np.argsort(dists[sel], kind="stable")]
+        distances = dists[order]
+        if progress_callback:
+            progress_callback(55)
 
-    if progress_callback:
-        progress_callback(50)
-
-    # Project onto section and sort by along-section distance
-    distances, data, perps = ds.traces_sorted_by_section(section)
-    mask = np.abs(perps) <= max_offset
-    distances = distances[mask]
-    data      = data[mask]          # (n_filtered_traces, n_samples)
-
-    if len(distances) < 2:
-        raise ValueError(
-            f"Fewer than 2 traces within {max_offset} m of the section line"
-        )
+        # Read sample data for the selected traces ONLY.
+        data    = np.empty((len(order), n_samples), dtype=np.float32)
+        raw     = f.trace.raw
+        n_sel   = len(order)
+        for j, ti in enumerate(order):
+            data[j] = raw[int(ti)]
+            if progress_callback and (j & 0x3FF) == 0:    # every 1024 traces
+                progress_callback(55 + int(j * 25 / n_sel))
 
     if interpolate and len(distances) >= 2:
         try:
@@ -330,7 +355,7 @@ def extract_seismic_along_section(
             pass  # scipy not available — skip interpolation
 
     if progress_callback:
-        progress_callback(80)
+        progress_callback(85)
 
     # Save: (n_samples, n_traces) — rows = depth/time, cols = distance
     out_data = data.T.astype(np.float32)
@@ -344,15 +369,15 @@ def extract_seismic_along_section(
         "distances":    distances.tolist(),
         "dist_min":     float(distances[0]),
         "dist_max":     float(distances[-1]),
-        "samples":      ds.samples.tolist(),
-        "sample_min":   float(ds.samples[0]),
-        "sample_max":   float(ds.samples[-1]),
-        "sample_interval": ds.sample_interval,
-        "domain":       ds.domain,
-        "depth_units":  ds.depth_units,
-        "crs_epsg":     ds.crs_epsg,
+        "samples":      samples.tolist(),
+        "sample_min":   float(samples[0]),
+        "sample_max":   float(samples[-1]),
+        "sample_interval": dt_ms,
+        "domain":       domain,
+        "depth_units":  depth_units,
+        "crs_epsg":     crs_epsg,
         "max_offset":   max_offset,
-        "seismic_name": ds.name,
+        "seismic_name": Path(segy_path).stem,
         "npy_path":     output_npy_path,
     }
 

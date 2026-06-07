@@ -363,6 +363,56 @@ class TestReadSegyHeader:
     def test_samples_start_zero(self, segy_file):
         assert read_segy_header(segy_file)["samples_start"] == 0.0
 
+
+# ---------------------------------------------------------------------------
+# extract_seismic_along_section — geometry-first, memory-light extraction
+# ---------------------------------------------------------------------------
+
+class TestExtractAlongSection:
+    def test_selective_extraction_matches_traces(self, tmp_path):
+        """Extract reads only in-corridor traces and writes them distance-sorted,
+        preserving each trace's amplitudes (default volume: x=100..500 m, y=0,
+        amplitude = trace_index + 1)."""
+        from section_tool.io.segy import extract_seismic_along_section
+        path = str(tmp_path / "extract.segy")
+        _write_segy(path)
+        sec = Section([(0.0, 0.0), (600.0, 0.0)], name="X")
+        out = str(tmp_path / "out.npy")
+        meta = extract_seismic_along_section(path, sec, out, max_offset=50.0)
+        data = np.load(out)
+        assert data.shape == (N_SAMPLES, N_TRACES)
+        assert meta["n_traces"] == N_TRACES
+        assert meta["dist_min"] == pytest.approx(100.0)
+        assert meta["dist_max"] == pytest.approx(500.0)
+        for j in range(N_TRACES):                 # column j = trace j (dist-sorted)
+            assert np.allclose(data[:, j], j + 1)
+
+    def test_corridor_excludes_far_traces(self, tmp_path):
+        """A trace outside max_offset is dropped — never read into the output."""
+        from section_tool.io.segy import extract_seismic_along_section
+        path = str(tmp_path / "corridor.segy")
+        # trace 2 sits 1000 m (100000 / scalar 100) off the line → filtered out
+        _write_segy(path, cdp_y=[0, 0, 100000, 0, 0])
+        sec = Section([(0.0, 0.0), (600.0, 0.0)], name="X")
+        out = str(tmp_path / "out2.npy")
+        meta = extract_seismic_along_section(path, sec, out, max_offset=50.0)
+        data = np.load(out)
+        assert data.shape[1] == N_TRACES - 1
+        assert meta["n_traces"] == N_TRACES - 1
+        assert np.allclose(data[:, -1], 5)        # last kept trace is index 4
+
+    def test_progress_callback_monotonic_to_100(self, tmp_path):
+        from section_tool.io.segy import extract_seismic_along_section
+        path = str(tmp_path / "prog.segy")
+        _write_segy(path)
+        sec = Section([(0.0, 0.0), (600.0, 0.0)], name="X")
+        seen: list[int] = []
+        extract_seismic_along_section(
+            path, sec, str(tmp_path / "p.npy"),
+            max_offset=50.0, progress_callback=seen.append)
+        assert seen == sorted(seen)               # monotonic
+        assert seen[-1] == 100
+
     def test_x_range(self, segy_file):
         xmin, xmax = read_segy_header(segy_file)["x_range"]
         assert pytest.approx(xmin) == 100.0
