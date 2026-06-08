@@ -413,6 +413,32 @@ class TestExtractAlongSection:
         assert seen == sorted(seen)               # monotonic
         assert seen[-1] == 100
 
+
+class TestProjectPoints:
+    """Vectorized project_points must match the scalar project_point exactly —
+    extraction relies on it instead of a per-trace Python loop (which hung)."""
+
+    @pytest.mark.parametrize("nodes", [
+        [(0.0, 0.0), (1000.0, 0.0)],                       # straight
+        [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0)],        # dogleg
+    ])
+    def test_matches_scalar(self, nodes):
+        sec = Section(nodes, name="S")
+        rng = np.random.RandomState(0)
+        # spread points across, before, past, and off to the side of the section
+        xs = rng.uniform(-300.0, 1300.0, 200)
+        ys = rng.uniform(-400.0, 900.0, 200)
+        d_vec, p_vec = sec.project_points(xs, ys)
+        for k in range(len(xs)):
+            d_s, p_s = sec.project_point(float(xs[k]), float(ys[k]))
+            assert d_vec[k] == pytest.approx(d_s, abs=1e-6)
+            assert p_vec[k] == pytest.approx(p_s, abs=1e-6)
+
+    def test_empty_input(self):
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="S")
+        d, p = sec.project_points(np.array([]), np.array([]))
+        assert len(d) == 0 and len(p) == 0
+
     def test_x_range(self, segy_file):
         xmin, xmax = read_segy_header(segy_file)["x_range"]
         assert pytest.approx(xmin) == 100.0

@@ -291,6 +291,55 @@ class Section:
 
         return best_s, best_perp
 
+    def project_points(self, xs, ys) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorized :meth:`project_point` over arrays of points.
+
+        Returns ``(distance_along, perp_offset)`` arrays with identical semantics
+        to the scalar version — including the unclamped first/last-segment
+        extension.  Used by seismic extraction so projecting a multi-million-trace
+        survey onto the section does not pay one Python call (and a fresh
+        ``cumulative_distances``) per trace, which froze the UI.
+        """
+        xs = np.asarray(xs, dtype=float)
+        ys = np.asarray(ys, dtype=float)
+        p = xs.shape[0]
+        n = self.n_segments
+        if n == 0 or p == 0:
+            return np.zeros(p), np.zeros(p)
+
+        nodes = self._nodes
+        cum = self.cumulative_distances()
+        t_all    = np.zeros((n, p))
+        perp_all = np.zeros((n, p))
+        dist_all = np.full((n, p), np.inf)
+        seg_len  = np.zeros(n)
+        for i in range(n):                     # loops over segments (few), not points
+            ax, ay = float(nodes[i, 0]), float(nodes[i, 1])
+            bx, by = float(nodes[i + 1, 0]), float(nodes[i + 1, 1])
+            dx, dy = bx - ax, by - ay
+            sl = math.hypot(dx, dy)
+            seg_len[i] = sl
+            if sl < 1e-12:
+                continue
+            ox, oy = xs - ax, ys - ay
+            t = (ox * dx + oy * dy) / (sl * sl)
+            perp = (dx * oy - dy * ox) / sl
+            tc = np.clip(t, 0.0, 1.0)
+            t_all[i]    = t
+            perp_all[i] = perp
+            dist_all[i] = np.hypot(ox - tc * dx, oy - tc * dy)
+
+        best = np.argmin(dist_all, axis=0)
+        cols = np.arange(p)
+        t_b    = t_all[best, cols]
+        perp_b = perp_all[best, cols]
+        sl_b   = seg_len[best]
+        cum_b  = cum[best]
+        s = cum_b + np.clip(t_b, 0.0, 1.0) * sl_b
+        s = np.where((best == 0) & (t_b < 0.0), t_b * sl_b, s)              # before start
+        s = np.where((best == n - 1) & (t_b > 1.0), cum_b + t_b * sl_b, s)  # past end
+        return s, perp_b
+
     def section_to_map(self, distance_along: float,
                        extrapolate: bool = False) -> tuple[float, float]:
         """Convert distance_along_section → (x, y) map coordinates.

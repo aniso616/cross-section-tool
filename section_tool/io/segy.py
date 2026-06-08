@@ -312,15 +312,11 @@ def extract_seismic_along_section(
             progress_callback(15)                       # headers read
 
         # Project every trace onto the section (1-D math; no sample data yet).
+        # Vectorized: a per-trace Python call here froze the UI on large surveys.
         total = section.total_length()
-        dists = np.empty(n_traces, dtype=float)
-        perps = np.empty(n_traces, dtype=float)
-        for i in range(n_traces):
-            d, p = section.project_point(trace_x[i], trace_y[i])
-            dists[i] = d
-            perps[i] = p
-            if progress_callback and (i & 0x3FFF) == 0:   # every 16384 traces
-                progress_callback(15 + int(i * 35 / n_traces))
+        dists, perps = section.project_points(trace_x, trace_y)
+        if progress_callback:
+            progress_callback(50)
 
         sel = np.nonzero((dists >= 0.0) & (dists <= total)
                          & (np.abs(perps) <= max_offset))[0]
