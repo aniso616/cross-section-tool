@@ -1539,6 +1539,7 @@ class MainWindow(QMainWindow):
             "",
             "SEG-Y Files (*.segy *.sgy *.SGY);;All Files (*)",
         )
+        imported_twt = False
         for path in paths:
             from section_tool.io.project import SeismicRef
             from section_tool.views.seismic_import_dialog import SeismicImportDialog
@@ -1588,8 +1589,16 @@ class MainWindow(QMainWindow):
                 n_traces_total=int(n_tot),
             )
             self._state.add_seismic_ref(ref)
+            if ref.domain == "twt":
+                imported_twt = True
             # Auto-zoom to show seismic extent
             self._map_view.zoom_to_all_data()
+
+        # A time volume can't display directly in a depth section — bridge into
+        # the Depth Stretch tool (bulk/average bootstrap pre-filled) so the
+        # conversion is set up explicitly, the front door for time→depth.
+        if imported_twt:
+            self._on_depth_stretch()
 
     def _on_extract_seismic_for_section(self) -> None:
         """Extract seismic traces along the active section from a SEG-Y file."""
