@@ -1,4 +1,4 @@
-"""M3 — DepthStretchDialog: build/preview/apply + interpretation gating."""
+"""Depth Stretch dialog — method ladder/gating, progressive disclosure, summary."""
 from __future__ import annotations
 
 import sys
@@ -10,8 +10,11 @@ from PySide6.QtWidgets import QApplication
 from section_tool.app_state import AppState
 from section_tool.core.section import Section
 from section_tool.core.surfaces import HorizonPick
+from section_tool.core.wells import Well
+from section_tool.core.velocity_model import VelocityModel
 from section_tool.core.conversion import set_anchors, build_bulk
-from section_tool.views.depth_stretch_dialog import DepthStretchDialog
+from section_tool.views.depth_stretch_dialog import (
+    DepthStretchDialog, method_availability, format_model_summary_html, SUMMARY_COLORS)
 
 
 @pytest.fixture(scope="session")
@@ -24,10 +27,35 @@ def _state_with_tied_horizon():
     st.add_section(Section([(0, 0), (1000, 0)], name="L1"))
     hp = HorizonPick(np.array([0.0, 500.0]), np.array([1000.0, 1200.0]),
                      name="H1", section_names=np.array(["L1", "L1"], dtype=object))
-    set_anchors(hp, build_bulk(2000.0))     # seismic-tied via the bootstrap model
+    set_anchors(hp, build_bulk(2000.0))
     st.project.horizon_picks.append(hp)
     return st, hp
 
+
+# ---- pure helpers (no Qt) -------------------------------------------------
+
+def test_method_availability_gating():
+    # bulk/average always; layered needs tops; well-calibrated needs wells
+    a = method_availability(zone_tops=[], wells=[])
+    assert a["bulk"][0] and a["average_vz"][0]
+    assert not a["layered_from_formations"][0] and a["layered_from_formations"][1]
+    assert not a["well_calibrated"][0] and "well" in a["well_calibrated"][1].lower()
+    b = method_availability(zone_tops=[(0.5, "A")], wells=["w"])
+    assert b["layered_from_formations"][0]
+    assert b["well_calibrated"][0]
+
+
+def test_summary_html_semantic_colors():
+    html = format_model_summary_html(VelocityModel.average_vz(1800.0, 0.6))
+    assert SUMMARY_COLORS["velocity"] in html      # v0/k teal
+    assert SUMMARY_COLORS["time"] in html          # layer-top ms amber
+    assert SUMMARY_COLORS["keyword"] in html       # V(z) purple
+    assert "monospace" in html
+    # empty model reads as provenance, not a crash
+    assert "unconverted" in format_model_summary_html(VelocityModel())
+
+
+# ---- dialog ---------------------------------------------------------------
 
 def test_apply_installs_model_and_restretches_tied(qapp):
     st, hp = _state_with_tied_horizon()
@@ -40,28 +68,63 @@ def test_apply_installs_model_and_restretches_tied(qapp):
     m = st.project.velocity_model
     assert fired == [True]
     assert m.construction["params"]["method"] == "average_vz"
-    assert np.allclose(hp._twt_anchor, anchors)                         # invariant
-    assert np.allclose(hp._depths, [m.twt_to_depth(a) for a in anchors])  # re-derived
+    assert np.allclose(hp._twt_anchor, anchors)
+    assert np.allclose(hp._depths, [m.twt_to_depth(a) for a in anchors])
 
 
-def test_layered_gated_by_anchored_horizons(qapp):
-    # No anchored horizon → layered disabled; with one → enabled.
+def test_layered_and_well_rungs_gated(qapp):
     bare = AppState(); bare.add_section(Section([(0, 0), (1000, 0)], name="L1"))
     dlg = DepthStretchDialog(bare)
-    idx = dlg.method.findData("layered_from_formations")
-    assert not dlg.method.model().item(idx).isEnabled()
+    li = dlg.method.findData("layered_from_formations")
+    wi = dlg.method.findData("well_calibrated")
+    assert not dlg.method.model().item(li).isEnabled()
+    assert not dlg.method.model().item(wi).isEnabled()
 
     st, _ = _state_with_tied_horizon()
+    st.project.wells.append(Well("W1", 0.0, 0.0))
     dlg2 = DepthStretchDialog(st)
-    idx2 = dlg2.method.findData("layered_from_formations")
-    assert dlg2.method.model().item(idx2).isEnabled()
+    assert dlg2.method.model().item(dlg2.method.findData("layered_from_formations")).isEnabled()
+    assert dlg2.method.model().item(dlg2.method.findData("well_calibrated")).isEnabled()
 
 
-def test_marine_preview_lists_water_layer(qapp):
+def test_progressive_disclosure(qapp):
+    st, _ = _state_with_tied_horizon()
+    dlg = DepthStretchDialog(st)
+    dlg.method.setCurrentIndex(dlg.method.findData("bulk"))
+    dlg.setting.setCurrentText("onshore")
+    assert not dlg.bulk_v.isHidden()                 # bulk → bulk velocity shown
+    assert dlg.v0.isHidden() and dlg.k.isHidden()    # v0/k hidden
+    assert dlg.water_v.isHidden()                    # onshore → no water
+    dlg.method.setCurrentIndex(dlg.method.findData("average_vz"))
+    assert dlg.bulk_v.isHidden()
+    assert not dlg.v0.isHidden() and not dlg.k.isHidden()
+    dlg.setting.setCurrentText("marine")
+    assert not dlg.water_v.isHidden() and not dlg.seafloor_ms.isHidden()
+
+
+def test_marine_summary_lists_water_layer(qapp):
     st, _ = _state_with_tied_horizon()
     dlg = DepthStretchDialog(st)
     dlg.setting.setCurrentText("marine")
     dlg.method.setCurrentIndex(dlg.method.findData("bulk"))
     dlg.seafloor_ms.setValue(400.0)
-    dlg._update_preview()
-    assert "water" in dlg._preview.text().lower()
+    dlg._on_changed()
+    assert "water" in dlg._summary.toPlainText().lower()
+
+
+def test_well_calibrated_apply_installs_calibrated(qapp):
+    from section_tool.core.velocity_model import VelocityFunction
+    st, _ = _state_with_tied_horizon()
+    w = Well("W1", 0.0, 0.0)
+    for name, md in [("A", 300.0), ("B", 800.0), ("C", 1500.0)]:
+        w.add_formation_top(name, md)
+    st.project.wells.append(w)
+    dlg = DepthStretchDialog(st)
+    dlg.method.setCurrentIndex(dlg.method.findData("well_calibrated"))
+    dlg._on_well_changed()
+    fn = VelocityFunction("linear_v0k", v0=1850.0, k=0.55)
+    for r in range(dlg.markers.rowCount()):
+        depth = float(dlg.markers.item(r, 1).text())
+        dlg.markers.item(r, 2).setText(f"{fn.depth_to_twt(depth) * 1000:.3f}")
+    dlg._apply()
+    assert st.project.velocity_model.provenance == "well_calibrated"
