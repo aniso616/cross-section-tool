@@ -81,14 +81,36 @@ def stretch_trace_to_depth(amp, dt_s: float, model: VelocityModel,
 def stretch_image_to_depth(amp2d, dt_s: float, model: VelocityModel,
                            z_max: float, dz: float, t0: float = 0.0):
     """Stretch every trace of a (n_traces, n_samples) TWT image to depth.
-    Returns ``(z_axis, depth_image)`` with depth_image (n_traces, n_depth)."""
+    Returns ``(z_axis, depth_image)`` with depth_image (n_traces, n_depth).
+
+    The depth→TWT mapping ``twt_at_z`` is trace-INDEPENDENT, so it (and its
+    interpolation indices/weights) is computed once and applied to all traces in
+    one vectorized blend — not rebuilt per trace.  This is what keeps a re-stretch
+    off the O(n_traces · n_depth) Python path that froze navigation.
+    """
     amp2d = np.asarray(amp2d, dtype=float)
-    z_axis = None
-    rows = []
-    for tr in amp2d:
-        z_axis, d = stretch_trace_to_depth(tr, dt_s, model, z_max, dz, t0)
-        rows.append(d)
-    return z_axis, np.array(rows)
+    if amp2d.ndim != 2:
+        amp2d = np.atleast_2d(amp2d)
+    n_traces, nt = amp2d.shape
+    t_samples = t0 + np.arange(nt) * float(dt_s)
+    z_axis    = np.arange(0.0, float(z_max) + float(dz), float(dz))
+    twt_at_z  = np.array([model.depth_to_twt(float(z)) for z in z_axis])  # once
+
+    if nt < 2:
+        return z_axis, np.zeros((n_traces, len(z_axis)))
+
+    # Precompute linear-interp indices + weights once for the shared query grid,
+    # then blend all traces at once.  Out-of-range (left/right) → 0, matching
+    # np.interp(..., left=0.0, right=0.0) used by stretch_trace_to_depth.
+    idx = np.clip(np.searchsorted(t_samples, twt_at_z, side="right") - 1, 0, nt - 2)
+    w   = (twt_at_z - t_samples[idx]) / (t_samples[idx + 1] - t_samples[idx])
+    lo  = amp2d[:, idx]
+    hi  = amp2d[:, idx + 1]
+    depth_image = lo * (1.0 - w) + hi * w
+    oob = (twt_at_z < t_samples[0]) | (twt_at_z > t_samples[-1])
+    if oob.any():
+        depth_image[:, oob] = 0.0
+    return z_axis, depth_image
 
 
 # ---------------------------------------------------------------------------

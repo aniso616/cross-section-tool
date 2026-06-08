@@ -617,6 +617,10 @@ class SectionView(QWidget):
         self._canvas.installEventFilter(self)
         # Track which section's seismic is currently loaded in pyqtgraph
         self._seismic_layer_key: str | None = None
+        # Memoized depth-stretch: the stretch depends only on (traces, model),
+        # never on zoom/pan, so navigation reuses it and recomputes nothing.
+        self._stretch_memo_key: tuple | None = None
+        self._stretch_memo: tuple | None = None
 
         # Wire the settle callback: after 200 ms of no pan/zoom, force a
         # full-res re-upload by invalidating the layer key and re-rendering.
@@ -2359,9 +2363,19 @@ class SectionView(QWidget):
             # Model-driven true per-trace stretch when a velocity model is applied;
             # otherwise the inline bulk extent-scale (unchanged — no regression).
             vm = getattr(self._state.project, "velocity_model", None)
-            stretched = (self._model_depth_stretch(ex_data, samples, vm)
-                         if vm is not None and not getattr(vm, "is_empty", True)
-                         else None)
+            stretched = None
+            if vm is not None and not getattr(vm, "is_empty", True):
+                # Memoize on (data identity, velocity signature): the stretch is a
+                # function of traces + model only, so a zoom/pan re-render reuses it
+                # and never re-runs _model_depth_stretch (compute-once-on-Apply).
+                memo_key = (section.name, id(ex_data), ex_data.shape,
+                            self._velocity_signature())
+                if self._stretch_memo_key == memo_key:
+                    stretched = self._stretch_memo
+                else:
+                    stretched = self._model_depth_stretch(ex_data, samples, vm)
+                    self._stretch_memo_key = memo_key
+                    self._stretch_memo = stretched
             if stretched is not None:
                 ex_data, y_top, y_bot = stretched
             else:

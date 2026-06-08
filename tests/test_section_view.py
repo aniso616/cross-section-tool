@@ -657,3 +657,60 @@ class TestSegIntersect:
     def test_parallel_segments(self):
         from section_tool.views.section_view import _seg_intersect
         assert _seg_intersect(0, 0, 10, 0, 0, 5, 10, 5) is None  # parallel horizontal
+
+
+# ---------------------------------------------------------------------------
+# Navigation must not re-run the depth stretch (the zoom/click hang)
+# ---------------------------------------------------------------------------
+
+class TestNavigationDoesNotRestretch:
+    """Regression for the seismic zoom/click hang: the post-zoom settle re-render
+    must REUSE the depth stretch (compute-once-on-Apply, navigate-for-free), not
+    re-run stretch_image_to_depth on every gesture."""
+
+    def _view_with_depth_stretch(self, qapp, state):
+        from section_tool.core.conversion import build_average_vz
+        sec = Section([(0.0, 0.0), (20000.0, 0.0)], name="L1")
+        state.add_section(sec); state.set_active_section(sec)
+        n_samples, n_traces = 200, 400
+        data = np.random.RandomState(0).randn(n_samples, n_traces).astype(np.float32)
+        meta = {"samples": np.linspace(0.0, 2000.0, n_samples).tolist(),
+                "domain": "twt", "dist_min": 0.0, "dist_max": 20000.0}
+        state.set_seismic_for_section("L1", data, meta)
+        state.project.velocity_model = build_average_vz(1800.0, 0.6)
+        return SectionView(state), sec
+
+    def test_settle_rerender_reuses_stretch(self, qapp, state):
+        import time
+        view, sec = self._view_with_depth_stretch(qapp, state)
+        calls = {"n": 0}
+        orig = view._model_depth_stretch
+        def _spy(*a, **k):
+            calls["n"] += 1
+            return orig(*a, **k)
+        view._model_depth_stretch = _spy
+
+        view._update_seismic_layer(sec)          # first load computes the stretch
+        assert calls["n"] == 1
+
+        # A zoom/pan settle invalidates the layer key and re-renders: must reuse.
+        view._seismic_layer_key = None
+        t0 = time.time()
+        view._update_seismic_layer(sec)
+        assert time.time() - t0 < 0.5            # returns inside a tight bound
+        assert calls["n"] == 1                   # ZERO recompute on navigation
+
+    def test_model_change_does_recompute(self, qapp, state):
+        from section_tool.core.conversion import build_average_vz
+        view, sec = self._view_with_depth_stretch(qapp, state)
+        calls = {"n": 0}
+        orig = view._model_depth_stretch
+        view._model_depth_stretch = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), orig(*a, **k))[1]
+
+        view._update_seismic_layer(sec)
+        assert calls["n"] == 1
+        # Tuning velocities changes the signature → stretch is recomputed once.
+        view._state.project.velocity_model = build_average_vz(2400.0, 0.3)
+        view._seismic_layer_key = None
+        view._update_seismic_layer(sec)
+        assert calls["n"] == 2
