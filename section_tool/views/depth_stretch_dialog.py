@@ -12,7 +12,7 @@ Time is shown in ms; the controller works in SI seconds.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
@@ -22,16 +22,32 @@ from section_tool.core.stretch_setup import StretchSetup, WATER_VELOCITY_MS
 from section_tool.core.velocity_model import VelocityModel
 from section_tool.core.well_calibration import Marker, calibrate_model, marker_residuals
 
-# Semantic palette — color ENCODES role, reused wherever a model is summarized.
-SUMMARY_COLORS = {
-    "velocity":   "#2DB9A8",   # teal
-    "time":       "#E0A33E",   # amber
-    "depth":      "#5FB85F",   # green
-    "keyword":    "#B07CD6",   # purple
-    "units":      "#9AA0A6",   # muted grey
-    "provenance": "#9AA0A6",   # muted grey (rendered italic)
-    "base":       "#E6E6E6",   # high-contrast base text (legible on dark)
-}
+# Neutral, high-contrast summary text; a few functional accents only.
+_TEXT_BASE  = "#E6E6E6"   # legible foreground on the dark theme
+_TEXT_MUTED = "#9AA0A6"   # provenance (italic)
+_AXIS_TIME  = "#E0A33E"   # schematic TWT-axis ticks (amber)
+_AXIS_DEPTH = "#5FB85F"   # schematic depth-axis ticks (green)
+_WATER_FILL = "#2B6CB0"   # water band / chip
+_SED_FILL   = "#5B6470"   # neutral sediment band / chip (no formation color)
+
+
+def band_color_hex(layer, strat_column=None) -> str:
+    """The schematic band colour for *layer* — reused as the summary row chip so
+    summary ↔ schematic share one visual language.  Water → blue; a layered
+    formation → its Formation.color (project data); else neutral sediment."""
+    name = (getattr(layer, "name", "") or "").lower()
+    if "water" in name:
+        return _WATER_FILL
+    key = getattr(layer, "formation", "") or getattr(layer, "name", "")
+    if strat_column is not None and key:
+        try:
+            f = strat_column.get_formation(key)
+            if f is not None and getattr(f, "color", None):
+                r, g, b = (int(c) for c in tuple(f.color)[:3])
+                return f"#{r:02x}{g:02x}{b:02x}"
+        except Exception:
+            pass
+    return _SED_FILL
 
 _METHODS = [
     ("bulk", "Bulk velocity"),
@@ -63,41 +79,33 @@ def method_availability(zone_tops, wells) -> dict[str, tuple[bool, str]]:
     }
 
 
-def _span(text, role) -> str:
-    color = SUMMARY_COLORS[role]
-    style = f"color:{color};"
-    if role == "provenance":
-        style += "font-style:italic;"
-    return f'<span style="{style}">{text}</span>'
-
-
-def format_model_summary_html(model: VelocityModel) -> str:
-    """Syntax-colored, monospace HTML summary of *model*.  Color is semantic:
-    velocity teal, time amber, depth green, method/keyword purple, units grey,
-    provenance grey-italic.  Legible on the dark theme."""
-    base = SUMMARY_COLORS["base"]
+def format_model_summary_html(model: VelocityModel, strat_column=None) -> str:
+    """High-contrast NEUTRAL summary — the contrast is the win, not hues.  The
+    only colour is a per-layer chip matching that layer's schematic band (ties
+    summary ↔ schematic) plus muted-italic provenance.  Monospace so columns
+    align."""
     if model is None or model.is_empty:
-        return (f'<div style="font-family:monospace;color:{base};">'
-                f'{_span("unconverted", "provenance")}</div>')
-    lines = []
-    head = (_span(model.method_label, "keyword") + "  "
-            + _span(f"({model.provenance})", "provenance"))
-    lines.append(head)
+        return (f'<div style="font-family:monospace;color:{_TEXT_MUTED};'
+                f'font-style:italic;">unconverted</div>')
+
+    def chip(hexc):
+        return f'<span style="background-color:{hexc};color:{hexc};">&nbsp;&nbsp;</span>'
+
+    head = (f'<span style="color:{_TEXT_BASE};">{model.method_label}</span>'
+            f'&nbsp;<span style="color:{_TEXT_MUTED};font-style:italic;">'
+            f'({model.provenance})</span>')
+    lines = [head]
     for L in model.layers:
         fn = L.function
-        parts = [_span(f"{L.top_twt_s * 1000:7.0f}", "time") + _span(" ms", "units")]
-        if fn.method == "linear_v0k":
-            parts.append(_span("V(z)", "keyword"))
-            parts.append(_span(f"v0={fn.v0:.0f}", "velocity") + _span(" m/s", "units"))
-            parts.append(_span(f"k={fn.k:g}", "velocity") + _span(" s⁻¹", "units"))
-        else:
-            parts.append(_span("bulk", "keyword"))
-            parts.append(_span(f"{fn.v0:.0f}", "velocity") + _span(" m/s", "units"))
-        if L.name:
-            parts.append(_span(L.name, "keyword"))
-        lines.append("&nbsp;&nbsp;" + " ".join(parts))
+        desc = (f"V(z) v0={fn.v0:.0f} k={fn.k:g}" if fn.method == "linear_v0k"
+                else f"bulk {fn.v0:.0f} m/s")
+        nm = f"  {L.name}" if L.name else ""
+        lines.append(
+            f'{chip(band_color_hex(L, strat_column))}&nbsp;'
+            f'<span style="color:{_TEXT_BASE};">'
+            f'{L.top_twt_s * 1000:7.0f} ms&nbsp;&nbsp;{desc}{nm}</span>')
     body = "<br>".join(lines)
-    return f'<div style="font-family:monospace;font-size:9pt;color:{base};">{body}</div>'
+    return f'<div style="font-family:monospace;font-size:9pt;color:{_TEXT_BASE};">{body}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +116,19 @@ class VelocityModelSchematic(QWidget):
     """Layer-cake column, linear in TWT, with TWT (ms) ticks on the left and
     derived Depth (m) ticks on the right so the non-linear stretch is visible."""
 
+    _HEADER_H = 24      # band above the column for the axis headers (no tick collision)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(190, 240)
+        self.setMinimumSize(280, 300)
         self._model: VelocityModel | None = None
         self._max_twt_s = 3.0
+        self._strat = None
 
-    def set_model(self, model: VelocityModel, max_twt_s: float) -> None:
+    def set_model(self, model: VelocityModel, max_twt_s: float, strat_column=None) -> None:
         self._model = model
         self._max_twt_s = max(float(max_twt_s), 1e-3)
+        self._strat = strat_column
         self.update()                       # redraw only — never a re-stretch
 
     def paintEvent(self, _event) -> None:
@@ -129,49 +141,67 @@ class VelocityModelSchematic(QWidget):
             p.setPen(QColor("#777"))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "(no model)")
             return
-        left, right = 46, w - 52              # column x-bounds (room for axes)
-        top, bot = 16, h - 16
+        # Widened column, pushed right (room for axis numbers on both sides).
+        left, right = 52, w - 64
+        top, bot = self._HEADER_H + 10, h - 16
         col_h = bot - top
 
         def y_of(twt_s):
             return top + col_h * min(max(twt_s / self._max_twt_s, 0.0), 1.0)
 
-        # Boundaries: each layer top + the basement (max twt).
+        # Header band (its own row above the column; clear gap before first tick).
+        p.setPen(QColor(_AXIS_TIME))
+        p.drawText(QRect(0, 4, left, 16), Qt.AlignmentFlag.AlignLeft, "TWT ms")
+        p.setPen(QColor(_AXIS_DEPTH))
+        p.drawText(QRect(right, 4, w - right, 16), Qt.AlignmentFlag.AlignRight, "Depth m")
+
         bounds = [L.top_twt_s for L in m.layers] + [self._max_twt_s]
         for i, L in enumerate(m.layers):
             y0, y1 = y_of(bounds[i]), y_of(bounds[i + 1])
-            fill = QColor(L.color) if getattr(L, "color", None) else None
-            if fill is None:
-                name = (L.name or "").lower()
-                fill = QColor("#2b4a6f") if "water" in name else QColor("#3a3a3a")
-            p.fillRect(left, int(y0), right - left, int(y1 - y0) + 1, fill)
-            # Provenance → outline style (assumed = subtle dashed; calibrated = solid cue).
-            pen = QPen(QColor("#9AA0A6"))
+            band = QRect(left, int(y0), right - left, int(y1 - y0) + 1)
+            p.fillRect(band, QColor(band_color_hex(L, self._strat)))
+            # Provenance → outline (assumed dashed; interpolated purple; calibrated solid green).
             if L.provenance == "well_calibrated":
                 pen = QPen(QColor("#5FB85F")); pen.setWidth(2)
             elif L.provenance == "interpolated":
                 pen = QPen(QColor("#B07CD6"))
             else:
-                pen.setStyle(Qt.PenStyle.DashLine)
+                pen = QPen(QColor("#9AA0A6")); pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.drawRect(left, int(y0), right - left, int(y1 - y0))
+            # Label the band: layer name + its method/velocity (same as the controls).
+            bh = y1 - y0
+            if bh >= 14:
+                fn = L.function
+                desc = (f"V(z) {fn.v0:.0f} m/s" if fn.method == "linear_v0k"
+                        else f"Bulk {fn.v0:.0f} m/s")
+                p.setPen(QColor("#F5F5F5"))
+                if L.name and bh >= 26:
+                    p.drawText(QRect(left, int(y0), right - left, int(bh / 2)),
+                               Qt.AlignmentFlag.AlignCenter, L.name)
+                    p.drawText(QRect(left, int(y0 + bh / 2), right - left, int(bh / 2)),
+                               Qt.AlignmentFlag.AlignCenter, desc)
+                else:
+                    p.drawText(band, Qt.AlignmentFlag.AlignCenter,
+                               f"{L.name}  {desc}" if L.name else desc)
 
-        # Axes: TWT (ms) left, derived Depth (m) right, at each boundary + a mid mark.
-        p.setPen(QColor(SUMMARY_COLORS["time"]))
+        # Axis ticks at every boundary + a mid mark; numbers sit at the boundary,
+        # clear of the column edges.
         twt_marks = sorted(set(bounds + [self._max_twt_s * 0.5]))
         for t in twt_marks:
             y = int(y_of(t))
-            p.setPen(QColor(SUMMARY_COLORS["time"]))
-            p.drawText(2, y + 4, f"{t * 1000:.0f}")
+            p.setPen(QColor(_AXIS_TIME))
+            p.drawText(QRect(0, y - 7, left - 4, 14),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       f"{t * 1000:.0f}")
             try:
                 z = m.twt_to_depth(t)
-                p.setPen(QColor(SUMMARY_COLORS["depth"]))
-                p.drawText(right + 4, y + 4, f"{z:.0f}")
+                p.setPen(QColor(_AXIS_DEPTH))
+                p.drawText(QRect(right + 4, y - 7, w - right - 4, 14),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           f"{z:.0f}")
             except Exception:
                 pass
-        p.setPen(QColor(SUMMARY_COLORS["units"]))
-        p.drawText(2, 12, "TWT ms")
-        p.drawText(right - 6, 12, "Depth m")
         p.end()
 
 
@@ -203,7 +233,11 @@ class DepthStretchDialog(QDialog):
         self._form = QFormLayout()
         left.addLayout(self._form)
 
-        self.setting = QComboBox(); self.setting.addItems(["onshore", "marine"])
+        self.setting = QComboBox()
+        # Environment pairing (Marine has the water column).  Land first = the
+        # well-free base-case default (no water/replacement layer).
+        self.setting.addItem("Land", "onshore")
+        self.setting.addItem("Marine", "marine")
         self._form.addRow("Setting:", self.setting)
         self.method = QComboBox()
         for val, label in _METHODS:
@@ -252,9 +286,10 @@ class DepthStretchDialog(QDialog):
         self._howto.setStyleSheet("color:#9AA0A6; font-size: 8pt;")
         left.addWidget(self._howto)
 
-        # Right: live schematic
+        # Right: live schematic — pushed right, given the larger share of the width.
+        cols.addSpacing(16)
         self._schematic = VelocityModelSchematic()
-        cols.addWidget(self._schematic, 2)
+        cols.addWidget(self._schematic, 4)
 
         self._buttons = QDialogButtonBox()
         self._apply_btn = self._buttons.addButton("Apply", QDialogButtonBox.ButtonRole.ApplyRole)
@@ -301,7 +336,7 @@ class DepthStretchDialog(QDialog):
     def _refresh_visibility(self) -> None:
         """Progressive disclosure keyed to Method + Setting."""
         method = self.method.currentData()
-        marine = self.setting.currentText() == "marine"
+        marine = self.setting.currentData() == "marine"
         self._set_row_visible(self.seafloor_ms, marine)
         self._set_row_visible(self.water_v, marine)
         self._set_row_visible(self.bulk_v, method == "bulk")
@@ -357,7 +392,7 @@ class DepthStretchDialog(QDialog):
         if base_method == "well_calibrated":
             base_method = "average_vz"   # calibration promotes the V(z) bootstrap
         return StretchSetup(
-            setting=self.setting.currentText(), method=base_method,
+            setting=self.setting.currentData(), method=base_method,
             datum_twt_s=self.datum_ms.value() / 1000.0,
             seafloor_twt_s=self.seafloor_ms.value() / 1000.0,
             basement_twt_s=self.basement_ms.value() / 1000.0,
@@ -377,32 +412,33 @@ class DepthStretchDialog(QDialog):
     def _on_changed(self) -> None:
         self._refresh_method_gating()
         self._refresh_visibility()
+        strat = getattr(self._state.project, "strat_column", None)
         try:
             model = self._build_model()
         except ValueError as e:
-            self._summary.setHtml(f'<span style="color:#E0A33E;">⚠ {e}</span>')
+            self._summary.setHtml(f'<span style="color:{_TEXT_MUTED};">⚠ {e}</span>')
             self._apply_btn.setEnabled(False)
-            self._schematic.set_model(VelocityModel(), self.basement_ms.value() / 1000.0)
+            self._schematic.set_model(VelocityModel(), self.basement_ms.value() / 1000.0, strat)
             return
         self._apply_btn.setEnabled(True)
-        html = format_model_summary_html(model)
+        html = format_model_summary_html(model, strat)
         if self.method.currentData() == "well_calibrated":
             html += self._residual_html(model)
         self._summary.setHtml(html)
         max_twt = max(self.basement_ms.value() / 1000.0, 0.5)
-        self._schematic.set_model(model, max_twt)
+        self._schematic.set_model(model, max_twt, strat)
 
     def _residual_html(self, model) -> str:
         markers = self._well_markers()
         if len(markers) < 2:
             return ('<div style="font-family:monospace;font-size:8pt;color:#9AA0A6;">'
                     'enter ≥2 marker TWTs to calibrate</div>')
-        rows = ['<div style="font-family:monospace;font-size:8pt;color:#E6E6E6;">'
+        rows = [f'<div style="font-family:monospace;font-size:8pt;color:{_TEXT_BASE};">'
                 'residuals (Δz m / Δtwt ms):']
         for r in marker_residuals(model, markers):
             name = r["name"][:10]
-            dz = _span(f"{r['depth_residual_m']:+.1f}", "depth")
-            dt = _span(f"{r['twt_residual_s'] * 1000:+.1f}", "time")
+            dz = f"{r['depth_residual_m']:+.1f}"
+            dt = f"{r['twt_residual_s'] * 1000:+.1f}"
             rows.append(f"&nbsp;{name:<10} {dz} / {dt}")
         return "<br>".join(rows) + "</div>"
 

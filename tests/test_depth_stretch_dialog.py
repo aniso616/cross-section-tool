@@ -14,7 +14,7 @@ from section_tool.core.wells import Well
 from section_tool.core.velocity_model import VelocityModel
 from section_tool.core.conversion import set_anchors, build_bulk
 from section_tool.views.depth_stretch_dialog import (
-    DepthStretchDialog, method_availability, format_model_summary_html, SUMMARY_COLORS)
+    DepthStretchDialog, method_availability, format_model_summary_html, band_color_hex)
 
 
 @pytest.fixture(scope="session")
@@ -45,12 +45,15 @@ def test_method_availability_gating():
     assert b["well_calibrated"][0]
 
 
-def test_summary_html_semantic_colors():
+def test_summary_html_neutral_with_chips():
     html = format_model_summary_html(VelocityModel.average_vz(1800.0, 0.6))
-    assert SUMMARY_COLORS["velocity"] in html      # v0/k teal
-    assert SUMMARY_COLORS["time"] in html          # layer-top ms amber
-    assert SUMMARY_COLORS["keyword"] in html       # V(z) purple
-    assert "monospace" in html
+    assert "monospace" in html                     # aligned columns
+    assert "background-color" in html              # per-layer color chip
+    assert "font-style:italic" in html             # provenance muted-italic
+    assert "1800" in html and "V(z)" in html       # neutral numbers/method text
+    # the chip color matches the schematic band color (one visual language)
+    layer = VelocityModel.average_vz(1800.0, 0.6).layers[0]
+    assert band_color_hex(layer) in html
     # empty model reads as provenance, not a crash
     assert "unconverted" in format_model_summary_html(VelocityModel())
 
@@ -91,21 +94,21 @@ def test_progressive_disclosure(qapp):
     st, _ = _state_with_tied_horizon()
     dlg = DepthStretchDialog(st)
     dlg.method.setCurrentIndex(dlg.method.findData("bulk"))
-    dlg.setting.setCurrentText("onshore")
+    dlg.setting.setCurrentIndex(dlg.setting.findData("onshore"))
     assert not dlg.bulk_v.isHidden()                 # bulk → bulk velocity shown
     assert dlg.v0.isHidden() and dlg.k.isHidden()    # v0/k hidden
-    assert dlg.water_v.isHidden()                    # onshore → no water
+    assert dlg.water_v.isHidden()                    # land → no water
     dlg.method.setCurrentIndex(dlg.method.findData("average_vz"))
     assert dlg.bulk_v.isHidden()
     assert not dlg.v0.isHidden() and not dlg.k.isHidden()
-    dlg.setting.setCurrentText("marine")
+    dlg.setting.setCurrentIndex(dlg.setting.findData("marine"))
     assert not dlg.water_v.isHidden() and not dlg.seafloor_ms.isHidden()
 
 
 def test_marine_summary_lists_water_layer(qapp):
     st, _ = _state_with_tied_horizon()
     dlg = DepthStretchDialog(st)
-    dlg.setting.setCurrentText("marine")
+    dlg.setting.setCurrentIndex(dlg.setting.findData("marine"))
     dlg.method.setCurrentIndex(dlg.method.findData("bulk"))
     dlg.seafloor_ms.setValue(400.0)
     dlg._on_changed()

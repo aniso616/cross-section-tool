@@ -4113,12 +4113,20 @@ def main(argv: list[str] | None = None) -> int:
         QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
         QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{
             background: #3B82F6; }}
+        /* Clear triangular arrows (not the default stacked-box glyphs): suppress
+           the native arrow image and draw a CSS triangle via borders. */
         QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-            width: 0; height: 0; border-left: 4px solid transparent;
-            border-right: 4px solid transparent; border-bottom: 5px solid #cfcfcf; }}
+            image: none; width: 0; height: 0;
+            border-left: 5px solid transparent; border-right: 5px solid transparent;
+            border-bottom: 7px solid #E0E0E0; }}
         QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-            width: 0; height: 0; border-left: 4px solid transparent;
-            border-right: 4px solid transparent; border-top: 5px solid #cfcfcf; }}
+            image: none; width: 0; height: 0;
+            border-left: 5px solid transparent; border-right: 5px solid transparent;
+            border-top: 7px solid #E0E0E0; }}
+        QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {{
+            border-bottom-color: #FFFFFF; }}
+        QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {{
+            border-top-color: #FFFFFF; }}
         QComboBox                       {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
                                           background: {_bg2}; border: 1px solid {_border};
                                           border-radius: 3px; }}
