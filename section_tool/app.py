@@ -1579,6 +1579,7 @@ class MainWindow(QMainWindow):
                 apply_scalar=dlg.apply_scalar,
                 domain=dlg.domain,
                 depth_units=dlg.depth_units,
+                max_offset=dlg.max_offset,
                 crs_epsg=self._state.project.crs_epsg,
                 extent_x_min=float(xr[0]),
                 extent_x_max=float(xr[1]),
@@ -1677,6 +1678,7 @@ class MainWindow(QMainWindow):
                 x_field=ref.x_field,
                 y_field=ref.y_field,
                 apply_scalar=ref.apply_scalar,
+                max_offset=float(getattr(ref, "max_offset", 500.0)),
                 interpolate=interp_cb.isChecked(),
                 progress_callback=_prog,
             )

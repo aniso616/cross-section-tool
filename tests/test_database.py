@@ -57,6 +57,22 @@ def test_project_settings_round_trip(tmp_db):
 
 
 # ---------------------------------------------------------------------------
+# Seismic refs
+# ---------------------------------------------------------------------------
+
+def test_seismic_ref_round_trip_includes_max_offset(tmp_db):
+    from section_tool.io.project import SeismicRef
+    ref = SeismicRef(path="/data/vol.segy", name="vol", domain="twt",
+                     depth_units="ms", max_offset=250.0, n_traces_total=42)
+    tmp_db.upsert_seismic(ref)
+    rows = tmp_db.get_all_seismic()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["domain"] == "twt"
+    assert row["max_offset"] == pytest.approx(250.0)   # editable corridor persists
+
+
+# ---------------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------------
 

@@ -620,6 +620,7 @@ class AppState(QObject):
                 apply_scalar=bool(srow.get("apply_scalar", 1)),
                 domain=srow.get("domain", "twt"),
                 depth_units=srow.get("depth_units", "ms"),
+                max_offset=float(srow.get("max_offset", 500.0)),
                 crs_epsg=int(srow.get("crs_epsg", 32632)),
                 extent_x_min=float(srow.get("extent_xmin", 0.0)),
                 extent_x_max=float(srow.get("extent_xmax", 0.0)),

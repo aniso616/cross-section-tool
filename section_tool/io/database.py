@@ -274,7 +274,8 @@ CREATE TABLE IF NOT EXISTS seismic (
     colormap          TEXT    DEFAULT 'seismic_red_blue',
     gain              REAL    DEFAULT 1.0,
     clip_percentile   REAL    DEFAULT 99.0,
-    opacity           REAL    DEFAULT 1.0
+    opacity           REAL    DEFAULT 1.0,
+    max_offset        REAL    DEFAULT 500.0
 );
 
 CREATE TABLE IF NOT EXISTS annotations (
@@ -482,6 +483,8 @@ class ProjectDatabase:
             ("fault_picks",   "twt_anchor", "REAL"),
             ("horizons", "seismic_tied", "INTEGER DEFAULT 0"),
             ("faults",   "seismic_tied", "INTEGER DEFAULT 0"),
+            # Per-volume extraction corridor (m); editable at SEG-Y import.
+            ("seismic",  "max_offset", "REAL DEFAULT 500.0"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -1044,27 +1047,30 @@ class ProjectDatabase:
                 """UPDATE seismic SET file_path=?, domain=?, depth_units=?,
                    n_traces=?, extent_xmin=?, extent_xmax=?,
                    extent_ymin=?, extent_ymax=?,
-                   x_field=?, y_field=?, scalar_field=?, apply_scalar=?, crs_epsg=?
+                   x_field=?, y_field=?, scalar_field=?, apply_scalar=?, crs_epsg=?,
+                   max_offset=?
                    WHERE id=?""",
                 (ref.path, ref.domain, ref.depth_units,
                  getattr(ref, "n_traces_total", 0),
                  ref.extent_x_min, ref.extent_x_max,
                  ref.extent_y_min, ref.extent_y_max,
                  ref.x_field, ref.y_field, ref.scalar_field,
-                 int(ref.apply_scalar), ref.crs_epsg, sid)
+                 int(ref.apply_scalar), ref.crs_epsg,
+                 float(getattr(ref, "max_offset", 500.0)), sid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO seismic(name, file_path, domain, depth_units,
                    n_traces, extent_xmin, extent_xmax, extent_ymin, extent_ymax,
-                   x_field, y_field, scalar_field, apply_scalar, crs_epsg)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   x_field, y_field, scalar_field, apply_scalar, crs_epsg, max_offset)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (ref.name, ref.path, ref.domain, ref.depth_units,
                  getattr(ref, "n_traces_total", 0),
                  ref.extent_x_min, ref.extent_x_max,
                  ref.extent_y_min, ref.extent_y_max,
                  ref.x_field, ref.y_field, ref.scalar_field,
-                 int(ref.apply_scalar), ref.crs_epsg)
+                 int(ref.apply_scalar), ref.crs_epsg,
+                 float(getattr(ref, "max_offset", 500.0)))
             )
             sid = cur.lastrowid
         self.conn.commit()

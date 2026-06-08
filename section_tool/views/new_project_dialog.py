@@ -147,21 +147,9 @@ class NewProjectDialog(QDialog):
         du_rl.addStretch()
         depth_fl.addRow("Depth units:", du_row)
 
-        # Depth domain
-        dd_row = QWidget()
-        dd_rl = QHBoxLayout(dd_row)
-        dd_rl.setContentsMargins(0, 0, 0, 0)
-        self._domain_group = QButtonGroup(self)
-        self._domain_group.setExclusive(True)
-        self._domain_md_rb = QRadioButton("Depth (TVD)")
-        self._domain_twt_rb = QRadioButton("Two-Way Time")
-        self._domain_md_rb.setChecked(True)
-        self._domain_group.addButton(self._domain_md_rb, 0)
-        self._domain_group.addButton(self._domain_twt_rb, 1)
-        dd_rl.addWidget(self._domain_md_rb)
-        dd_rl.addWidget(self._domain_twt_rb)
-        dd_rl.addStretch()
-        depth_fl.addRow("Depth domain:", dd_row)
+        # No project-level domain choice: the section is always depth/TVD.
+        # Time (TWT) seismic is an *input*, declared at SEG-Y import and converted
+        # to depth through the Depth Stretch tool — never a project domain.
 
         # Default depth range
         self._depth_min_spin = QDoubleSpinBox()
@@ -283,7 +271,9 @@ class NewProjectDialog(QDialog):
         return "ft" if self._depth_ft_rb.isChecked() else "m"
 
     def depth_domain(self) -> str:
-        return "time" if self._domain_twt_rb.isChecked() else "depth"
+        # The project is always depth/TVD (architectural rule: the section is
+        # always depth).  Retained so callers need no change.
+        return "depth"
 
     def default_depth_min(self) -> float:
         return self._depth_min_spin.value()

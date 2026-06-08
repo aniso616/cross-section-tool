@@ -43,6 +43,9 @@ class SeismicRef:
     domain: str = "twt"
     depth_units: str = "ms"
     crs_epsg: int = 32632
+    # Per-volume corridor: traces farther than this (m) from the section line are
+    # excluded at extraction.  Editable at import; defaults to the legacy 500 m.
+    max_offset: float = 500.0
     # Spatial extent populated at import time (used for map display)
     extent_x_min: float = 0.0
     extent_x_max: float = 0.0
@@ -332,6 +335,7 @@ def _save_seismic_refs(f: h5py.File, refs: list[SeismicRef]) -> None:
         sg.attrs["apply_scalar"] = int(ref.apply_scalar)
         sg.attrs["domain"] = ref.domain
         sg.attrs["depth_units"] = ref.depth_units
+        sg.attrs["max_offset"] = float(ref.max_offset)
         sg.attrs["crs_epsg"] = ref.crs_epsg
         sg.attrs["extent_x_min"] = ref.extent_x_min
         sg.attrs["extent_x_max"] = ref.extent_x_max
@@ -527,6 +531,7 @@ def _load_seismic_refs(f: h5py.File) -> list[SeismicRef]:
             apply_scalar=bool(grp[k].attrs.get("apply_scalar", 1)),
             domain=_str(grp[k].attrs.get("domain", "twt")),
             depth_units=_str(grp[k].attrs.get("depth_units", "ms")),
+            max_offset=float(grp[k].attrs.get("max_offset", 500.0)),
             crs_epsg=int(grp[k].attrs.get("crs_epsg", 32632)),
             extent_x_min=float(grp[k].attrs.get("extent_x_min", 0.0)),
             extent_x_max=float(grp[k].attrs.get("extent_x_max", 0.0)),
