@@ -34,12 +34,9 @@ class SectionPropertiesDialog(PropertiesDialog):
         w = QWidget(); form = QFormLayout(w)
         form.setVerticalSpacing(6); form.setHorizontalSpacing(10)
 
-        self._widgets["display_domain"] = QComboBox()
-        self._widgets["display_domain"].addItems(["depth", "twt"])
-        dd = self.obj_data.get("display_domain", "depth")
-        self._widgets["display_domain"].setCurrentIndex(
-            0 if dd == "depth" else 1)
-        form.addRow("Display Domain:", self._widgets["display_domain"])
+        # No display-domain toggle: the section is always depth (time seismic is
+        # an input converted via the Depth Stretch tool).
+        form.addRow("Display Domain:", QLabel("Depth (always)"))
 
         self._widgets["vertical_exaggeration"] = QDoubleSpinBox()
         self._widgets["vertical_exaggeration"].setRange(0.1, 100.0)

@@ -116,25 +116,18 @@ def _make_section(**kwargs) -> Section:
 
 
 class TestSectionDisplayDomain:
-    def test_default_display_domain_follows_depth_domain(self):
-        s = _make_section(depth_domain="depth")
-        assert s.display_domain == "depth"
+    """Depth-canonical: the section is ALWAYS depth.  The legacy display_domain
+    toggle was retired (M3); display_domain is read-only and always 'depth',
+    independent of depth_domain, and y_label/y_range are always depth."""
 
-    def test_default_display_domain_twt(self):
-        s = _make_section(depth_domain="twt")
-        assert s.display_domain == "twt"
+    def test_display_domain_always_depth(self):
+        assert _make_section(depth_domain="depth").display_domain == "depth"
+        assert _make_section(depth_domain="twt").display_domain == "depth"
 
-    def test_override_display_domain(self):
-        s = _make_section(depth_domain="depth")
-        s.display_domain = "twt"
-        assert s.display_domain == "twt"
-        # depth_domain unchanged
-        assert s.depth_domain == "depth"
-
-    def test_invalid_display_domain_raises(self):
+    def test_display_domain_is_read_only(self):
         s = _make_section()
-        with pytest.raises(ValueError):
-            s.display_domain = "seconds"
+        with pytest.raises(AttributeError):
+            s.display_domain = "twt"
 
     def test_y_label_depth_m(self):
         s = _make_section(depth_domain="depth", depth_units="m")
@@ -144,32 +137,16 @@ class TestSectionDisplayDomain:
         s = _make_section(depth_domain="depth", depth_units="ft")
         assert s.y_label == "Depth (ft)"
 
-    def test_y_label_twt(self):
-        s = _make_section(depth_domain="twt")
-        assert s.y_label == "TWT (ms)"
+    def test_y_label_twt_section_still_depth(self):
+        # Even a legacy depth_domain='twt' section labels its axis in depth.
+        s = _make_section(depth_domain="twt", depth_units="m")
+        assert s.y_label == "Depth (m)"
 
-    def test_y_label_override_depth_to_twt(self):
-        s = _make_section(depth_domain="depth")
-        s.display_domain = "twt"
-        assert s.y_label == "TWT (ms)"
-
-    def test_y_range_depth_default(self):
-        s = _make_section(depth_domain="depth")
-        top, bot = s.y_range
-        assert top == pytest.approx(0.0)
-        assert bot > 0
-
-    def test_y_range_twt_default(self):
-        s = _make_section(depth_domain="twt")
-        top, bot = s.y_range
-        assert top == pytest.approx(0.0)
-        assert bot > 0
-
-    def test_y_range_twt_in_ms(self):
-        """TWT range should be in milliseconds, not seconds."""
-        s = _make_section(depth_domain="twt")
-        _, bot = s.y_range
-        assert bot >= 100  # at least 100 ms (not 0.1 s)
+    def test_y_range_always_depth(self):
+        for dd in ("depth", "twt"):
+            top, bot = _make_section(depth_domain=dd).y_range
+            assert top == pytest.approx(0.0)
+            assert bot > 0
 
 
 # ---------------------------------------------------------------------------
@@ -246,43 +223,24 @@ class TestDatabaseDisplayDomain:
         assert row["display_domain"] == "depth"
         db.close()
 
-    def test_display_domain_twt_stored(self, tmp_path):
+    def test_display_domain_always_depth_stored(self, tmp_path):
+        # Depth-canonical: a section always persists display_domain == 'depth',
+        # even when its source depth_domain is 'twt' (the toggle was retired).
         db = ProjectDatabase(str(tmp_path / "test.sqlite"))
         sec = _make_section(depth_domain="twt")
         db.upsert_section(sec)
         row = db.get_all_sections()[0]
-        assert row["display_domain"] == "twt"
-        db.close()
-
-    def test_display_domain_override_stored(self, tmp_path):
-        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
-        sec = _make_section(depth_domain="depth")
-        sec.display_domain = "twt"   # user override
-        db.upsert_section(sec)
-        row = db.get_all_sections()[0]
-        assert row["depth_domain"] == "depth"     # original
-        assert row["display_domain"] == "twt"     # override
-        db.close()
-
-    def test_display_domain_update(self, tmp_path):
-        db = ProjectDatabase(str(tmp_path / "test.sqlite"))
-        sec = _make_section(depth_domain="depth")
-        db.upsert_section(sec)
-        sec.display_domain = "twt"
-        db.upsert_section(sec)   # update
-        row = db.get_all_sections()[0]
-        assert row["display_domain"] == "twt"
+        assert row["display_domain"] == "depth"
         db.close()
 
     def test_round_trip_display_domain(self, tmp_path):
         path = str(tmp_path / "rt.sqlite")
         db1 = ProjectDatabase(path)
         sec = _make_section(depth_domain="depth")
-        sec.display_domain = "twt"
         db1.upsert_section(sec)
         db1.close()
 
         db2 = ProjectDatabase(path)
         row = db2.get_all_sections()[0]
-        assert row["display_domain"] == "twt"
+        assert row["display_domain"] == "depth"
         db2.close()

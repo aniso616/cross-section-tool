@@ -56,45 +56,35 @@ class Section:
         # Phase 5: per-section seismic display settings
         from section_tool.core.seismic_settings import SeismicDisplaySettings
         self.seismic_display: SeismicDisplaySettings = SeismicDisplaySettings()
-        # User-overridable display domain (None → follows depth_domain)
-        self._display_domain: Literal["depth", "twt"] | None = None
 
     # ------------------------------------------------------------------
     # Display domain and axis properties
     # ------------------------------------------------------------------
 
     @property
-    def display_domain(self) -> Literal["depth", "twt"]:
-        """The domain shown on the Y axis: 'twt' or 'depth'.
+    def display_domain(self) -> Literal["depth"]:
+        """The domain shown on the Y axis — always 'depth'.
 
-        If the user has not overridden this, it follows :attr:`depth_domain`.
+        Architectural rule: the section is always depth.  Time (TWT) seismic is
+        an *input* converted for display through the Depth Stretch tool; there is
+        no section-level time↔depth toggle.  Retained (read-only) so callers and
+        persistence that reference it keep working.
         """
-        return self._display_domain if self._display_domain is not None else self.depth_domain
-
-    @display_domain.setter
-    def display_domain(self, value: Literal["depth", "twt"]) -> None:
-        if value not in ("depth", "twt"):
-            raise ValueError(f"display_domain must be 'depth' or 'twt', got {value!r}")
-        self._display_domain = value
+        return "depth"
 
     @property
     def y_label(self) -> str:
-        """Axis label string appropriate for :attr:`display_domain`."""
-        if self.display_domain == "twt":
-            return "TWT (ms)"
+        """Axis label string — always depth (the section is always depth)."""
         units = self.depth_units or "m"
         return f"Depth ({units})"
 
     @property
     def y_range(self) -> tuple[float, float]:
-        """Default Y-axis range (top, bottom) appropriate for the display domain.
+        """Default Y-axis range (top, bottom) in depth.
 
-        Returns (0, 3000) ms for TWT and (0, 5000) m for depth by default.
-        These are intentionally conservative starting values; the section view
-        overrides them based on loaded data.
+        (0, 5000) m by default — a conservative starting value; the section view
+        overrides it based on loaded data.
         """
-        if self.display_domain == "twt":
-            return (0.0, 3000.0)   # ms
         return (0.0, 5000.0)       # m (or ft)
 
     # ------------------------------------------------------------------

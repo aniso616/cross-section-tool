@@ -1440,7 +1440,10 @@ class SectionView(QWidget):
                 for ref in self._state.project.seismic_refs
             )
         )
-        if section.depth_domain == "twt" or (seismic_is_twt and stretch == "native_twt"):
+        # Depth-canonical: the section axis is always depth.  The only TWT axis
+        # is the explicit "native TWT" seismic-inspection mode; depth_domain no
+        # longer forces a time axis (the section-level toggle was retired).
+        if seismic_is_twt and stretch == "native_twt":
             ylabel = "TWT (ms)"
         elif seismic_is_twt and stretch == "linear":
             ylabel = f"Depth ({units})  [TWT→depth]"

@@ -1024,8 +1024,7 @@ class ProjectPanel(QDockWidget):
                 if "vertical_exaggeration" in values:
                     sec.vertical_exaggeration = float(
                         values["vertical_exaggeration"])
-                if "display_domain" in values:
-                    sec.display_domain = values["display_domain"]
+                # display_domain is no longer user-editable (always depth).
                 if "depth_units" in values:
                     sec.depth_units = values["depth_units"]
                 self._state.update_section(idx, sec)
