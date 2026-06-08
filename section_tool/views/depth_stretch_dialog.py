@@ -410,6 +410,11 @@ class DepthStretchDialog(QDialog):
         if self.method.currentData() == "well_calibrated":
             model = self._build_model()
             self._state.project.velocity_model = model
+            # Re-derive seismic-tied geometry through the calibrated model so
+            # horizons stay glued to their reflectors (setup.apply does this for
+            # the other rungs; here we install the model directly).
+            from section_tool.core.conversion import restretch_project
+            restretch_project(self._state.project, model)
         else:
             setup = self._read_setup()
             setup.apply(self._state.project, self._zone_tops())

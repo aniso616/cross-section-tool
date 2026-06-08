@@ -700,25 +700,11 @@ class MainWindow(QMainWindow):
         # Tools
         # ================================================================
         tools_menu = mb.addMenu("&Tools")
-        for tid, label, key in [
-            ("select",       "Select Object",      "V"),
-            ("node_edit",    "Direct Select / Nodes", "A"),
-            ("pan",          "Pan",                "H"),
-            ("zoom",         "Zoom",               "Z"),
-            ("new_section",  "Draw Section",       "S"),
-            ("horizon_pick", "Horizon Pick",       "P"),
-            ("fault_pick",   "Fault Pick",         "F"),
-            ("polygon",      "Polygon",            "G"),
-            ("measure",      "Measure",            "M"),
-        ]:
-            a = QAction(f"{label}\t{key}", self)
-            a.triggered.connect(
-                lambda _checked, t=tid: self._tool_palette.set_active_tool(t))
-            tools_menu.addAction(a)
-            if tid in ("zoom", "new_section", "polygon"):
-                tools_menu.addSeparator()
+        # Grouped by the workflow pipeline (separators between groups).  The basic
+        # interaction tools (Select/Pan/Zoom/Pick…) live in the tool palette and
+        # keyboard shortcuts, not here — the menu is for dialogs/actions.
 
-        tools_menu.addSeparator()
+        # --- Interpretation: pick-construction helpers ---
         construct_sub = QMenu("&Construction Tools", self)
         for tid, label, key in [
             ("extend",          "Extend Pick",          "E"),
@@ -733,40 +719,45 @@ class MainWindow(QMainWindow):
                 lambda _checked, t=tid: self._tool_palette.set_active_tool(t))
             construct_sub.addAction(a)
         tools_menu.addMenu(construct_sub)
-        tools_menu.addSeparator()
-        self._set_aoi_action = QAction("Set Area of Interest (AOI)…", self)
-        self._set_aoi_action.triggered.connect(self._on_set_aoi)
-        tools_menu.addAction(self._set_aoi_action)
-        self._clear_aoi_action = QAction("Clear AOI", self)
-        self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
-        tools_menu.addAction(self._clear_aoi_action)
+
+        # --- Time–Depth / Conversion ---
         tools_menu.addSeparator()
         self._depth_stretch_action = QAction("&Depth Stretch (Time→Depth)…", self)
         self._depth_stretch_action.triggered.connect(self._on_depth_stretch)
-        tools_menu.addAction(self._depth_stretch_action)
-        self._well_calib_action = QAction("&Well Calibration…", self)
-        self._well_calib_action.triggered.connect(self._on_well_calibration)
-        tools_menu.addAction(self._well_calib_action)
-        self._thermal_action = QAction("&Thermal Modeling…", self)
-        self._thermal_action.triggered.connect(self._on_thermal_modeling)
-        tools_menu.addAction(self._thermal_action)
+        tools_menu.addAction(self._depth_stretch_action)   # well calibration folds in here
+        self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
+        self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
+        tools_menu.addAction(self._view_segy_hdr_action)
+
+        # --- Structural / Restoration ---
+        tools_menu.addSeparator()
         self._balance_check_action = QAction("Check Section &Balance…", self)
         self._balance_check_action.triggered.connect(self._on_balance_check)
         tools_menu.addAction(self._balance_check_action)
         self._restoration_stack_action = QAction("Restoration &Stack…", self)
         self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
         tools_menu.addAction(self._restoration_stack_action)
-        self._attribute_table_action = QAction("&Attribute Table…", self)
-        self._attribute_table_action.triggered.connect(self._on_attribute_table)
-        tools_menu.addAction(self._attribute_table_action)
-        tools_menu.addSeparator()
         self._topology_audit_action = QAction("&Topology Audit…", self)
         self._topology_audit_action.triggered.connect(self._on_topology_audit)
         tools_menu.addAction(self._topology_audit_action)
+
+        # --- Thermal ---
         tools_menu.addSeparator()
-        self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
-        self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
-        tools_menu.addAction(self._view_segy_hdr_action)
+        self._thermal_action = QAction("&Thermal Modeling…", self)
+        self._thermal_action.triggered.connect(self._on_thermal_modeling)
+        tools_menu.addAction(self._thermal_action)
+
+        # --- Analysis / Utilities ---
+        tools_menu.addSeparator()
+        self._attribute_table_action = QAction("&Attribute Table…", self)
+        self._attribute_table_action.triggered.connect(self._on_attribute_table)
+        tools_menu.addAction(self._attribute_table_action)
+        self._set_aoi_action = QAction("Set Area of Interest (AOI)…", self)
+        self._set_aoi_action.triggered.connect(self._on_set_aoi)
+        tools_menu.addAction(self._set_aoi_action)
+        self._clear_aoi_action = QAction("Clear AOI", self)
+        self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
+        tools_menu.addAction(self._clear_aoi_action)
 
         # ================================================================
         # Help
@@ -1451,38 +1442,6 @@ class MainWindow(QMainWindow):
                 pass
 
         dlg = DepthStretchDialog(self._state, on_apply=_applied, parent=self)
-        dlg.exec()
-
-    def _on_well_calibration(self) -> None:
-        """Tools → Well Calibration: tie velocities to a well (opt-in; needs wells).
-
-        Promotes the touched layers to well-calibrated and re-derives seismic-tied
-        geometry; a re-render shows the result.
-        """
-        if not getattr(self._state.project, "wells", []):
-            QMessageBox.information(
-                self, "No Wells",
-                "Well calibration needs at least one well. Import or create a well "
-                "first; the well-free workflow uses Depth Stretch instead.")
-            return
-        from section_tool.views.well_calibration_dialog import WellCalibrationDialog
-
-        def _applied():
-            try:
-                self._state._set_modified(True)
-            except Exception:
-                pass
-            try:
-                from section_tool.core.conversion import restretch_project
-                restretch_project(self._state.project, self._state.project.velocity_model)
-            except Exception:
-                pass
-            try:
-                self._section_view.render()
-            except Exception:
-                pass
-
-        dlg = WellCalibrationDialog(self._state, on_apply=_applied, parent=self)
         dlg.exec()
 
     def _on_thermal_modeling(self) -> None:
