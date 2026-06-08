@@ -4064,6 +4064,30 @@ def main(argv: list[str] | None = None) -> int:
         _menu_bg = "#FFFFFF"
         _tab_sel = "#FFFFFF"
         _handle  = "#CCCCCC"
+
+    # Crisp triangle arrows for spin buttons, as PNGs referenced by path: the
+    # native Windows styles ignore the CSS-triangle on ::up-arrow (they draw the
+    # default stacked-box glyph), so a real image: url() is the only reliable
+    # cross-style way to get clean arrows.
+    import tempfile as _tf
+    from PySide6.QtGui import QPixmap as _QPm, QPainter as _QPa, QPolygon as _QPoly, QColor
+    from PySide6.QtCore import QPoint as _QPt
+    _icon_dir = os.path.join(_tf.gettempdir(), "section_tool_icons")
+    os.makedirs(_icon_dir, exist_ok=True)
+
+    def _mk_arrow(fname, up):
+        pm = _QPm(20, 20); pm.fill(Qt.GlobalColor.transparent)
+        pa = _QPa(pm); pa.setRenderHint(_QPa.RenderHint.Antialiasing, True)
+        pa.setBrush(QColor("#E0E0E0")); pa.setPen(Qt.PenStyle.NoPen)
+        pts = ([_QPt(5, 13), _QPt(15, 13), _QPt(10, 6)] if up
+               else [_QPt(5, 7), _QPt(15, 7), _QPt(10, 14)])
+        pa.drawPolygon(_QPoly(pts)); pa.end()
+        pm.save(fname, "PNG")
+
+    _up_png = os.path.join(_icon_dir, "spin_up.png").replace("\\", "/")
+    _dn_png = os.path.join(_icon_dir, "spin_down.png").replace("\\", "/")
+    _mk_arrow(_up_png, True); _mk_arrow(_dn_png, False)
+
     app.setStyleSheet(f"""
         QMainWindow                     {{ background: {_bg}; }}
         QWidget                         {{ font-size: 9pt; color: {_text}; }}
@@ -4113,20 +4137,13 @@ def main(argv: list[str] | None = None) -> int:
         QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
         QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{
             background: #3B82F6; }}
-        /* Clear triangular arrows (not the default stacked-box glyphs): suppress
-           the native arrow image and draw a CSS triangle via borders. */
+        /* Clear triangle arrows (not the default stacked-box glyphs).  Native
+           Windows styles ignore a CSS-triangle on ::up-arrow, so use a real PNG
+           generated at startup — reliable across every style. */
         QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-            image: none; width: 0; height: 0;
-            border-left: 5px solid transparent; border-right: 5px solid transparent;
-            border-bottom: 7px solid #E0E0E0; }}
+            image: url("{_up_png}"); width: 9px; height: 9px; }}
         QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-            image: none; width: 0; height: 0;
-            border-left: 5px solid transparent; border-right: 5px solid transparent;
-            border-top: 7px solid #E0E0E0; }}
-        QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {{
-            border-bottom-color: #FFFFFF; }}
-        QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {{
-            border-top-color: #FFFFFF; }}
+            image: url("{_dn_png}"); width: 9px; height: 9px; }}
         QComboBox                       {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
                                           background: {_bg2}; border: 1px solid {_border};
                                           border-radius: 3px; }}
