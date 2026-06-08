@@ -744,6 +744,9 @@ class MainWindow(QMainWindow):
         self._depth_stretch_action = QAction("&Depth Stretch (Time→Depth)…", self)
         self._depth_stretch_action.triggered.connect(self._on_depth_stretch)
         tools_menu.addAction(self._depth_stretch_action)
+        self._well_calib_action = QAction("&Well Calibration…", self)
+        self._well_calib_action.triggered.connect(self._on_well_calibration)
+        tools_menu.addAction(self._well_calib_action)
         self._thermal_action = QAction("&Thermal Modeling…", self)
         self._thermal_action.triggered.connect(self._on_thermal_modeling)
         tools_menu.addAction(self._thermal_action)
@@ -1448,6 +1451,38 @@ class MainWindow(QMainWindow):
                 pass
 
         dlg = DepthStretchDialog(self._state, on_apply=_applied, parent=self)
+        dlg.exec()
+
+    def _on_well_calibration(self) -> None:
+        """Tools → Well Calibration: tie velocities to a well (opt-in; needs wells).
+
+        Promotes the touched layers to well-calibrated and re-derives seismic-tied
+        geometry; a re-render shows the result.
+        """
+        if not getattr(self._state.project, "wells", []):
+            QMessageBox.information(
+                self, "No Wells",
+                "Well calibration needs at least one well. Import or create a well "
+                "first; the well-free workflow uses Depth Stretch instead.")
+            return
+        from section_tool.views.well_calibration_dialog import WellCalibrationDialog
+
+        def _applied():
+            try:
+                self._state._set_modified(True)
+            except Exception:
+                pass
+            try:
+                from section_tool.core.conversion import restretch_project
+                restretch_project(self._state.project, self._state.project.velocity_model)
+            except Exception:
+                pass
+            try:
+                self._section_view.render()
+            except Exception:
+                pass
+
+        dlg = WellCalibrationDialog(self._state, on_apply=_applied, parent=self)
         dlg.exec()
 
     def _on_thermal_modeling(self) -> None:
