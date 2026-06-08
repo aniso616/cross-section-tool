@@ -714,3 +714,24 @@ class TestNavigationDoesNotRestretch:
         view._seismic_layer_key = None
         view._update_seismic_layer(sec)
         assert calls["n"] == 2
+
+    def test_lateral_model_drives_stretch_and_is_reused(self, qapp, state):
+        """M4 wiring: a lateral model takes precedence and uses the per-trace
+        lateral stretch; a settle re-render reuses it (zero recompute)."""
+        from section_tool.core.conversion import build_bulk
+        from section_tool.core.lateral_velocity import LateralVelocityModel
+        view, sec = self._view_with_depth_stretch(qapp, state)
+        # ex_meta needs per-trace distances for the lateral path; inject them.
+        data, meta = state.get_seismic_for_section("L1")
+        meta["distances"] = np.linspace(0.0, 20000.0, data.shape[1]).tolist()
+        state.project.lateral_velocity_model = LateralVelocityModel(
+            [(0.0, build_bulk(2000.0)), (20000.0, build_bulk(4000.0))])
+
+        lat = {"n": 0}
+        orig = view._model_depth_stretch_lateral
+        view._model_depth_stretch_lateral = lambda *a, **k: (lat.__setitem__("n", lat["n"] + 1), orig(*a, **k))[1]
+        view._update_seismic_layer(sec)
+        assert lat["n"] == 1                         # lateral path used
+        view._seismic_layer_key = None
+        view._update_seismic_layer(sec)
+        assert lat["n"] == 1                         # reused on navigation

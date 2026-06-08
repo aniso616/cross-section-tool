@@ -113,6 +113,47 @@ def stretch_image_to_depth(amp2d, dt_s: float, model: VelocityModel,
     return z_axis, depth_image
 
 
+def stretch_image_to_depth_lateral(amp2d, dt_s: float, lateral_model, distances,
+                                   z_max: float | None = None,
+                                   dz: float | None = None, t0: float = 0.0):
+    """Stretch a (n_traces, n_samples) TWT image to depth with a LATERALLY varying
+    velocity: each trace is converted through ``lateral_model.model_at(distance)``
+    for its along-section distance.  All traces land on a common depth grid so the
+    result is still a rectangular image.
+
+    *distances* — along-section distance (m) per trace (len == n_traces).
+    Returns ``(z_axis, depth_image)``.  Unlike the single-model stretch the
+    depth→TWT map differs per trace, so this is O(n_traces · n_depth); it is meant
+    to run once on Apply (the view memoizes it — navigation never re-runs it).
+    """
+    amp2d = np.asarray(amp2d, dtype=float)
+    if amp2d.ndim != 2:
+        amp2d = np.atleast_2d(amp2d)
+    n_traces, nt = amp2d.shape
+    distances = np.asarray(distances, dtype=float)
+    if distances.shape[0] != n_traces:
+        raise ValueError("distances must have one entry per trace")
+    t_samples = t0 + np.arange(nt) * float(dt_s)
+    t_max = float(t_samples[-1]) if nt else 0.0
+
+    models = [lateral_model.model_at(float(d)) for d in distances]
+    if z_max is None:
+        z_max = max((m.twt_to_depth(t_max) for m in models), default=0.0)
+    if not (z_max > 0):
+        return np.array([0.0]), np.zeros((n_traces, 1))
+    if dz is None:
+        dz = z_max / max(nt - 1, 1)
+    z_axis = np.arange(0.0, float(z_max) + float(dz), float(dz))
+
+    depth_image = np.zeros((n_traces, len(z_axis)))
+    if nt >= 2:
+        for i, m in enumerate(models):
+            twt_at_z = np.array([m.depth_to_twt(float(z)) for z in z_axis])
+            depth_image[i] = np.interp(twt_at_z, t_samples, amp2d[i],
+                                       left=0.0, right=0.0)
+    return z_axis, depth_image
+
+
 # ---------------------------------------------------------------------------
 # TWT anchors — both directions are first-class
 # ---------------------------------------------------------------------------

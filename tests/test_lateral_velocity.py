@@ -70,6 +70,25 @@ def test_empty_controls_raises():
         LateralVelocityModel([])
 
 
+def test_stretch_image_to_depth_lateral_varies_with_distance():
+    """A reflector at fixed TWT lands deeper where the velocity is higher — the
+    point of lateral variation in the image stretch."""
+    from section_tool.core.conversion import stretch_image_to_depth_lateral
+    lvm = LateralVelocityModel([(0.0, _bulk(2000.0)), (1000.0, _bulk(4000.0))])
+    distances = np.array([0.0, 1000.0])             # two traces, the two extremes
+    dt_s = 0.5
+    n_samples = 5                                    # t = 0,0.5,1.0,1.5,2.0 s
+    amp = np.zeros((n_samples, 2))
+    amp[2, :] = 1.0                                  # bright reflector at t = 1.0 s
+    z_axis, dimg = stretch_image_to_depth_lateral(amp.T, dt_s, lvm, distances)
+    dimg = dimg                                      # (n_traces, n_depth)
+    peak0 = z_axis[np.argmax(dimg[0])]
+    peak1 = z_axis[np.argmax(dimg[1])]
+    assert peak0 == pytest.approx(1000.0, abs=z_axis[1] - z_axis[0])   # 2000 m/s
+    assert peak1 == pytest.approx(2000.0, abs=z_axis[1] - z_axis[0])   # 4000 m/s
+    assert peak1 > peak0
+
+
 def test_round_trip_to_from_dict():
     lvm = LateralVelocityModel([(0.0, _bulk(2000.0)),
                                 (1500.0, VelocityModel.average_vz(1900.0, 0.6))])

@@ -120,6 +120,8 @@ class Project:
         self.event_sequence: EventSequence = EventSequence()
         self.intersections: list[FaultHorizonIntersection] = []
         self.velocity_model: VelocityModel = VelocityModel()
+        # Optional lateral (along-section) velocity field (M4); None = single model.
+        self.lateral_velocity_model = None
         self.annotations: list[Annotation] = []
         # Kinematic restoration
         from section_tool.core.restoration import RestorationSequence
@@ -152,6 +154,9 @@ class Project:
             _save_json(f, "event_sequence", self.event_sequence.to_list())
             _save_json(f, "intersections",  [i.to_dict() for i in self.intersections])
             _save_json(f, "velocity_model", self.velocity_model.to_dict())
+            _save_json(f, "lateral_velocity_model",
+                       self.lateral_velocity_model.to_dict()
+                       if self.lateral_velocity_model is not None else {})
             _save_json(f, "annotations",    [a.to_dict() for a in self.annotations])
 
     @classmethod
@@ -181,6 +186,10 @@ class Project:
                                      for d in _load_json(f, "intersections", [])]
             proj.velocity_model  = VelocityModel.from_dict(
                 _load_json(f, "velocity_model", {}))
+            _lvm = _load_json(f, "lateral_velocity_model", {})
+            if _lvm and _lvm.get("controls"):
+                from section_tool.core.lateral_velocity import LateralVelocityModel
+                proj.lateral_velocity_model = LateralVelocityModel.from_dict(_lvm)
             proj.annotations     = [Annotation.from_dict(d)
                                      for d in _load_json(f, "annotations", [])]
         return proj

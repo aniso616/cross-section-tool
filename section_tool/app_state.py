@@ -722,6 +722,10 @@ class AppState(QObject):
         # → a fresh unconverted model. from_dict migrates the v1 schema.)
         from section_tool.core.velocity_model import VelocityModel
         proj.velocity_model = VelocityModel.from_dict(data.get("velocity_model", {}))
+        _lvm = data.get("lateral_velocity_model", {})
+        if _lvm and _lvm.get("controls"):
+            from section_tool.core.lateral_velocity import LateralVelocityModel
+            proj.lateral_velocity_model = LateralVelocityModel.from_dict(_lvm)
 
         # Vector layers (re-read features from source files on load)
         try:
@@ -737,6 +741,7 @@ class AppState(QObject):
             raise ValueError("No project path set; use save_project_as() first")
         if self._pm.is_open:
             self._pm.db.save_velocity_model(self._project.velocity_model)
+            self._pm.db.save_lateral_velocity_model(self._project.lateral_velocity_model)
             self._pm.save()
         else:
             self._project.save(self._project_path)
@@ -785,6 +790,7 @@ class AppState(QObject):
             for lyr in self._vector_layers:
                 self._pm.db.upsert_vector_layer(lyr)
             self._pm.db.save_velocity_model(self._project.velocity_model)
+            self._pm.db.save_lateral_velocity_model(self._project.lateral_velocity_model)
             self._pm.save()
             self._project_path = new_path
         else:

@@ -656,6 +656,29 @@ class ProjectDatabase:
         except Exception:
             return {}
 
+    def save_lateral_velocity_model(self, lvm) -> None:
+        """Persist the optional lateral (along-section) velocity field under the
+        'lateral' key of the velocity_model KV table.  None clears it."""
+        import json as _json
+        blob = _json.dumps(lvm.to_dict()) if lvm is not None else ""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO velocity_model(key, value) VALUES('lateral', ?)",
+            (blob,),
+        )
+        self.conn.commit()
+
+    def load_lateral_velocity_model(self) -> dict:
+        import json as _json
+        row = self.conn.execute(
+            "SELECT value FROM velocity_model WHERE key='lateral'"
+        ).fetchone()
+        if not row or not row["value"]:
+            return {}
+        try:
+            return _json.loads(row["value"])
+        except Exception:
+            return {}
+
     def set_project_settings(self, name: str, crs_epsg: int, depth_units: str,
                               depth_domain: str, default_depth_min: float,
                               default_depth_max: float) -> None:
@@ -1562,6 +1585,7 @@ class ProjectDatabase:
             "aoi":               self.get_aoi(),
             "surfaces":          self.get_all_surfaces(),
             "velocity_model":    self.load_velocity_model(),
+            "lateral_velocity_model": self.load_lateral_velocity_model(),
         }
 
     # ------------------------------------------------------------------

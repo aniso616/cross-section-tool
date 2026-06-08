@@ -2283,20 +2283,57 @@ class SectionView(QWidget):
         z_axis, dimg = stretch_image_to_depth(amp, dt_s, model, z_bot, dz, t0=t0_s)
         return dimg.T, 0.0, float(z_axis[-1])        # back to (n_samples, n_traces)
 
-    def _velocity_signature(self) -> str:
-        """A short string that changes whenever the applied velocity model would
-        change the depth stretch — so the seismic-layer cache key invalidates on
-        Apply or live v0/k tuning.  Empty when no model is installed."""
-        vm = getattr(self._state.project, "velocity_model", None)
-        if vm is None or getattr(vm, "is_empty", True):
-            return ""
+    def _model_depth_stretch_lateral(self, data, samples_ms, lateral_model, distances):
+        """Per-trace depth stretch through a LATERALLY varying model (M4): each
+        trace uses model_at(its along-section distance).  *distances* must align
+        with the trace columns of *data*.  Returns (depth_data, y_top, y_bot) or
+        None (caller falls back)."""
+        from section_tool.core.conversion import stretch_image_to_depth_lateral
+        samples = np.asarray(samples_ms, dtype=float)
+        if len(samples) < 2:
+            return None
+        dt_s = (samples[1] - samples[0]) / 1000.0
+        t0_s = samples[0] / 1000.0
+        if dt_s <= 0:
+            return None
+        amp = np.asarray(data, dtype=float).T        # (n_traces, n_samples)
+        dists = np.asarray(distances, dtype=float)
+        if dists.shape[0] != amp.shape[0]:
+            return None                              # misaligned → bail to single model
+        try:
+            z_axis, dimg = stretch_image_to_depth_lateral(
+                amp, dt_s, lateral_model, dists, t0=t0_s)
+        except Exception:
+            return None
+        if not (float(z_axis[-1]) > 0):
+            return None
+        return dimg.T, 0.0, float(z_axis[-1])
+
+    @staticmethod
+    def _layers_sig(layers) -> str:
         parts = []
-        for L in getattr(vm, "layers", []):
+        for L in layers or []:
             fn = getattr(L, "function", None)
             parts.append(f"{getattr(L,'top_twt_s',0.0):.4f}|"
                          f"{getattr(fn,'v0',0.0):.2f}|"
                          f"{getattr(fn,'k',0.0):.4f}|{getattr(fn,'method','')}")
         return ";".join(parts)
+
+    def _velocity_signature(self) -> str:
+        """A short string that changes whenever the applied velocity model would
+        change the depth stretch — so the seismic-layer cache key invalidates on
+        Apply or live v0/k tuning.  Covers a lateral model (per-control) and a
+        single model.  Empty when nothing is installed."""
+        proj = self._state.project
+        lvm = getattr(proj, "lateral_velocity_model", None)
+        if lvm is not None and getattr(lvm, "controls", None):
+            return "LVM:" + "||".join(
+                f"{c.distance_m:.2f}@{self._layers_sig(c.model.layers)}"
+                for c in lvm.controls)
+        vm = getattr(proj, "velocity_model", None)
+        if vm is None or getattr(vm, "is_empty", True):
+            return ""
+        return self._layers_sig(getattr(vm, "layers", []))
 
     # ------------------------------------------------------------------
     # pyqtgraph seismic layer helpers
@@ -2365,18 +2402,27 @@ class SectionView(QWidget):
         if stretch == "linear" and domain == "twt":
             # Model-driven true per-trace stretch when a velocity model is applied;
             # otherwise the inline bulk extent-scale (unchanged — no regression).
-            vm = getattr(self._state.project, "velocity_model", None)
+            proj = self._state.project
+            lvm = getattr(proj, "lateral_velocity_model", None)
+            vm = getattr(proj, "velocity_model", None)
+            has_lateral = lvm is not None and getattr(lvm, "controls", None)
+            has_single = vm is not None and not getattr(vm, "is_empty", True)
             stretched = None
-            if vm is not None and not getattr(vm, "is_empty", True):
+            if has_lateral or has_single:
                 # Memoize on (data identity, velocity signature): the stretch is a
                 # function of traces + model only, so a zoom/pan re-render reuses it
-                # and never re-runs _model_depth_stretch (compute-once-on-Apply).
+                # and never re-runs the stretch (compute-once-on-Apply).  A lateral
+                # model takes precedence — each trace converts through model_at(d).
                 memo_key = (section.name, id(ex_data), ex_data.shape,
                             self._velocity_signature())
                 if self._stretch_memo_key == memo_key:
                     stretched = self._stretch_memo
                 else:
-                    stretched = self._model_depth_stretch(ex_data, samples, vm)
+                    if has_lateral:
+                        stretched = self._model_depth_stretch_lateral(
+                            ex_data, samples, lvm, ex_meta.get("distances"))
+                    if stretched is None and has_single:
+                        stretched = self._model_depth_stretch(ex_data, samples, vm)
                     self._stretch_memo_key = memo_key
                     self._stretch_memo = stretched
             if stretched is not None:
