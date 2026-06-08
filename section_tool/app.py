@@ -4135,6 +4135,31 @@ def main(argv: list[str] | None = None) -> int:
         QSpinBox, QDoubleSpinBox        {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
                                           background: {_bg2}; border: 1px solid {_border};
                                           border-radius: 3px; }}
+        /* Styling the box switches the spinbox to QStyleSheetStyle, which only
+           hit-tests the steppers if the sub-controls are styled explicitly.
+           Without these rules the arrows draw but clicks land on nothing — the
+           app-wide "steppers do nothing" bug.  Size + position them, give a
+           hover/pressed cue, and draw a CSS-triangle arrow (no image asset). */
+        QSpinBox::up-button, QDoubleSpinBox::up-button {{
+            subcontrol-origin: border; subcontrol-position: top right;
+            width: 18px; border-left: 1px solid {_border};
+            border-top-right-radius: 3px; background: {_bg3}; }}
+        QSpinBox::down-button, QDoubleSpinBox::down-button {{
+            subcontrol-origin: border; subcontrol-position: bottom right;
+            width: 18px; border-left: 1px solid {_border};
+            border-bottom-right-radius: 3px; background: {_bg3}; }}
+        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+            background: #4A90D9; }}
+        QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+        QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {{
+            background: #3B82F6; }}
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+            width: 0; height: 0; border-left: 4px solid transparent;
+            border-right: 4px solid transparent; border-bottom: 5px solid #cfcfcf; }}
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+            width: 0; height: 0; border-left: 4px solid transparent;
+            border-right: 4px solid transparent; border-top: 5px solid #cfcfcf; }}
         QComboBox                       {{ font-size: 9pt; min-width: 60px; padding: 2px 4px;
                                           background: {_bg2}; border: 1px solid {_border};
                                           border-radius: 3px; }}
