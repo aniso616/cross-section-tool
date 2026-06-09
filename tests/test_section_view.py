@@ -650,7 +650,7 @@ def test_conversion_caption():
     assert "default stretch" in cap and "2400" in cap
     calibrated = VelocityModel(layers=[VelocityLayer(
         VelocityFunction("constant", v0=2400.0), provenance="well_calibrated")])
-    assert "well-calibrated" in _conversion_caption(calibrated)
+    assert "well-tied" in _conversion_caption(calibrated)
 
 
 # ---------------------------------------------------------------------------

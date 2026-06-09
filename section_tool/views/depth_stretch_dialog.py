@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QLabel, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
 
 from section_tool.core.stretch_setup import StretchSetup, WATER_VELOCITY_MS
-from section_tool.core.velocity_model import VelocityModel
+from section_tool.core.velocity_model import VelocityModel, PROVENANCE_LABEL
 from section_tool.core.well_calibration import Marker, calibrate_model, marker_residuals
 
 # Neutral, high-contrast summary text; a few functional accents only.
@@ -53,7 +53,7 @@ _METHODS = [
     ("bulk", "Bulk velocity"),
     ("average_vz", "Average V(z)"),
     ("layered_from_formations", "Layered from formations"),
-    ("well_calibrated", "Well-calibrated"),
+    ("well_calibrated", "Well-tied"),
 ]
 
 
@@ -65,7 +65,7 @@ def method_availability(zone_tops, wells) -> dict[str, tuple[bool, str]]:
     """For each ladder rung → (enabled, reason-if-disabled).
 
     Interpretation-gated: bulk/average need nothing (the bootstrap); layered needs
-    picked zone-bounding horizons; well-calibrated needs a well.
+    picked zone-bounding horizons; well-tied needs a well.
     """
     has_tops = bool(zone_tops)
     has_wells = bool(wells)
@@ -91,9 +91,10 @@ def format_model_summary_html(model: VelocityModel, strat_column=None) -> str:
     def chip(hexc):
         return f'<span style="background-color:{hexc};color:{hexc};">&nbsp;&nbsp;</span>'
 
+    prov = PROVENANCE_LABEL.get(model.provenance, model.provenance)
     head = (f'<span style="color:{_TEXT_BASE};">{model.method_label}</span>'
             f'&nbsp;<span style="color:{_TEXT_MUTED};font-style:italic;">'
-            f'({model.provenance})</span>')
+            f'({prov})</span>')
     lines = [head]
     for L in model.layers:
         fn = L.function
@@ -281,7 +282,7 @@ class DepthStretchDialog(QDialog):
 
         self._howto = QLabel(
             "set surfaces → pick method → Apply → tune v₀/k and re-apply.  "
-            "Layered & well-calibrated unlock with picks / a well.")
+            "Layered & well-tied unlock with picks / a well.")
         self._howto.setWordWrap(True)
         self._howto.setStyleSheet("color:#9AA0A6; font-size: 8pt;")
         left.addWidget(self._howto)
@@ -365,11 +366,20 @@ class DepthStretchDialog(QDialog):
         self.markers.setRowCount(0)
         w = self.well.currentData()
         if w is not None:
+            dev = getattr(w, "deviation", None)
             for name, md in sorted(getattr(w, "formation_tops", {}).items(),
                                    key=lambda kv: kv[1]):
+                # Markers are at TVD (depth), not MD: convert via the deviation
+                # survey (no-op for a vertical well; correct for a deviated one).
+                tvd = float(md)
+                if dev is not None:
+                    try:
+                        tvd = float(dev.tvd_at_md(float(md)))
+                    except Exception:
+                        pass
                 r = self.markers.rowCount(); self.markers.insertRow(r)
                 self.markers.setItem(r, 0, QTableWidgetItem(name))
-                self.markers.setItem(r, 1, QTableWidgetItem(f"{md:g}"))
+                self.markers.setItem(r, 1, QTableWidgetItem(f"{tvd:g}"))
                 self.markers.setItem(r, 2, QTableWidgetItem("0"))
         self.markers.blockSignals(False)
         self._on_changed()
@@ -387,12 +397,29 @@ class DepthStretchDialog(QDialog):
                 out.append(Marker(depth, twt_ms / 1000.0, name))
         return out
 
+    def _base_twt(self) -> float:
+        marine = self.setting.currentData() == "marine"
+        return (self.seafloor_ms.value() if marine else self.datum_ms.value()) / 1000.0
+
+    def _layered_zone_tops(self):
+        """Zone tops (with the datum/seafloor cap) from the picked horizons'
+        anchors — used by the layered AND well-tied rungs."""
+        from section_tool.core.conversion import zone_tops_from_picks
+        return zone_tops_from_picks(
+            getattr(self._state.project, "horizon_picks", []), self._base_twt())
+
+    def _effective_base_method(self) -> str:
+        """The base model the chosen rung builds on.  Well-tied calibrates the
+        LAYERED model when zone-bounding horizons exist (promoting per zone), else
+        an average V(z) bootstrap (a single zone)."""
+        m = self.method.currentData()
+        if m == "well_calibrated":
+            return "layered_from_formations" if self._layered_zone_tops() else "average_vz"
+        return m
+
     def _read_setup(self) -> StretchSetup:
-        base_method = self.method.currentData()
-        if base_method == "well_calibrated":
-            base_method = "average_vz"   # calibration promotes the V(z) bootstrap
         return StretchSetup(
-            setting=self.setting.currentData(), method=base_method,
+            setting=self.setting.currentData(), method=self._effective_base_method(),
             datum_twt_s=self.datum_ms.value() / 1000.0,
             seafloor_twt_s=self.seafloor_ms.value() / 1000.0,
             basement_twt_s=self.basement_ms.value() / 1000.0,
@@ -403,16 +430,10 @@ class DepthStretchDialog(QDialog):
         setup = self._read_setup()
         strat = getattr(self._state.project, "strat_column", None)
         method = self.method.currentData()
-        if method == "layered_from_formations":
-            # Zone tops from the picked horizons' anchors, with the datum/seafloor
-            # cap layer (formation_above of the shallowest) so land starts at the
-            # datum / marine at the seafloor — not at the first horizon.
-            from section_tool.core.conversion import zone_tops_from_picks
-            base = (self.seafloor_ms.value() / 1000.0
-                    if self.setting.currentData() == "marine"
-                    else self.datum_ms.value() / 1000.0)
-            zt = zone_tops_from_picks(
-                getattr(self._state.project, "horizon_picks", []), base)
+        # Layered (and well-tied built on layered) use zone tops from anchors, with
+        # the datum/seafloor cap; everything else uses the plain anchor list.
+        if self._effective_base_method() == "layered_from_formations":
+            zt = self._layered_zone_tops()
         else:
             zt = self._zone_tops()
         model = setup.build_model(zt, strat)

@@ -83,3 +83,18 @@ def test_well_td_control_from_tops_and_checkshot():
     by_name = {m.name: m for m in ms}
     assert by_name["TopA"].twt_s == pytest.approx(0.5)
     assert by_name["TopB"].twt_s == pytest.approx(1.5)
+
+
+def test_calibrate_promotes_only_marker_bearing_zones():
+    """Per-zone promotion: a layered model's shallow zone (with >=2 markers) is
+    promoted to well-tied; the deep zone (no markers) stays assumed."""
+    from section_tool.core.velocity_model import VelocityLayer, VelocityFunction
+    m = VelocityModel(layers=[
+        VelocityLayer(VelocityFunction("constant", v0=2500.0), top_twt_s=0.0, name="A"),
+        VelocityLayer(VelocityFunction("constant", v0=4000.0), top_twt_s=1.0, name="B")])
+    # Zone A spans depth 0..1250 m (2500·1.0/2); both markers land in A.
+    cal = calibrate_model(m, [Marker(300.0, 0.24, "m1"), Marker(800.0, 0.64, "m2")])
+    assert cal.layers[0].provenance == "well_calibrated"
+    assert cal.layers[1].provenance == "assumed"
+    # headline is the weakest — still "assumed" until every zone is tied
+    assert cal.provenance == "assumed"

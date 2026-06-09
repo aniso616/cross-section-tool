@@ -90,7 +90,7 @@ def _conversion_caption(model) -> str | None:
         return None
     tag = {"assumed": "default stretch",
            "interpolated": "interpolated",
-           "well_calibrated": "well-calibrated"}.get(model.provenance, model.provenance)
+           "well_calibrated": "well-tied"}.get(model.provenance, model.provenance)
     return f"{model.method_label}  ·  {tag}"
 
 

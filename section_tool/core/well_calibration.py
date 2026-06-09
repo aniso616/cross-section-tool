@@ -51,9 +51,20 @@ def fit_v0k(depths, twts, *, v0_init: float = 1800.0, k_init: float = 0.3,
     from scipy.optimize import least_squares
 
     def resid(p):
-        v0, k = p
-        fn = VelocityFunction("linear_v0k", v0=max(v0, 1.0), k=k)
-        return np.array([fn.depth_to_twt(float(zi)) for zi in z]) - t
+        # Vectorized linear_v0k twt(z), domain-safe: the solver can explore
+        # (v0, k) where 1 + k·z/v0 <= 0 (log domain error); penalize that region
+        # instead of raising, so least_squares simply backs off.
+        v0, k = float(p[0]), float(p[1])
+        v0 = max(v0, 1.0)
+        zc = np.clip(z, 0.0, None)
+        if abs(k) < 1e-12:
+            model = 2.0 * zc / v0
+        else:
+            arg = 1.0 + k * zc / v0
+            model = np.where(arg > 1e-9,
+                             (2.0 / k) * np.log(np.clip(arg, 1e-9, None)),
+                             1.0e6)          # invalid region → large residual
+        return model - t
 
     sol = least_squares(
         resid, [float(v0_init), float(k_init)],

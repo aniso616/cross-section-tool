@@ -130,7 +130,10 @@ def test_well_calibrated_apply_installs_calibrated(qapp):
         depth = float(dlg.markers.item(r, 1).text())
         dlg.markers.item(r, 2).setText(f"{fn.depth_to_twt(depth) * 1000:.3f}")
     dlg._apply()
-    assert st.project.velocity_model.provenance == "well_calibrated"
+    # Well-tied builds on the layered base and promotes PER ZONE; at least the
+    # marker-bearing zone is well_calibrated (the headline reads the weakest).
+    m = st.project.velocity_model
+    assert any(l.provenance == "well_calibrated" for l in m.layers)
 
 
 def _state_with_zone_horizons():
@@ -177,3 +180,28 @@ def test_layered_apply_marine_prepends_water(qapp):
     assert m.layers[0].name == "Water" and m.layers[0].top_twt_s == pytest.approx(0.0)
     # then the formation cap at the seafloor, then the zones
     assert [round(l.top_twt_s, 3) for l in m.layers] == [0.0, 0.3, 0.8, 1.2]
+
+
+def test_well_tied_promotes_layered_zones(qapp):
+    """Well-tied builds on the layered model and promotes per zone: the
+    marker-bearing zones become well_calibrated, uncovered zones stay assumed,
+    and the residual panel renders."""
+    st = _state_with_zone_horizons()          # Over/Res/Base, anchors at 0.8 / 1.2 s
+    w = Well("W1", 0.0, 0.0)                   # vertical, td 5000 → MD == TVD
+    for nm, md in [("a", 500.0), ("b", 700.0), ("c", 1300.0), ("d", 1500.0)]:
+        w.add_formation_top(nm, md)
+    st.project.wells.append(w)
+    dlg = DepthStretchDialog(st)
+    dlg.setting.setCurrentIndex(dlg.setting.findData("onshore"))
+    dlg.method.setCurrentIndex(dlg.method.findData("well_calibrated"))
+    dlg._on_well_changed()
+    twts = {500.0: 0.40, 700.0: 0.55, 1300.0: 0.75, 1500.0: 0.83}   # ms entered below
+    for r in range(dlg.markers.rowCount()):
+        depth = float(dlg.markers.item(r, 1).text())   # seeded TVD (== MD here)
+        dlg.markers.item(r, 2).setText(f"{twts[depth] * 1000:.1f}")
+    dlg._apply()
+    m = st.project.velocity_model
+    provs = [l.provenance for l in m.layers]
+    assert provs.count("well_calibrated") >= 1     # marker-bearing zone(s) promoted
+    assert "assumed" in provs                      # uncovered zone(s) stay assumed
+    assert "residual" in dlg._residual_html(m).lower()

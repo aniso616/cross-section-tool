@@ -29,10 +29,13 @@ SCHEMA_VERSION = 2
 Provenance = Literal["assumed", "interpolated", "well_calibrated"]
 Method     = Literal["constant", "linear_v0k", "linear_vt"]
 
+# Display labels describe the velocity's SOURCE / modification, not a certainty
+# claim — every zone is an interpretation; "well-tied" means fit to well control,
+# not ground truth.  Internal enum values are unchanged (persistence-stable).
 PROVENANCE_LABEL: dict[str, str] = {
-    "assumed":         "assumed/regional",
+    "assumed":         "regional default",
     "interpolated":    "interpolated",
-    "well_calibrated": "well-calibrated",
+    "well_calibrated": "well-tied",
 }
 _PROV_RANK = {"assumed": 0, "interpolated": 1, "well_calibrated": 2}
 
