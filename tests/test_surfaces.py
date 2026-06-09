@@ -407,6 +407,33 @@ class TestHorizonPickOperations:
             hp.move_pick(99, 0.0, 0.0)
 
 
+class TestTieKindMetadata:
+    def test_depth_native_by_default(self):
+        hp = HorizonPick([0.0, 500.0], [1000.0, 1100.0])
+        assert hp.tie_kind == "depth_native"
+        md = hp.construction_metadata()
+        assert md["tie_kind"] == "depth_native"
+        assert md["anchored_nodes"] == 0
+        assert md["construction_rule"] is None
+
+    def test_seismic_tied_reflected_in_metadata(self):
+        from section_tool.core.conversion import set_anchors, build_bulk
+        hp = HorizonPick([0.0, 500.0], [1000.0, 1200.0])
+        set_anchors(hp, build_bulk(2000.0))            # ties via the active model
+        assert hp.tie_kind == "seismic_tied"
+        md = hp.construction_metadata()
+        assert md["tie_kind"] == "seismic_tied"
+        assert md["anchored_nodes"] == 2               # both nodes anchored
+
+    def test_metadata_carries_geometric_rule_kind(self):
+        from section_tool.core.construction import FreehandRule
+        hp = HorizonPick([0.0, 500.0], [1000.0, 1100.0])
+        hp.construction_rule = FreehandRule()
+        # tie kind and geometric rule are independent axes
+        assert hp.construction_metadata()["construction_rule"] == "freehand"
+        assert hp.construction_metadata()["tie_kind"] == "depth_native"
+
+
 # ---------------------------------------------------------------------------
 # HorizonPick — coordinate transforms
 # ---------------------------------------------------------------------------

@@ -698,6 +698,31 @@ class HorizonPick:
         )
 
     # ------------------------------------------------------------------
+    # Tie kind — a separate axis from construction_rule (geometric method) and
+    # from line_style/provenance.
+    @property
+    def tie_kind(self) -> str:
+        """``'seismic_tied'`` (per-node TWT anchor is canonical; depth is derived
+        through the velocity model) or ``'depth_native'`` (depth is canonical)."""
+        return "seismic_tied" if self.seismic_tied else "depth_native"
+
+    def construction_metadata(self) -> dict:
+        """Auditable summary of HOW this horizon was constructed and tied: the
+        geometric construction rule kind (if any) plus the vertical tie kind.
+
+        Derived from already-persisted fields, so it adds no new state — it
+        reflects, in one place, that a seismic-tied horizon's canonical value is
+        the per-node TWT anchor (depth follows the model).  Tie kind is kept
+        distinct from the geometric rule and from provenance/line style.
+        """
+        rule = self.construction_rule
+        return {
+            "tie_kind": self.tie_kind,
+            "construction_rule": getattr(rule, "kind", None) if rule is not None else None,
+            "anchored_nodes": int(np.count_nonzero(~np.isnan(self._twt_anchor))),
+        }
+
+    # ------------------------------------------------------------------
     # Dunder helpers
     @classmethod
     def empty(
