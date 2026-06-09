@@ -81,6 +81,19 @@ _DEFAULT_CMAP = "gray_r"
 _WELL_MAX_PERP = 2000.0   # metres
 
 
+def _conversion_caption(model) -> str | None:
+    """A short, honest caption for the active time→depth conversion, or None when
+    no model is applied.  An assumed (bootstrap) model reads as a *default
+    stretch* — the honest no-well norm — while a promoted model names its
+    provenance.  Surfaces the velocity method label on the section (DoD)."""
+    if model is None or getattr(model, "is_empty", True):
+        return None
+    tag = {"assumed": "default stretch",
+           "interpolated": "interpolated",
+           "well_calibrated": "well-calibrated"}.get(model.provenance, model.provenance)
+    return f"{model.method_label}  ·  {tag}"
+
+
 def _fm_color(fm, fallback: str) -> str:
     """Return hex color string for a Formation (or fallback if fm is None)."""
     if fm is None:
@@ -1455,6 +1468,16 @@ class SectionView(QWidget):
 
         # Labels and ticks are provided by HUD depth_ruler and scale_bar.
         # Nothing to set on the matplotlib axes here.
+
+        # Honest cue for the active time→depth conversion: a muted method-label
+        # caption (bottom-left).  An assumed bootstrap reads as "default stretch";
+        # a tuned/calibrated model names its provenance.  Non-alarming by design.
+        caption = _conversion_caption(getattr(self._state.project, "velocity_model", None))
+        if caption:
+            self._ax.text(
+                0.008, 0.012, caption, transform=self._ax.transAxes,
+                ha="left", va="bottom", fontsize=7, color="#9AA0A6",
+                zorder=20, clip_on=False)
 
         # Dual-unit secondary axes (m + ft)
         if units == "m+ft":

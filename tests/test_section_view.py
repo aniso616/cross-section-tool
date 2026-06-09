@@ -638,6 +638,21 @@ class TestPolygonPreflight:
         assert view._poly_preflight == {}
 
 
+def test_conversion_caption():
+    """The on-section conversion caption: None when unconverted; an assumed
+    bootstrap reads as a default stretch; a promotion names its provenance."""
+    from section_tool.views.section_view import _conversion_caption
+    from section_tool.core.velocity_model import (
+        VelocityModel, VelocityLayer, VelocityFunction)
+    assert _conversion_caption(None) is None
+    assert _conversion_caption(VelocityModel()) is None
+    cap = _conversion_caption(VelocityModel.bulk(2400.0))
+    assert "default stretch" in cap and "2400" in cap
+    calibrated = VelocityModel(layers=[VelocityLayer(
+        VelocityFunction("constant", v0=2400.0), provenance="well_calibrated")])
+    assert "well-calibrated" in _conversion_caption(calibrated)
+
+
 # ---------------------------------------------------------------------------
 # Segment intersection helper
 # ---------------------------------------------------------------------------
