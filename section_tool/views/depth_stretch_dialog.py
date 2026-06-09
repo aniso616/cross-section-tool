@@ -16,7 +16,8 @@ from PySide6.QtCore import Qt, QRect
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-    QLabel, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
+    QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+    QWidget)
 
 from section_tool.core.stretch_setup import StretchSetup, WATER_VELOCITY_MS
 from section_tool.core.velocity_model import VelocityModel, PROVENANCE_LABEL
@@ -275,6 +276,27 @@ class DepthStretchDialog(QDialog):
         self.markers.setMaximumHeight(150)
         left.addWidget(self.markers)
 
+        # Lateral control points (pseudo-wells) — Bulk / Average V(z) only (v1).
+        # Each row is a control at a position along the section carrying v0/k; >=2
+        # rows make velocity vary laterally (interpolated between, clipped beyond).
+        self._lateral_lbl = QLabel("Lateral control points (pseudo-wells):")
+        self._lateral_lbl.setStyleSheet("font-size: 8pt;")
+        left.addWidget(self._lateral_lbl)
+        self.lateral = QTableWidget(0, 3)
+        self.lateral.setHorizontalHeaderLabels(["Position (m)", "v₀ (m/s)", "k (s⁻¹)"])
+        self.lateral.setMaximumHeight(120)
+        left.addWidget(self.lateral)
+        _lat_row = QHBoxLayout()
+        self._lat_add = QPushButton("Add control")
+        self._lat_add.clicked.connect(self._add_lateral_control)
+        self._lat_del = QPushButton("Remove")
+        self._lat_del.clicked.connect(self._remove_lateral_control)
+        _lat_row.addWidget(self._lat_add); _lat_row.addWidget(self._lat_del)
+        _lat_row.addStretch()
+        left.addLayout(_lat_row)
+        self._lateral_widgets = [self._lateral_lbl, self.lateral, self._lat_add, self._lat_del]
+        self.lateral.itemChanged.connect(lambda *_: self._on_changed())
+
         self._summary = QTextEdit(); self._summary.setReadOnly(True)
         self._summary.setMaximumHeight(110)
         left.addWidget(QLabel("Velocity model:"))
@@ -348,6 +370,79 @@ class DepthStretchDialog(QDialog):
         is_well = method == "well_calibrated"
         self._set_row_visible(self.well, is_well)
         self.markers.setVisible(is_well)
+        # Lateral control points: Bulk / Average V(z) only in v1.
+        lateral_ok = method in ("bulk", "average_vz")
+        for w in self._lateral_widgets:
+            w.setVisible(lateral_ok)
+
+    # ------------------------------------------------------------------
+    # Lateral control points (pseudo-wells)
+
+    def _section_length(self) -> float:
+        sec = getattr(self._state, "active_section", None)
+        try:
+            return float(sec.total_length()) if sec is not None else 1000.0
+        except Exception:
+            return 1000.0
+
+    def _add_lateral_control(self) -> None:
+        r = self.lateral.rowCount()
+        total = self._section_length()
+        pos = 0.0 if r == 0 else (total if r == 1 else total * (r % 2) )
+        bulk = self.method.currentData() == "bulk"
+        v0 = self.bulk_v.value() if bulk else self.v0.value()
+        k = 0.0 if bulk else self.k.value()
+        self.lateral.blockSignals(True)
+        self.lateral.insertRow(r)
+        self.lateral.setItem(r, 0, QTableWidgetItem(f"{pos:g}"))
+        self.lateral.setItem(r, 1, QTableWidgetItem(f"{v0:g}"))
+        self.lateral.setItem(r, 2, QTableWidgetItem(f"{k:g}"))
+        self.lateral.blockSignals(False)
+        self._on_changed()
+
+    def _remove_lateral_control(self) -> None:
+        r = self.lateral.currentRow()
+        if r < 0:
+            r = self.lateral.rowCount() - 1
+        if r >= 0:
+            self.lateral.removeRow(r)
+            self._on_changed()
+
+    def _lateral_controls(self):
+        """(position_m, v0, k) per valid table row."""
+        rows = []
+        for r in range(self.lateral.rowCount()):
+            try:
+                pos = float(self.lateral.item(r, 0).text())
+                v0 = float(self.lateral.item(r, 1).text())
+                k = float(self.lateral.item(r, 2).text())
+            except (ValueError, AttributeError):
+                continue
+            rows.append((pos, v0, k))
+        return rows
+
+    def _lateral_model(self):
+        """Assemble a LateralVelocityModel from >=2 control rows (Bulk/Average
+        only) — each control the active setting's V(z) model at that position;
+        else None (single-model path)."""
+        if self.method.currentData() not in ("bulk", "average_vz"):
+            return None
+        rows = self._lateral_controls()
+        if len(rows) < 2:
+            return None
+        from section_tool.core.lateral_velocity import LateralVelocityModel
+        controls = []
+        for pos, v0, k in rows:
+            setup = StretchSetup(
+                setting=self.setting.currentData(), method="average_vz",
+                datum_twt_s=self.datum_ms.value() / 1000.0,
+                seafloor_twt_s=self.seafloor_ms.value() / 1000.0,
+                v0=v0, k=k, water_v=self.water_v.value())
+            controls.append((pos, setup.build_model()))
+        try:
+            return LateralVelocityModel(controls)
+        except ValueError:
+            return None
 
     # ------------------------------------------------------------------
 
@@ -447,6 +542,21 @@ class DepthStretchDialog(QDialog):
         self._refresh_method_gating()
         self._refresh_visibility()
         strat = getattr(self._state.project, "strat_column", None)
+        max_twt = max(self.basement_ms.value() / 1000.0, 0.5)
+        # Laterally-varying preview: show a representative column at mid-section
+        # and note it is position-dependent (no full lateral viz in v1).
+        lvm = self._lateral_model()
+        if lvm is not None:
+            rep = lvm.model_at(self._section_length() * 0.5)
+            prov = PROVENANCE_LABEL.get(lvm.provenance, lvm.provenance)
+            html = format_model_summary_html(rep, strat)
+            html += (f'<div style="font-family:monospace;font-size:8pt;color:{_TEXT_MUTED};">'
+                     f'laterally varying · {len(lvm.controls)} control points · '
+                     f'{prov} (column shown at mid-section)</div>')
+            self._summary.setHtml(html)
+            self._schematic.set_model(rep, max_twt, strat)
+            self._apply_btn.setEnabled(True)
+            return
         try:
             model = self._build_model()
         except ValueError as e:
@@ -459,7 +569,6 @@ class DepthStretchDialog(QDialog):
         if self.method.currentData() == "well_calibrated":
             html += self._residual_html(model)
         self._summary.setHtml(html)
-        max_twt = max(self.basement_ms.value() / 1000.0, 0.5)
         self._schematic.set_model(model, max_twt, strat)
 
     def _residual_html(self, model) -> str:
@@ -477,13 +586,21 @@ class DepthStretchDialog(QDialog):
         return "<br>".join(rows) + "</div>"
 
     def _apply(self) -> None:
-        # Build through _build_model so every rung uses the same assembly the
-        # preview shows — in particular the layered cap layer and well
-        # calibration — then install + re-derive seismic-tied geometry (so
-        # horizons stay glued to their reflectors).
-        model = self._build_model()
-        self._state.project.velocity_model = model
         from section_tool.core.conversion import restretch_project
-        restretch_project(self._state.project, model)
+        proj = self._state.project
+        lvm = self._lateral_model()
+        if lvm is not None:
+            # Lateral field active: install it (the render prefers it) + a
+            # representative single model as the baseline, then re-derive tied
+            # geometry through the lateral model (per-node local conversion).
+            proj.lateral_velocity_model = lvm
+            proj.velocity_model = lvm.model_at(self._section_length() * 0.5)
+            restretch_project(proj, lvm)
+        else:
+            # Single-model path; clear any prior lateral field.
+            proj.lateral_velocity_model = None
+            model = self._build_model()
+            proj.velocity_model = model
+            restretch_project(proj, model)
         if self._on_apply is not None:
             self._on_apply()

@@ -5,7 +5,7 @@ import sys
 
 import numpy as np
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QTableWidgetItem
 
 from section_tool.app_state import AppState
 from section_tool.core.section import Section
@@ -205,3 +205,60 @@ def test_well_tied_promotes_layered_zones(qapp):
     assert provs.count("well_calibrated") >= 1     # marker-bearing zone(s) promoted
     assert "assumed" in provs                      # uncovered zone(s) stay assumed
     assert "residual" in dlg._residual_html(m).lower()
+
+
+def _add_lateral_rows(dlg, rows):
+    dlg.lateral.blockSignals(True)
+    for pos, v0, k in rows:
+        r = dlg.lateral.rowCount(); dlg.lateral.insertRow(r)
+        dlg.lateral.setItem(r, 0, QTableWidgetItem(f"{pos:g}"))
+        dlg.lateral.setItem(r, 1, QTableWidgetItem(f"{v0:g}"))
+        dlg.lateral.setItem(r, 2, QTableWidgetItem(f"{k:g}"))
+    dlg.lateral.blockSignals(False)
+
+
+def _state_with_section():
+    st = AppState(); st.add_section(Section([(0, 0), (2000, 0)], name="L1"))
+    st.set_active_section(st.project.sections[0])
+    return st
+
+
+def test_lateral_controls_build_and_apply(qapp):
+    st = _state_with_section()
+    dlg = DepthStretchDialog(st)
+    dlg.method.setCurrentIndex(dlg.method.findData("average_vz"))
+    dlg.setting.setCurrentIndex(dlg.setting.findData("onshore"))
+    _add_lateral_rows(dlg, [(0.0, 1800.0, 0.0), (2000.0, 3000.0, 0.0)])
+    lvm = dlg._lateral_model()
+    assert lvm is not None and len(lvm.controls) == 2
+    # exact at controls, interpolated between
+    assert lvm.model_at(0.0).layers[0].function.v0 == pytest.approx(1800.0)
+    vmid = lvm.model_at(1000.0).layers[0].function.v0
+    assert 1800.0 < vmid < 3000.0
+    dlg._apply()
+    installed = st.project.lateral_velocity_model
+    assert installed is not None and len(installed.controls) == 2
+    assert installed.model_at(2000.0).layers[0].function.v0 == pytest.approx(3000.0)
+
+
+def test_lateral_needs_two_controls_else_single(qapp):
+    st = _state_with_section()
+    dlg = DepthStretchDialog(st)
+    dlg.method.setCurrentIndex(dlg.method.findData("average_vz"))
+    _add_lateral_rows(dlg, [(0.0, 1800.0, 0.0)])     # only one control
+    assert dlg._lateral_model() is None
+    dlg._apply()
+    assert st.project.lateral_velocity_model is None   # single-model path
+    assert not st.project.velocity_model.is_empty
+
+
+def test_lateral_only_for_bulk_average(qapp):
+    st = _state_with_section()
+    st.project.wells.append(Well("W1", 0.0, 0.0))       # enables the well-tied rung
+    dlg = DepthStretchDialog(st)
+    dlg.method.setCurrentIndex(dlg.method.findData("bulk"))
+    _add_lateral_rows(dlg, [(0.0, 2000.0, 0.0), (2000.0, 4000.0, 0.0)])
+    assert dlg._lateral_model() is not None             # bulk supports lateral
+    # a non-lateral rung (well-tied) ignores the table
+    dlg.method.setCurrentIndex(dlg.method.findData("well_calibrated"))
+    assert dlg._lateral_model() is None
