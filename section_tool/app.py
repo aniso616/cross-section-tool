@@ -483,10 +483,6 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        self._import_las_action = QAction("Import &LAS Well…", self)
-        self._import_las_action.triggered.connect(self._on_import_las)
-        file_menu.addAction(self._import_las_action)
-
         # Import submenu
         import_menu = QMenu("&Import", self)
         self._import_las_action = QAction("LAS Well Log…", self)
@@ -514,9 +510,6 @@ class MainWindow(QMainWindow):
         self._import_surface_action = QAction("Surface / Horizon Grid (XYZ)…", self)
         self._import_surface_action.triggered.connect(self._on_import_surface)
         import_menu.addAction(self._import_surface_action)
-        self._gen_surface_action = QAction("Generate Surface from Horizon…", self)
-        self._gen_surface_action.triggered.connect(self._on_generate_surface)
-        import_menu.addAction(self._gen_surface_action)
         file_menu.addMenu(import_menu)
 
         # Export submenu
@@ -558,9 +551,10 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(selall_a)
 
         # ================================================================
-        # View
+        # View  (constructed here; added to the bar near the end so the
+        # workflow-pipeline menus read left-to-right first)
         # ================================================================
-        view_menu = mb.addMenu("&View")
+        view_menu = QMenu("Vie&w", self)
         # Dock panel toggles — shortcuts registered as ApplicationShortcut QShortcuts
         # in _register_shortcuts(); the \t hints show them in the menu.
         _map_ta = self._map_dock.toggleViewAction()
@@ -657,14 +651,6 @@ class MainWindow(QMainWindow):
         ud_action.triggered.connect(self._on_new_section_user_defined)
         section_menu.addAction(ud_action)
         section_menu.addSeparator()
-        self._gen_polygons_action = QAction("Generate Polygons From Boundaries…", self)
-        self._gen_polygons_action.triggered.connect(self._on_generate_polygons)
-        section_menu.addAction(self._gen_polygons_action)
-        section_menu.addSeparator()
-        self._strat_column_action = QAction("Edit Stratigraphic Column…", self)
-        self._strat_column_action.triggered.connect(self._on_edit_strat_column)
-        section_menu.addAction(self._strat_column_action)
-        section_menu.addSeparator()
         self._extract_seismic_action = QAction("Extract Seismic Along Active Section…", self)
         self._extract_seismic_action.triggered.connect(self._on_extract_seismic_for_section)
         section_menu.addAction(self._extract_seismic_action)
@@ -695,16 +681,7 @@ class MainWindow(QMainWindow):
         self._pick_action.setCheckable(True)
         interp_menu.addSeparator()
         interp_menu.addAction(self._pick_action)
-
-        # ================================================================
-        # Tools
-        # ================================================================
-        tools_menu = mb.addMenu("&Tools")
-        # Grouped by the workflow pipeline (separators between groups).  The basic
-        # interaction tools (Select/Pan/Zoom/Pick…) live in the tool palette and
-        # keyboard shortcuts, not here — the menu is for dialogs/actions.
-
-        # --- Interpretation: pick-construction helpers ---
+        interp_menu.addSeparator()
         construct_sub = QMenu("&Construction Tools", self)
         for tid, label, key in [
             ("extend",          "Extend Pick",          "E"),
@@ -718,46 +695,71 @@ class MainWindow(QMainWindow):
             a.triggered.connect(
                 lambda _checked, t=tid: self._tool_palette.set_active_tool(t))
             construct_sub.addAction(a)
-        tools_menu.addMenu(construct_sub)
+        interp_menu.addMenu(construct_sub)
+        interp_menu.addSeparator()
+        self._strat_column_action = QAction("Edit Stratigraphic Column…", self)
+        self._strat_column_action.triggered.connect(self._on_edit_strat_column)
+        interp_menu.addAction(self._strat_column_action)
+        self._gen_polygons_action = QAction("Generate Polygons From Boundaries…", self)
+        self._gen_polygons_action.triggered.connect(self._on_generate_polygons)
+        interp_menu.addAction(self._gen_polygons_action)
 
-        # --- Time–Depth / Conversion ---
-        tools_menu.addSeparator()
+        # ================================================================
+        # Convert (Time–Depth)
+        # ================================================================
+        convert_menu = mb.addMenu("Con&vert")
         self._depth_stretch_action = QAction("&Depth Stretch (Time→Depth)…", self)
         self._depth_stretch_action.triggered.connect(self._on_depth_stretch)
-        tools_menu.addAction(self._depth_stretch_action)   # well calibration folds in here
+        convert_menu.addAction(self._depth_stretch_action)   # well calibration folds in here
         self._view_segy_hdr_action = QAction("View SEG-Y Header…", self)
         self._view_segy_hdr_action.triggered.connect(self._on_view_segy_header)
-        tools_menu.addAction(self._view_segy_hdr_action)
+        convert_menu.addAction(self._view_segy_hdr_action)
 
-        # --- Structural / Restoration ---
-        tools_menu.addSeparator()
+        # ================================================================
+        # Model — structural, restoration, thermal
+        # ================================================================
+        model_menu = mb.addMenu("&Model")
         self._balance_check_action = QAction("Check Section &Balance…", self)
         self._balance_check_action.triggered.connect(self._on_balance_check)
-        tools_menu.addAction(self._balance_check_action)
-        self._restoration_stack_action = QAction("Restoration &Stack…", self)
-        self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
-        tools_menu.addAction(self._restoration_stack_action)
+        model_menu.addAction(self._balance_check_action)
         self._topology_audit_action = QAction("&Topology Audit…", self)
         self._topology_audit_action.triggered.connect(self._on_topology_audit)
-        tools_menu.addAction(self._topology_audit_action)
-
-        # --- Thermal ---
-        tools_menu.addSeparator()
+        model_menu.addAction(self._topology_audit_action)
+        model_menu.addSeparator()
+        self._restoration_stack_action = QAction("Restoration &Stack…", self)
+        self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
+        model_menu.addAction(self._restoration_stack_action)
+        model_menu.addSeparator()
         self._thermal_action = QAction("&Thermal Modeling…", self)
         self._thermal_action.triggered.connect(self._on_thermal_modeling)
-        tools_menu.addAction(self._thermal_action)
+        model_menu.addAction(self._thermal_action)
 
-        # --- Analysis / Utilities ---
-        tools_menu.addSeparator()
-        self._attribute_table_action = QAction("&Attribute Table…", self)
-        self._attribute_table_action.triggered.connect(self._on_attribute_table)
-        tools_menu.addAction(self._attribute_table_action)
+        # ================================================================
+        # Surfaces & Maps
+        # ================================================================
+        surfaces_menu = mb.addMenu("&Surfaces && Maps")
+        self._gen_surface_action = QAction("Generate Surface from Horizon…", self)
+        self._gen_surface_action.triggered.connect(self._on_generate_surface)
+        surfaces_menu.addAction(self._gen_surface_action)
+        surfaces_menu.addSeparator()
         self._set_aoi_action = QAction("Set Area of Interest (AOI)…", self)
         self._set_aoi_action.triggered.connect(self._on_set_aoi)
-        tools_menu.addAction(self._set_aoi_action)
+        surfaces_menu.addAction(self._set_aoi_action)
         self._clear_aoi_action = QAction("Clear AOI", self)
         self._clear_aoi_action.triggered.connect(lambda: self._state.set_aoi(None))
-        tools_menu.addAction(self._clear_aoi_action)
+        surfaces_menu.addAction(self._clear_aoi_action)
+
+        # ================================================================
+        # Analysis
+        # ================================================================
+        analysis_menu = mb.addMenu("&Analysis")
+        self._attribute_table_action = QAction("&Attribute Table…", self)
+        self._attribute_table_action.triggered.connect(self._on_attribute_table)
+        analysis_menu.addAction(self._attribute_table_action)
+
+        # View was built above; add it to the bar here so the pipeline menus
+        # (Section…Analysis) read first, with View/Help at the end.
+        mb.addMenu(view_menu)
 
         # ================================================================
         # Help
