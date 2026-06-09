@@ -105,6 +105,22 @@ def test_progressive_disclosure(qapp):
     assert not dlg.water_v.isHidden() and not dlg.seafloor_ms.isHidden()
 
 
+def test_field_gating_layered_and_well(qapp):
+    st = _state_with_zone_horizons()                 # enables the layered rung
+    st.project.wells.append(Well("W1", 0.0, 0.0))    # enables the well-tied rung
+    dlg = DepthStretchDialog(st)
+    dlg.setting.setCurrentIndex(dlg.setting.findData("onshore"))
+    # Layered: per-zone (no direct velocity inputs); basement scaffolds structure.
+    dlg.method.setCurrentIndex(dlg.method.findData("layered_from_formations"))
+    assert dlg.bulk_v.isHidden() and dlg.v0.isHidden() and dlg.k.isHidden()
+    assert not dlg.basement_ms.isHidden()
+    assert dlg.well.isHidden() and dlg.markers.isHidden()
+    # Well-tied: calibration controls show; velocity inputs hidden.
+    dlg.method.setCurrentIndex(dlg.method.findData("well_calibrated"))
+    assert not dlg.well.isHidden() and not dlg.markers.isHidden()
+    assert dlg.bulk_v.isHidden() and dlg.v0.isHidden() and dlg.k.isHidden()
+
+
 def test_marine_summary_lists_water_layer(qapp):
     st, _ = _state_with_tied_horizon()
     dlg = DepthStretchDialog(st)

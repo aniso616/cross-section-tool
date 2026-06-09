@@ -1588,10 +1588,18 @@ class MainWindow(QMainWindow):
             # Auto-zoom to show seismic extent
             self._map_view.zoom_to_all_data()
 
-        # A time volume can't display directly in a depth section — bridge into
-        # the Depth Stretch tool (bulk/average bootstrap pre-filled) so the
-        # conversion is set up explicitly, the front door for time→depth.
+        # A time volume can't display directly in a depth section.  Auto-apply a
+        # default bulk stretch (if nothing is set yet) so it converts to depth
+        # immediately — honestly labelled "regional default / default stretch" —
+        # then open the Depth Stretch tool for tuning.
         if imported_twt:
+            if self._state.project.velocity_model.is_empty:
+                from section_tool.core.stretch_setup import StretchSetup
+                StretchSetup(setting="onshore", method="bulk").apply(self._state.project)
+                try:
+                    self._section_view.render()
+                except Exception:
+                    pass
             self._on_depth_stretch()
 
     def _on_extract_seismic_for_section(self) -> None:
