@@ -401,9 +401,22 @@ class DepthStretchDialog(QDialog):
 
     def _build_model(self) -> VelocityModel:
         setup = self._read_setup()
-        model = setup.build_model(self._zone_tops(),
-                                  getattr(self._state.project, "strat_column", None))
-        if self.method.currentData() == "well_calibrated":
+        strat = getattr(self._state.project, "strat_column", None)
+        method = self.method.currentData()
+        if method == "layered_from_formations":
+            # Zone tops from the picked horizons' anchors, with the datum/seafloor
+            # cap layer (formation_above of the shallowest) so land starts at the
+            # datum / marine at the seafloor — not at the first horizon.
+            from section_tool.core.conversion import zone_tops_from_picks
+            base = (self.seafloor_ms.value() / 1000.0
+                    if self.setting.currentData() == "marine"
+                    else self.datum_ms.value() / 1000.0)
+            zt = zone_tops_from_picks(
+                getattr(self._state.project, "horizon_picks", []), base)
+        else:
+            zt = self._zone_tops()
+        model = setup.build_model(zt, strat)
+        if method == "well_calibrated":
             markers = self._well_markers()
             if len(markers) >= 2:
                 model = calibrate_model(model, markers)
@@ -443,16 +456,13 @@ class DepthStretchDialog(QDialog):
         return "<br>".join(rows) + "</div>"
 
     def _apply(self) -> None:
-        if self.method.currentData() == "well_calibrated":
-            model = self._build_model()
-            self._state.project.velocity_model = model
-            # Re-derive seismic-tied geometry through the calibrated model so
-            # horizons stay glued to their reflectors (setup.apply does this for
-            # the other rungs; here we install the model directly).
-            from section_tool.core.conversion import restretch_project
-            restretch_project(self._state.project, model)
-        else:
-            setup = self._read_setup()
-            setup.apply(self._state.project, self._zone_tops())
+        # Build through _build_model so every rung uses the same assembly the
+        # preview shows — in particular the layered cap layer and well
+        # calibration — then install + re-derive seismic-tied geometry (so
+        # horizons stay glued to their reflectors).
+        model = self._build_model()
+        self._state.project.velocity_model = model
+        from section_tool.core.conversion import restretch_project
+        restretch_project(self._state.project, model)
         if self._on_apply is not None:
             self._on_apply()

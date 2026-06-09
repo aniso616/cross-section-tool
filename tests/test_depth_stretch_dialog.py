@@ -131,3 +131,49 @@ def test_well_calibrated_apply_installs_calibrated(qapp):
         dlg.markers.item(r, 2).setText(f"{fn.depth_to_twt(depth) * 1000:.3f}")
     dlg._apply()
     assert st.project.velocity_model.provenance == "well_calibrated"
+
+
+def _state_with_zone_horizons():
+    """A project with a strat column + two anchored zone-bounding horizons."""
+    from section_tool.core.formation import StratigraphicColumn, Formation
+    st = AppState(); st.add_section(Section([(0, 0), (1000, 0)], name="L1"))
+    col = StratigraphicColumn()
+    for nm, v in [("Over", 2500.0), ("Res", 4000.0), ("Base", 5500.0)]:
+        f = Formation(nm); f.matrix_velocity = v; col.add_formation(f)
+    st.project.strat_column = col
+    for depth, fa, fb, nm in [(800.0, "Over", "Res", "TopRes"),
+                              (1200.0, "Res", "Base", "BaseRes")]:
+        hp = HorizonPick(np.array([0.0, 500.0]), np.array([depth, depth]), name=nm,
+                         section_names=np.array(["L1", "L1"], dtype=object),
+                         formation_above=fa, formation_below=fb)
+        set_anchors(hp, build_bulk(2000.0))   # anchors at 0.8 / 1.2 s
+        st.project.horizon_picks.append(hp)
+    return st
+
+
+def test_layered_apply_builds_formation_layers_land(qapp):
+    st = _state_with_zone_horizons()
+    dlg = DepthStretchDialog(st)
+    dlg.setting.setCurrentIndex(dlg.setting.findData("onshore"))
+    dlg.method.setCurrentIndex(dlg.method.findData("layered_from_formations"))
+    dlg.datum_ms.setValue(0.0)
+    dlg._apply()
+    m = st.project.velocity_model
+    assert m.construction["params"]["method"] == "layered_from_formations"
+    assert m.method_label == "layered — formation matrix velocities"
+    # datum cap (Over) + the two zones, tops at the anchors
+    assert [round(l.top_twt_s, 3) for l in m.layers] == [0.0, 0.8, 1.2]
+    assert [l.function.v0 for l in m.layers] == [2500.0, 4000.0, 5500.0]
+
+
+def test_layered_apply_marine_prepends_water(qapp):
+    st = _state_with_zone_horizons()
+    dlg = DepthStretchDialog(st)
+    dlg.setting.setCurrentIndex(dlg.setting.findData("marine"))
+    dlg.method.setCurrentIndex(dlg.method.findData("layered_from_formations"))
+    dlg.datum_ms.setValue(0.0); dlg.seafloor_ms.setValue(300.0)   # seafloor 0.3 s
+    dlg._apply()
+    m = st.project.velocity_model
+    assert m.layers[0].name == "Water" and m.layers[0].top_twt_s == pytest.approx(0.0)
+    # then the formation cap at the seafloor, then the zones
+    assert [round(l.top_twt_s, 3) for l in m.layers] == [0.0, 0.3, 0.8, 1.2]

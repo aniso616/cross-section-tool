@@ -6,6 +6,7 @@ import pytest
 
 from section_tool.core.conversion import (
     build_bulk, build_average_vz, build_layered_from_formations,
+    zone_tops_from_picks, restretch_project,
     stretch_trace_to_depth, stretch_image_to_depth,
     recover_anchors, set_anchors, derive_depths, apply_depths_from_anchors)
 from section_tool.core.surfaces import HorizonPick
@@ -146,3 +147,78 @@ def test_anchor_persists_via_db(tmp_path):
     anchors = sorted(p["twt_anchor"] for p in h["picks"])
     assert anchors == pytest.approx(sorted(hp._twt_anchor.tolist()))
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Layered-from-formations (Prompt 2): zone tops from anchors + formation seeding
+# ---------------------------------------------------------------------------
+
+def _tied_zone_horizon(depth_m, fa, fb, name):
+    """A seismic-tied horizon whose anchor (under bulk 2000) is depth_m/1000 s."""
+    hp = HorizonPick(np.array([0.0, 500.0]), np.array([depth_m, depth_m]),
+                     name=name, formation_above=fa, formation_below=fb)
+    set_anchors(hp, build_bulk(2000.0))     # anchor = depth_to_twt(z) = z/1000
+    return hp
+
+
+def _strat():
+    col = StratigraphicColumn()
+    for nm, v in [("Overburden", 2500.0), ("Reservoir", 4000.0), ("Basement", 5500.0)]:
+        f = Formation(nm); f.matrix_velocity = v; col.add_formation(f)
+    return col
+
+
+def test_zone_tops_from_picks_caps_with_formation_above():
+    picks = [_tied_zone_horizon(800.0, "Overburden", "Reservoir", "TopRes"),
+             _tied_zone_horizon(1200.0, "Reservoir", "Basement", "BaseRes")]
+    tops = zone_tops_from_picks(picks, base_twt_s=0.0)
+    # cap at datum (formation_above of shallowest), then each anchor / formation_below
+    # anchor = depth_to_twt(z) = 2z/2000 = z/1000  → 800 m = 0.8 s, 1200 m = 1.2 s
+    assert tops[0][0] == pytest.approx(0.0) and tops[0][1] == "Overburden"
+    assert tops[1][0] == pytest.approx(0.8) and tops[1][1] == "Reservoir"
+    assert tops[2][0] == pytest.approx(1.2) and tops[2][1] == "Basement"
+
+
+def test_zone_tops_from_picks_marine_base_seafloor():
+    picks = [_tied_zone_horizon(1000.0, "Overburden", "Reservoir", "H1")]
+    tops = zone_tops_from_picks(picks, base_twt_s=0.3)   # seafloor at 0.3 s
+    assert tops[0] == (pytest.approx(0.3), "Overburden")  # cap starts at seafloor
+    assert tops[1][0] == pytest.approx(1.0)               # 1000 m → 1.0 s
+
+
+def test_zone_tops_from_picks_ignores_depth_native_and_empty():
+    native = HorizonPick(np.array([0.0, 500.0]), np.array([900.0, 900.0]), name="N")
+    assert zone_tops_from_picks([native], 0.0) == []
+    assert zone_tops_from_picks([], 0.0) == []
+
+
+def test_layered_build_from_picks_seeds_formation_velocities():
+    picks = [_tied_zone_horizon(800.0, "Overburden", "Reservoir", "TopRes"),
+             _tied_zone_horizon(1200.0, "Reservoir", "Basement", "BaseRes")]
+    tops = zone_tops_from_picks(picks, base_twt_s=0.0)
+    m = build_layered_from_formations(tops, _strat())
+    assert [round(l.top_twt_s, 6) for l in m.layers] == [0.0, 0.8, 1.2]
+    assert [l.function.v0 for l in m.layers] == [2500.0, 4000.0, 5500.0]
+    assert m.method_label == "layered — formation matrix velocities"
+    assert m.provenance == "assumed"
+
+
+def test_layered_tune_keeps_horizon_glued():
+    """Changing a zone's interval velocity re-stretches; the seismic-tied horizon
+    follows through its invariant anchor."""
+    picks = [_tied_zone_horizon(800.0, "Overburden", "Reservoir", "TopRes"),
+             _tied_zone_horizon(1200.0, "Reservoir", "Basement", "BaseRes")]
+    tops = zone_tops_from_picks(picks, 0.0)
+    strat = _strat()
+    m_a = build_layered_from_formations(tops, strat)
+    from types import SimpleNamespace
+    proj = SimpleNamespace(horizon_picks=picks, fault_picks=[])
+    restretch_project(proj, m_a)
+    anchors = [hp._twt_anchor.copy() for hp in picks]
+    # "Tune" the Reservoir interval velocity up and re-stretch.
+    strat.get_formation("Reservoir").matrix_velocity = 4600.0
+    m_b = build_layered_from_formations(tops, strat)
+    restretch_project(proj, m_b)
+    for hp, a in zip(picks, anchors):
+        assert np.allclose(hp._twt_anchor, a)                                  # invariant
+        assert np.allclose(hp._depths, [m_b.twt_to_depth(t) for t in hp._twt_anchor])

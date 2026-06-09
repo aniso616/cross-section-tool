@@ -57,6 +57,39 @@ def build_layered_from_formations(zone_tops, strat_column,
                                        "parents": [], "params": {"method": "layered_from_formations"}})
 
 
+def zone_tops_from_picks(picks, base_twt_s: float = 0.0):
+    """Ordered ``[(top_twt_s, formation_name), ...]`` for layered-from-formations,
+    read from the seismic-tied picks' TWT anchors (Prompt 1).
+
+    Layer tops are the picks' anchors.  The interval ABOVE the shallowest pick —
+    from *base_twt_s* (the datum on land, the seafloor in a marine setup) — takes
+    that pick's ``formation_above``; each pick's anchor then starts a layer of its
+    ``formation_below``.  Depth-native and unanchored picks are ignored; returns
+    ``[]`` when there are no seismic-tied picks (layered method unavailable).
+    """
+    tied: list[tuple[float, object]] = []
+    for hp in picks or []:
+        if not getattr(hp, "seismic_tied", False):
+            continue
+        anch = getattr(hp, "_twt_anchor", None)
+        if anch is None or len(anch) == 0:
+            continue
+        t = float(np.nanmedian(anch))
+        if t != t:                      # all-NaN anchor
+            continue
+        tied.append((t, hp))
+    if not tied:
+        return []
+    tied.sort(key=lambda e: e[0])
+    tops: list[tuple[float, str]] = []
+    if float(base_twt_s) < tied[0][0] - 1e-9:        # cap layer (datum/seafloor → H1)
+        tops.append((float(base_twt_s),
+                     getattr(tied[0][1], "formation_above", "") or ""))
+    for t, hp in tied:
+        tops.append((t, getattr(hp, "formation_below", "") or getattr(hp, "name", "")))
+    return tops
+
+
 # ---------------------------------------------------------------------------
 # Seismic image: vertical stretch (twt → depth)
 # ---------------------------------------------------------------------------

@@ -189,6 +189,8 @@ class VelocityModel:
             return "unconverted"
         if len(self.layers) == 1:
             return self.layers[0].method_label
+        if self.construction.get("params", {}).get("method") == "layered_from_formations":
+            return "layered — formation matrix velocities"
         return f"layered ({len(self.layers)} interval velocities)"
 
     @property
