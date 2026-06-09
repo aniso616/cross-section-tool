@@ -96,3 +96,40 @@ def test_round_trip_to_from_dict():
     assert len(back.controls) == 2
     assert back.model_at(750.0).layers[0].function.v0 == pytest.approx(
         lvm.model_at(750.0).layers[0].function.v0)
+
+
+def _well_tied(v):
+    from section_tool.core.velocity_model import VelocityLayer, VelocityFunction
+    return VelocityModel(layers=[VelocityLayer(
+        VelocityFunction("constant", v0=v), provenance="well_calibrated")])
+
+
+def test_provenance_headline_reads_weakest_across_section():
+    # single well-tied control → well-tied (one control governs, no interpolation)
+    assert LateralVelocityModel([(0.0, _well_tied(2500.0))]).provenance == "well_calibrated"
+    # two well-tied controls → interpolated between them (weakest on the section)
+    two_tied = LateralVelocityModel([(0.0, _well_tied(2500.0)), (1000.0, _well_tied(3000.0))])
+    assert two_tied.provenance == "interpolated"
+    # any assumed/regional control → assumed dominates
+    mixed = LateralVelocityModel([(0.0, _well_tied(2500.0)), (1000.0, _bulk(3000.0))])
+    assert mixed.provenance == "assumed"
+
+
+def test_glue_holds_under_laterally_varying_model():
+    """A seismic-tied horizon's depth varies laterally per the local model, while
+    its TWT anchors stay invariant (pick-once, refine-forever — laterally)."""
+    from section_tool.core.surfaces import HorizonPick
+    from section_tool.core.conversion import set_anchors, restretch_project
+    from types import SimpleNamespace
+    # nodes at d=0 and d=1000, same depth → same anchor under bulk 2000 (0.5 s)
+    hp = HorizonPick(np.array([0.0, 1000.0]), np.array([1000.0, 1000.0]), name="H")
+    set_anchors(hp, _bulk(2000.0))
+    anchors = hp._twt_anchor.copy()                       # both 1.0 s
+    proj = SimpleNamespace(horizon_picks=[hp], fault_picks=[])
+    lvm = LateralVelocityModel([(0.0, _bulk(2000.0)), (1000.0, _bulk(4000.0))])
+    restretch_project(proj, lvm)
+    assert np.allclose(hp._twt_anchor, anchors)           # anchors invariant
+    # node 0 (2000 m/s) and node 1 (4000 m/s) at the same TWT land at different depths
+    assert hp._depths[0] == pytest.approx(lvm.model_at(0.0).twt_to_depth(anchors[0]))
+    assert hp._depths[1] == pytest.approx(lvm.model_at(1000.0).twt_to_depth(anchors[1]))
+    assert hp._depths[1] > hp._depths[0] * 1.5            # deeper where faster

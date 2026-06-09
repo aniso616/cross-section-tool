@@ -205,10 +205,20 @@ def set_anchors(hp, model: VelocityModel) -> None:
     hp.seismic_tied = True
 
 
-def derive_depths(hp, model: VelocityModel) -> np.ndarray:
+def derive_depths(hp, model) -> np.ndarray:
     """Per-node depths (m) derived from the horizon's invariant TWT anchors:
-    z = twt_to_depth(anchor)."""
-    return np.array([model.twt_to_depth(float(t)) for t in hp._twt_anchor], dtype=float)
+    z = twt_to_depth(anchor).
+
+    Lateral-aware: a model exposing ``model_at`` (a LateralVelocityModel) converts
+    each node through the LOCAL model at that node's along-section distance, so a
+    glued horizon's depth may vary laterally with the velocity field.  A plain
+    VelocityModel converts every node identically."""
+    anchors = np.asarray(hp._twt_anchor, dtype=float)
+    if hasattr(model, "model_at"):
+        dists = np.asarray(getattr(hp, "_distances", np.zeros_like(anchors)), dtype=float)
+        return np.array([model.model_at(float(d)).twt_to_depth(float(t))
+                         for d, t in zip(dists, anchors)], dtype=float)
+    return np.array([model.twt_to_depth(float(t)) for t in anchors], dtype=float)
 
 
 def apply_depths_from_anchors(hp, model: VelocityModel) -> None:

@@ -68,6 +68,20 @@ class LateralVelocityModel:
     def distances(self) -> np.ndarray:
         return np.array([c.distance_m for c in self.controls], dtype=float)
 
+    @property
+    def provenance(self) -> str:
+        """Weakest provenance across the section: the weakest control, and at most
+        'interpolated' anywhere between controls (≥2 controls).  So a section tied
+        at one well but interpolated outward reads honestly — well-tied only where
+        a single control governs, interpolated between, regional default if any
+        control is assumed."""
+        from section_tool.core.velocity_model import _PROV_RANK
+        ranks = [_PROV_RANK.get(c.model.provenance, 0) for c in self.controls]
+        rank = min(ranks) if ranks else 0
+        if len(self.controls) >= 2:
+            rank = min(rank, _PROV_RANK["interpolated"])
+        return {v: k for k, v in _PROV_RANK.items()}[rank]
+
     def model_at(self, distance_m: float) -> VelocityModel:
         """The effective layered model at *distance_m* along the section.
 
