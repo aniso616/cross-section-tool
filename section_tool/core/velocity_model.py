@@ -26,18 +26,35 @@ from section_tool.core.surfaces import new_entity_uuid
 
 SCHEMA_VERSION = 2
 
-Provenance = Literal["assumed", "interpolated", "well_calibrated"]
+Provenance = Literal[
+    "assumed", "interpolated", "sonic_derived", "seismic_velocity",
+    "well_calibrated", "checkshot_tied",
+]
 Method     = Literal["constant", "linear_v0k", "linear_vt"]
 
 # Display labels describe the velocity's SOURCE / modification, not a certainty
 # claim — every zone is an interpretation; "well-tied" means fit to well control,
 # not ground truth.  Internal enum values are unchanged (persistence-stable).
+#
+# Grounded-ladder additions (Prompt 05): ``sonic_derived`` (velocity integrated
+# from a sonic log) and ``checkshot_tied`` (calibrated to a checkshot/TDR).
+# ``seismic_velocity`` is reserved for the Dix prompt (Prompt 08) — the value is
+# defined for persistence stability, but no rung/UI claims it yet.
 PROVENANCE_LABEL: dict[str, str] = {
-    "assumed":         "regional default",
-    "interpolated":    "interpolated",
-    "well_calibrated": "well-tied",
+    "assumed":          "regional default",
+    "interpolated":     "interpolated",
+    "sonic_derived":    "sonic-derived",
+    "seismic_velocity": "seismic-velocity",
+    "well_calibrated":  "well-tied",
+    "checkshot_tied":   "checkshot-tied",
 }
-_PROV_RANK = {"assumed": 0, "interpolated": 1, "well_calibrated": 2}
+# Weakest-provenance-dominates the headline (min by rank).  The tie/derived forms
+# all sit above 'interpolated'; checkshot is the hardest tie.
+_PROV_RANK = {
+    "assumed": 0, "interpolated": 1,
+    "sonic_derived": 2, "seismic_velocity": 2, "well_calibrated": 2,
+    "checkshot_tied": 3,
+}
 
 
 # ---------------------------------------------------------------------------

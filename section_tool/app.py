@@ -491,6 +491,15 @@ class MainWindow(QMainWindow):
         self._import_well_tops_action = QAction("Well Tops CSV…", self)
         self._import_well_tops_action.triggered.connect(self._on_import_well_tops)
         import_menu.addAction(self._import_well_tops_action)
+        self._import_markers_action = QAction("Well Formation Markers (MD)…", self)
+        self._import_markers_action.triggered.connect(self._on_import_markers)
+        import_menu.addAction(self._import_markers_action)
+        self._import_checkshot_action = QAction("Well Checkshot (T-D)…", self)
+        self._import_checkshot_action.triggered.connect(self._on_import_checkshot)
+        import_menu.addAction(self._import_checkshot_action)
+        self._import_sonic_tdr_action = QAction("Well Sonic TDR…", self)
+        self._import_sonic_tdr_action.triggered.connect(self._on_import_sonic_tdr)
+        import_menu.addAction(self._import_sonic_tdr_action)
         import_menu.addSeparator()
         self._import_segy_action = QAction("SEG-Y Seismic…", self)
         self._import_segy_action.triggered.connect(self._on_import_segy)
@@ -1875,6 +1884,96 @@ class MainWindow(QMainWindow):
             self, "Import Complete",
             f"Imported {added} new well(s), tops merged into existing wells."
         )
+
+    # ------------------------------------------------------------------
+    # Per-well data imports: markers, checkshot, sonic TDR
+    # ------------------------------------------------------------------
+
+    def _choose_target_well(self, title: str):
+        """Return (index, well) for a per-well import, prompting if ambiguous.
+
+        Returns (None, None) when there are no wells (with a message) or the user
+        cancels the picker.
+        """
+        wells = self._state.project.wells
+        if not wells:
+            QMessageBox.information(
+                self, title,
+                "No wells loaded. Import a well (File ▸ Import ▸ LAS Well Log) first.")
+            return None, None
+        if len(wells) == 1:
+            return 0, wells[0]
+        from PySide6.QtWidgets import QInputDialog
+        names = [w.name for w in wells]
+        name, ok = QInputDialog.getItem(
+            self, title, "Target well:", names, 0, False)
+        if not ok:
+            return None, None
+        idx = names.index(name)
+        return idx, wells[idx]
+
+    def _on_import_markers(self) -> None:
+        """Import → Well Formation Markers: F3 markers.txt (MD + name) into a well."""
+        idx, well = self._choose_target_well("Import Formation Markers")
+        if well is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Import Formation Markers for {well.name}", "",
+            "Marker Files (*.txt *.dat *.csv);;All Files (*)")
+        if not path:
+            return
+        from section_tool.io.tops_io import load_markers_into_well
+        import copy
+        updated = copy.deepcopy(well)
+        try:
+            with _wait_cursor():
+                n = load_markers_into_well(path, updated)
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Error", str(exc))
+            return
+        if n == 0:
+            QMessageBox.information(self, "Import Markers",
+                                    "No markers found in the file.")
+            return
+        self._state.update_well(idx, updated)
+        self._statusbar.showMessage(
+            f"Imported {n} formation markers into {well.name}.", 5000)
+
+    def _on_import_checkshot(self) -> None:
+        """Import → Well Checkshot: F3 *_TD.txt (depth-MD, TWT-s) → TVDSS TDR."""
+        self._import_tdr("checkshot")
+
+    def _on_import_sonic_tdr(self) -> None:
+        """Import → Well Sonic TDR: F3 *_DT_TVDSS.txt (TVDSS, TWT-ms)."""
+        self._import_tdr("sonic_integrated")
+
+    def _import_tdr(self, kind: str) -> None:
+        title = ("Import Checkshot" if kind == "checkshot"
+                 else "Import Sonic TDR")
+        idx, well = self._choose_target_well(title)
+        if well is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"{title} for {well.name}", "",
+            "Time-Depth Files (*.txt *.dat *.csv);;All Files (*)")
+        if not path:
+            return
+        from section_tool.io.tdr_io import load_checkshot, load_sonic_tdr
+        import copy
+        updated = copy.deepcopy(well)
+        try:
+            with _wait_cursor():
+                tdr = (load_checkshot(path, updated) if kind == "checkshot"
+                       else load_sonic_tdr(path, updated))
+                updated.add_tdr(tdr)
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Error", str(exc))
+            return
+        self._state.update_well(idx, updated)
+        lo, hi = tdr.depth_range()
+        self._statusbar.showMessage(
+            f"Imported {tdr.kind} ({tdr.n_points} pts, {lo:.0f}–{hi:.0f} m "
+            f"{tdr.depth_reference}) into {well.name}.", 6000)
 
     def _on_new_section_ns(self) -> None:
         """New north–south section via dialog."""

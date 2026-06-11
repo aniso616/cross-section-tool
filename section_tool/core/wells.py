@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from section_tool.core.surfaces import new_entity_uuid
+
 
 class LogCurve:
     """A single log curve: values sampled as a function of measured depth (MD)."""
@@ -211,12 +213,14 @@ class Well:
         deviation: DeviationSurvey | None = None,
         uwi: str = "",
         td: float | None = None,
+        uuid: str | None = None,
     ) -> None:
         self.name = name
         self.x = float(x)
         self.y = float(y)
         self.kb = float(kb)
         self.uwi = uwi
+        self.uuid = uuid or new_entity_uuid()   # stable identity (rename-safe link)
         self.color: str = "#E8C46A"       # default warm-gold well colour
         self.display_log: str | None = None  # mnemonic of log to display (None = auto-GR)
         # Original (pre-transformation) coordinates — set by importer when CRS differs
@@ -231,6 +235,7 @@ class Well:
             self.deviation = DeviationSurvey.vertical(x, y)
         self._logs: dict[str, LogCurve] = {}
         self._formation_tops: dict[str, float] = {}  # name → MD
+        self._tdrs: list = []  # list[TimeDepthRelation] — time-depth control
 
     # ------------------------------------------------------------------
     # Log management
@@ -270,6 +275,29 @@ class Well:
     def formation_tops(self) -> dict[str, float]:
         """Copy of the {name: MD} formation top dictionary."""
         return dict(self._formation_tops)
+
+    # ------------------------------------------------------------------
+    # Time-depth relations (checkshots / sonic-integrated TDRs)
+    # ------------------------------------------------------------------
+
+    def add_tdr(self, tdr) -> None:
+        """Register a TimeDepthRelation, stamping it with this well's identity."""
+        tdr.well_uuid = self.uuid
+        self._tdrs.append(tdr)
+
+    @property
+    def tdrs(self) -> list:
+        """Copy of the well's TimeDepthRelation list."""
+        return list(self._tdrs)
+
+    def tdrs_of_kind(self, kind: str) -> list:
+        """TDRs matching *kind* (``checkshot`` | ``sonic_integrated`` | ``imported``)."""
+        return [t for t in self._tdrs if t.kind == kind]
+
+    def primary_checkshot(self):
+        """The most recently added checkshot TDR, or None."""
+        cs = self.tdrs_of_kind("checkshot")
+        return cs[-1] if cs else None
 
     # ------------------------------------------------------------------
     # Section projection

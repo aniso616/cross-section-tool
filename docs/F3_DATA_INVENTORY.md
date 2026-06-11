@@ -64,7 +64,7 @@ for a method-ladder test, not for hard QC.)
 
 ## Step 4 — Tops cross-check
 
-- **Source file** `Rawdata\Well_data\F02-01_markers.txt`: **24 formation tops**,
+- **Source file** `Rawdata\Well_data\F02-01_markers.txt`: **25 formation tops**,
   MD (m) + name, **MD-only — no TWT column**. From `Seasurface` (30) down:
   MFS11 (553.6), FS11 (612.9), MFS10, MFS9, MFS8, FS8, FS7, Truncation 1,
   Lower Low Sonic, FS6, MFS4, FS4, FS 3, FS2, MFS 2, FS1, NMRF (Mid_Mio_Unc,
@@ -87,7 +87,7 @@ for a method-ladder test, not for hard QC.)
 | Sonic-integrated TDR (TVDSS↔TWT) | ✅ 5 m, 625 pts | `F02-01_DT_TVDSS.txt` | **Sonic V(z)** (ready-made) |
 | Checkshot (depth↔TWT) | ✅ 25 pairs | `F02-01_TD.txt` | **Checkshot-tied** |
 | Density RHOB | ✅ | `F02-01_logs.las` | (impedance/synthetic, not depth-conv) |
-| Formation tops (MD) | ✅ source (24); ❌ not loaded | `F02-01_markers.txt` | **Marker-tied** (once imported + tied via checkshot) |
+| Formation tops (MD) | ✅ source (25); ❌ not loaded | `F02-01_markers.txt` | **Marker-tied** (once imported + tied via checkshot) |
 | Tops TWT | ❌ no TWT in tops file or schema | — | marker TWT must come from checkshot/TDR |
 | RMS velocity | ✅ | `Velocity_functions.txt` (ASCII), `Velocity_model__RMS_.cbvs`, `RMS_velocities.pck` | **Dix** (Vrms→Vint) |
 | Interval velocity | ✅ | `Velocity_functions.txt` (Vint col), `Velocity_model__INT_.cbvs` | **Dix / direct interval** |
@@ -95,7 +95,7 @@ for a method-ladder test, not for hard QC.)
 
 **Bottom line:** F02-01 unlocks **every rung** of the planned ladder — sonic V(z)
 (two ways: integrate the LAS DT, or use the ready `DT_TVDSS` TDR), checkshot-tied
-(`TD.txt`), Dix (`Velocity_functions.txt` Vrms/Vint), and marker-tied (24 tops in
+(`TD.txt`), Dix (`Velocity_functions.txt` Vrms/Vint), and marker-tied (25 tops in
 `markers.txt`, *once imported* — they currently aren't, and the tops schema holds
 no TWT, so marker TWT is checkshot-derived). The only genuinely absent data is
 shear sonic (DTS), which the ladder doesn't need.

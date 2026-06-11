@@ -585,12 +585,21 @@ class AppState(QObject):
                 kb=float(wrow.get("kb_elevation", 0.0)),
                 uwi=wrow.get("uwi", ""),
                 td=float(_td) if _td is not None else None,
+                uuid=wrow.get("uuid") or None,
             )
             well.original_x = wrow.get("original_x")
             well.original_y = wrow.get("original_y")
             well.original_crs_epsg = wrow.get("original_crs_epsg")
             for top in wrow.get("tops", []):
                 well.add_formation_top(top["formation_name"], float(top["md"]))
+            # Time-depth relations (checkshots / sonic TDRs)
+            for trow in wrow.get("tdrs", []):
+                try:
+                    from section_tool.core.tdr import TimeDepthRelation
+                    well.add_tdr(TimeDepthRelation.from_dict(
+                        _json.loads(trow["data_json"])))
+                except Exception:
+                    pass
             # Restore log curves from stored data
             for lg in wrow.get("logs", []):
                 try:

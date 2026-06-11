@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS fault_picks (
 CREATE TABLE IF NOT EXISTS wells (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT    UNIQUE NOT NULL,
+    uuid                TEXT,
     uwi                 TEXT    DEFAULT '',
     x                   REAL    DEFAULT 0.0,
     y                   REAL    DEFAULT 0.0,
@@ -160,6 +161,19 @@ CREATE TABLE IF NOT EXISTS well_logs (
     data_min    REAL,
     data_max    REAL,
     data_json   TEXT
+);
+
+-- Per-well time-depth relations (checkshots / sonic-integrated TDRs). The full
+-- TimeDepthRelation.to_dict() is the source of truth in data_json; the flat
+-- columns are for cheap listing/filtering.
+CREATE TABLE IF NOT EXISTS time_depth_relations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    well_id         INTEGER NOT NULL REFERENCES wells(id) ON DELETE CASCADE,
+    uuid            TEXT,
+    kind            TEXT,
+    depth_reference TEXT,
+    source          TEXT,
+    data_json       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS lithologies (
@@ -485,6 +499,8 @@ class ProjectDatabase:
             ("faults",   "seismic_tied", "INTEGER DEFAULT 0"),
             # Per-volume extraction corridor (m); editable at SEG-Y import.
             ("seismic",  "max_offset", "REAL DEFAULT 500.0"),
+            # Stable well identity (UUID4) — links per-well TDRs / construction refs.
+            ("wells",    "uuid", "TEXT"),
         ]
         for table, col, coltype in col_migrations:
             try:
@@ -975,14 +991,15 @@ class ProjectDatabase:
         ).fetchone()
         status  = getattr(well, "status",  "actual")
         purpose = getattr(well, "purpose", "exploration")
+        well_uuid = getattr(well, "uuid", None)
         if row:
             wid = row["id"]
             self.conn.execute(
-                """UPDATE wells SET uwi=?, x=?, y=?, kb_elevation=?, td=?,
+                """UPDATE wells SET uuid=?, uwi=?, x=?, y=?, kb_elevation=?, td=?,
                    original_x=?, original_y=?, original_crs_epsg=?,
                    status=?, purpose=?
                    WHERE id=?""",
-                (well.uwi, well.x, well.y, well.kb,
+                (well_uuid, well.uwi, well.x, well.y, well.kb,
                  well.deviation.max_tvd,
                  getattr(well, "original_x", None),
                  getattr(well, "original_y", None),
@@ -991,11 +1008,11 @@ class ProjectDatabase:
             )
         else:
             cur = self.conn.execute(
-                """INSERT INTO wells(name, uwi, x, y, kb_elevation, td,
+                """INSERT INTO wells(name, uuid, uwi, x, y, kb_elevation, td,
                    original_x, original_y, original_crs_epsg,
                    status, purpose, created_date)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (well.name, well.uwi, well.x, well.y, well.kb,
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (well.name, well_uuid, well.uwi, well.x, well.y, well.kb,
                  well.deviation.max_tvd,
                  getattr(well, "original_x", None),
                  getattr(well, "original_y", None),
@@ -1033,6 +1050,21 @@ class ProjectDatabase:
             except Exception:
                 pass
 
+        # Time-depth relations (checkshots / sonic TDRs) — full to_dict() blob.
+        self.conn.execute(
+            "DELETE FROM time_depth_relations WHERE well_id=?", (wid,))
+        for tdr in getattr(well, "tdrs", []):
+            try:
+                self.conn.execute(
+                    """INSERT INTO time_depth_relations
+                       (well_id, uuid, kind, depth_reference, source, data_json)
+                       VALUES(?,?,?,?,?,?)""",
+                    (wid, tdr.uuid, tdr.kind, tdr.depth_reference, tdr.source,
+                     json.dumps(tdr.to_dict()))
+                )
+            except Exception:
+                pass
+
         self.conn.commit()
         return wid
 
@@ -1048,6 +1080,10 @@ class ProjectDatabase:
             wd["logs"] = [dict(lg) for lg in
                           self.conn.execute(
                               "SELECT * FROM well_logs WHERE well_id=?",
+                              (w["id"],)).fetchall()]
+            wd["tdrs"] = [dict(r) for r in
+                          self.conn.execute(
+                              "SELECT * FROM time_depth_relations WHERE well_id=?",
                               (w["id"],)).fetchall()]
             result.append(wd)
         return result
