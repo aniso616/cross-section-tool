@@ -242,3 +242,42 @@ class TestAddRequested:
         panel.add_requested.connect(lambda cat: received.append(cat))
         panel._add_btn.click()
         assert received == ["Faults"]
+
+
+# ---------------------------------------------------------------------------
+# Select All (Edit ▸ Select All / Ctrl+A target)
+# ---------------------------------------------------------------------------
+
+class TestSelectAll:
+    def test_empty_tree_selects_nothing(self, panel):
+        assert panel.select_all_objects() == 0
+        assert panel._tree.selectedItems() == []
+
+    def test_selects_all_leaf_objects_across_categories(self, panel, state):
+        state.add_section(_sec("A"))
+        state.add_section(_sec("B"))
+        state.add_horizon_pick(_pick("Top"))
+        n = panel.select_all_objects()
+        assert n == 3
+        # Every selected item is a leaf object (has a category parent), none headers
+        selected = panel._tree.selectedItems()
+        assert len(selected) == 3
+        assert all(it.parent() is not None for it in selected)
+
+    def test_category_headers_not_selected(self, panel, state):
+        state.add_section(_sec("A"))
+        panel.select_all_objects()
+        sec_header = panel._category_items["Sections"]
+        assert not sec_header.isSelected()
+
+    def test_selection_maps_to_batch_targets(self, panel, state):
+        """Selected leaf rows resolve to the (cat, idx) pairs batch ops act on
+        (delete / visibility) — checked without invoking the modal delete path."""
+        state.add_section(_sec("A"))
+        state.add_horizon_pick(_pick("Top"))
+        panel.select_all_objects()
+        targets = set()
+        for it in panel._tree.selectedItems():
+            parent = it.parent()
+            targets.add((parent.text(0), parent.indexOfChild(it)))
+        assert targets == {("Sections", 0), ("Horizons", 0)}

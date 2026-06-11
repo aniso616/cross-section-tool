@@ -548,6 +548,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(redo_a)
         edit_menu.addSeparator()
         selall_a = QAction("Select &All\tCtrl+A", self)
+        selall_a.triggered.connect(self._on_select_all)
         edit_menu.addAction(selall_a)
 
         # ================================================================
@@ -2725,7 +2726,7 @@ class MainWindow(QMainWindow):
         _sc("Ctrl+Shift+Z", self._state.redo)
         _sc("Ctrl+C",       lambda: None)   # stub — future copy
         _sc("Ctrl+V",       lambda: None)   # stub — future paste
-        _sc("Ctrl+A",       lambda: None)   # stub — future select all
+        _sc("Ctrl+A",       self._on_select_all)
         _sc("Escape",       self._on_escape_shortcut)
 
         # ── File ──────────────────────────────────────────────────────────
@@ -2745,6 +2746,20 @@ class MainWindow(QMainWindow):
     def _on_escape_shortcut(self) -> None:
         """Escape: cancel current operation and return to select tool."""
         self._tool_palette.set_active_tool("select")
+
+    def _on_select_all(self) -> None:
+        """Edit ▸ Select All / Ctrl+A: select every object in the project tree.
+
+        The project panel's tree is the app's only multi-selection surface; the
+        section canvas selects a single object at a time. Selecting all objects
+        there sets up batch operations (Delete, visibility toggle). Reports the
+        count (or that there's nothing to select) in the status bar.
+        """
+        n = self._project_panel.select_all_objects()
+        if n:
+            self._flash_status(f"Selected all objects ({n}).")
+        else:
+            self._flash_status("Nothing to select.")
 
     def _on_delete_shortcut(self) -> None:
         """Delete: remove the selected node (Nodes tool); otherwise the legacy

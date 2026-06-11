@@ -1193,6 +1193,32 @@ class ProjectPanel(QDockWidget):
         for cat, idx in sorted(targets, key=lambda t: t[1], reverse=True):
             self.object_deleted.emit(cat, idx)
 
+    def select_all_objects(self) -> int:
+        """Select every object (leaf) row across all categories in the tree.
+
+        This is the target of Edit ▸ Select All / Ctrl+A: the project tree is
+        the only multi-selection surface in the app (ExtendedSelection), and
+        the resulting selection drives batch delete / visibility. Category
+        headers are skipped — only leaf objects are selected. Gives the tree
+        keyboard focus so the selection is acted on (e.g. Delete) immediately.
+
+        Returns the number of objects selected.
+        """
+        count = 0
+        self._tree.blockSignals(True)
+        try:
+            self._tree.clearSelection()
+            for i in range(self._tree.topLevelItemCount()):
+                cat_item = self._tree.topLevelItem(i)
+                for j in range(cat_item.childCount()):
+                    cat_item.child(j).setSelected(True)
+                    count += 1
+        finally:
+            self._tree.blockSignals(False)
+        if count:
+            self._tree.setFocus()
+        return count
+
     # ------------------------------------------------------------------
     # Smart actions
     # ------------------------------------------------------------------
