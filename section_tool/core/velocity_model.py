@@ -59,6 +59,19 @@ _PROV_RANK = {
 }
 
 
+def conversion_caption(model) -> str | None:
+    """The single, honest caption for an applied time→depth conversion (or None
+    when no model is applied).  ``{method_label} · {provenance}`` — an *assumed*
+    bootstrap reads as a "default stretch", every other provenance shows its
+    label.  THE single source: the on-section caption and the panel footer both
+    call this, so the interface never hardcodes a parallel string."""
+    if model is None or getattr(model, "is_empty", True):
+        return None
+    prov = getattr(model, "provenance", "assumed")
+    tag = "default stretch" if prov == "assumed" else PROVENANCE_LABEL.get(prov, prov)
+    return f"{model.method_label}  ·  {tag}"
+
+
 # ---------------------------------------------------------------------------
 # Per-layer kernel (the original validated math)
 # ---------------------------------------------------------------------------

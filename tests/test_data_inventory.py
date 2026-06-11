@@ -143,9 +143,10 @@ class TestBuilders:
 class TestRecommendation:
     from section_tool.core.data_inventory import RECOMMENDATION_ORDER
 
-    def test_no_data_recommends_average_vz(self):
-        # No wells, no anchors → only bulk + average_vz; average_vz outranks bulk.
-        assert DataInventory("S").recommended_rung() == "average_vz"
+    def test_no_data_recommends_bulk(self):
+        # Empty project: only bulk + average_vz unlocked; bulk is the honest
+        # no-knowledge default (outranks average_vz).
+        assert DataInventory("S").recommended_rung() == "bulk"
 
     def test_anchors_only_recommends_layered(self):
         inv = DataInventory("S", n_tied_horizons=2)

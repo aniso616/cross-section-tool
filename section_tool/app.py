@@ -1432,12 +1432,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_depth_stretch(self) -> None:
-        """Tools → Depth Stretch: configure and apply a time→depth conversion.
+        """Convert → Depth Stretch: the recommendation-first time→depth panel.
 
         Applying installs the velocity model and re-derives seismic-tied geometry
         from its TWT anchors (depth-native stays fixed); re-render shows it.
         """
-        from section_tool.views.depth_stretch_dialog import DepthStretchDialog
+        from section_tool.views.depth_stretch_panel import DepthStretchPanel
 
         def _applied():
             try:
@@ -1453,7 +1453,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        dlg = DepthStretchDialog(self._state, on_apply=_applied, parent=self)
+        def _import(action_token: str):
+            # Launch the matching Prompt-05 importer; the panel refreshes after.
+            {
+                "checkshot": self._on_import_checkshot,
+                "las":       self._on_import_las,
+                "markers":   self._on_import_markers,
+            }.get(action_token, lambda: None)()
+
+        dlg = DepthStretchPanel(self._state, on_apply=_applied,
+                                on_import=_import, parent=self)
         dlg.exec()
 
     def _on_thermal_modeling(self) -> None:

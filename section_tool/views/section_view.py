@@ -82,16 +82,12 @@ _WELL_MAX_PERP = 2000.0   # metres
 
 
 def _conversion_caption(model) -> str | None:
-    """A short, honest caption for the active time→depth conversion, or None when
-    no model is applied.  An assumed (bootstrap) model reads as a *default
-    stretch* — the honest no-well norm — while a promoted model names its
-    provenance.  Surfaces the velocity method label on the section (DoD)."""
-    if model is None or getattr(model, "is_empty", True):
-        return None
-    tag = {"assumed": "default stretch",
-           "interpolated": "interpolated",
-           "well_calibrated": "well-tied"}.get(model.provenance, model.provenance)
-    return f"{model.method_label}  ·  {tag}"
+    """Section caption for the active time→depth conversion — delegates to the
+    single source ``velocity_model.conversion_caption`` so the caption and the
+    Depth Stretch panel footer never drift apart (one string, derived from
+    construction metadata, not parallel hardcoding)."""
+    from section_tool.core.velocity_model import conversion_caption
+    return conversion_caption(model)
 
 
 def _fm_color(fm, fallback: str) -> str:

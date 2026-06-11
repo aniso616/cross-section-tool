@@ -139,8 +139,8 @@ RECOMMENDATION_ORDER: tuple[str, ...] = (
     "sonic_anchors",     # sonic log + seismic anchors
     "marker_tied",       # tops + seismic anchors
     "layered",           # interval velocities from picked zone tops
-    "average_vz",        # v0 + k·z bootstrap
-    "bulk",              # single constant velocity — always available
+    "bulk",              # single constant velocity — the honest no-knowledge default
+    "average_vz",        # v0 + k·z bootstrap (a user choice; never auto-recommended)
 )
 
 
