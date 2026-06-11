@@ -85,6 +85,53 @@ def test_well_td_control_from_tops_and_checkshot():
     assert by_name["TopB"].twt_s == pytest.approx(1.5)
 
 
+def test_well_tie_is_not_circular_residuals_reflect_real_misfit():
+    """Discriminating test for marker-TWT soundness (conversion-validation work order).
+
+    The decisive question for "well-tied": does each marker's TWT come from an
+    INDEPENDENT measurement (a checkshot/TDR — sound), or is it computed from the
+    current model via ``depth_to_twt(marker_depth)`` (circular — the fit then
+    reproduces a number the model itself made and residuals fall to ~0 regardless
+    of the starting model)?
+
+    Here the marker TWTs are generated from a *truth* model, NOT from the
+    bootstrap, mirroring the real path (the dialog reads measured TWTs from the
+    user's marker table; ``well_td_control`` reads them from a checkshot — neither
+    is model-derived). So, against a deliberately-wrong bootstrap:
+
+      1. the marker TWT residuals are non-trivially NON-ZERO — the markers carry
+         information the bootstrap lacks (a circular feed would show ~0 here);
+      2. calibration moves (v0, k) toward the truth;
+      3. and that collapses the residuals — the fit reflects the *real* data.
+    """
+    truth_v0, truth_k = 2000.0, 0.6
+    depths = [300.0, 800.0, 1400.0, 2100.0]
+    # Independent "measured" times: generated from the TRUTH, not the bootstrap.
+    markers = _synthetic_markers(truth_v0, truth_k, depths)
+
+    # Deliberately-wrong bootstrap (a "regional default" far from the truth).
+    bootstrap = VelocityModel.average_vz(1500.0, 0.1)
+
+    # 1. Markers carry real, independent information: residuals through the WRONG
+    #    model are large. A circular implementation would make these ~0.
+    boot_resid = marker_residuals(bootstrap, markers)
+    max_boot_twt_resid = max(abs(r["twt_residual_s"]) for r in boot_resid)
+    assert max_boot_twt_resid > 0.02, (
+        "marker TWT residuals through a wrong model are ~0 — TWTs look "
+        "model-derived (circular), not independently measured")
+
+    # 2. Calibration moves (v0, k) toward the truth (not back to the bootstrap).
+    cal = calibrate_model(bootstrap, markers)
+    assert cal.layers[0].function.v0 == pytest.approx(truth_v0, rel=0.05)
+    assert cal.layers[0].function.k == pytest.approx(truth_k, rel=0.10)
+
+    # 3. ...and that collapses the residuals (the fit reflects the real misfit).
+    cal_resid = marker_residuals(cal, markers)
+    max_cal_twt_resid = max(abs(r["twt_residual_s"]) for r in cal_resid)
+    assert max_cal_twt_resid < 0.005
+    assert max_cal_twt_resid < max_boot_twt_resid / 5
+
+
 def test_calibrate_promotes_only_marker_bearing_zones():
     """Per-zone promotion: a layered model's shallow zone (with >=2 markers) is
     promoted to well-tied; the deep zone (no markers) stays assumed."""
