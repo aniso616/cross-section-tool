@@ -222,3 +222,57 @@ def test_layered_tune_keeps_horizon_glued():
     for hp, a in zip(picks, anchors):
         assert np.allclose(hp._twt_anchor, a)                                  # invariant
         assert np.allclose(hp._depths, [m_b.twt_to_depth(t) for t in hp._twt_anchor])
+
+
+# ---------------------------------------------------------------------------
+# Glue regression extended to the grounded rungs (Prompt 06): a seismic-tied
+# horizon stays glued (anchor invariant; depth follows the model) when the model
+# is swapped to a from_tdr / from_sonic model — same contract, new methods.
+# ---------------------------------------------------------------------------
+
+def _grounded_well():
+    from section_tool.core.wells import Well, LogCurve
+    from section_tool.core.grounded_velocity import _US_FT_TO_S_PER_M
+    w = Well("W", 0.0, 0.0, kb=0.0, td=3000.0)
+    md = np.arange(0.0, 3001.0, 5.0)
+    slow = (1.0 / 2000.0) / _US_FT_TO_S_PER_M          # 152 µs/ft → v=2000
+    w.add_log(LogCurve("DT", "us/ft", md, np.full_like(md, slow)))
+    return w
+
+
+def _checkshot_tdr():
+    from section_tool.core.tdr import TimeDepthRelation
+    return TimeDepthRelation([0.0, 1000.0, 2000.0, 3000.0],
+                             [0.0, 0.95, 1.90, 2.85],
+                             kind="checkshot", depth_reference="TVDSS")
+
+
+def test_from_tdr_model_keeps_horizon_glued():
+    from section_tool.core.velocity_model import VelocityModel
+    from types import SimpleNamespace
+    hp = _depth_horizon()
+    set_anchors(hp, build_bulk(2000.0))
+    anchors = hp._twt_anchor.copy()
+
+    m = VelocityModel.from_tdr(_grounded_well(), _checkshot_tdr(), setting="onshore")
+    proj = SimpleNamespace(horizon_picks=[hp], fault_picks=[])
+    restretch_project(proj, m)
+    assert np.allclose(hp._twt_anchor, anchors)                           # invariant
+    assert np.allclose(hp._depths, [m.twt_to_depth(t) for t in anchors])  # follows model
+
+
+def test_from_sonic_model_keeps_horizon_glued():
+    from section_tool.core.velocity_model import VelocityModel
+    from types import SimpleNamespace
+    w = _grounded_well()
+    w.add_tdr(_checkshot_tdr())
+    hp = _depth_horizon()
+    set_anchors(hp, build_bulk(2000.0))
+    anchors = hp._twt_anchor.copy()
+
+    for target in ("none", "checkshot"):
+        m = VelocityModel.from_sonic(w, drift_target=target, setting="onshore")
+        proj = SimpleNamespace(horizon_picks=[hp], fault_picks=[])
+        restretch_project(proj, m)
+        assert np.allclose(hp._twt_anchor, anchors)                       # invariant
+        assert np.allclose(hp._depths, [m.twt_to_depth(t) for t in anchors])

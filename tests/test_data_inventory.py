@@ -23,7 +23,9 @@ def _wd(*, sonic=False, checkshot=False, sonic_tdr=False, tops=0):
 
 def _expected(sonic, checkshot, sonic_tdr, has_tops, anchors) -> set[str]:
     tie = checkshot or sonic_tdr
-    rungs = set(ALWAYS_RUNGS)
+    rungs = set(ALWAYS_RUNGS)            # bulk + average_vz
+    if anchors:
+        rungs.add("layered")            # gated on zone tops / anchors
     if tie:
         rungs.add("checkshot")
     if sonic and tie:
@@ -136,6 +138,49 @@ class TestBuilders:
         assert inv.velocity_functions_present is True
         assert "dix" not in inv.unlocked_rungs()
         assert set(inv.unlocked_rungs()) == set(ALWAYS_RUNGS)
+
+
+class TestRecommendation:
+    from section_tool.core.data_inventory import RECOMMENDATION_ORDER
+
+    def test_no_data_recommends_average_vz(self):
+        # No wells, no anchors → only bulk + average_vz; average_vz outranks bulk.
+        assert DataInventory("S").recommended_rung() == "average_vz"
+
+    def test_anchors_only_recommends_layered(self):
+        inv = DataInventory("S", n_tied_horizons=2)
+        assert inv.recommended_rung() == "layered"
+
+    def test_tops_and_anchors_recommends_marker_tied(self):
+        inv = DataInventory("S", wells=(_wd(tops=5),), n_tied_horizons=2)
+        assert inv.recommended_rung() == "marker_tied"
+
+    def test_sonic_anchors_over_marker_tied(self):
+        inv = DataInventory("S", wells=(_wd(sonic=True, tops=5),), n_tied_horizons=2)
+        assert inv.recommended_rung() == "sonic_anchors"
+
+    def test_checkshot_over_sonic_anchors_when_no_sonic_tie_pair(self):
+        # Sonic in one well, checkshot in another, anchors present:
+        # sonic_checkshot NOT unlocked (needs same well); checkshot + sonic_anchors
+        # are. checkshot outranks sonic_anchors.
+        inv = DataInventory(
+            "S", wells=(_wd(sonic=True), _wd(checkshot=True)), n_tied_horizons=1)
+        assert inv.recommended_rung() == "checkshot"
+
+    def test_sonic_checkshot_is_top(self):
+        inv = DataInventory(
+            "S", wells=(_wd(sonic=True, checkshot=True, tops=5),), n_tied_horizons=3)
+        assert inv.recommended_rung() == "sonic_checkshot"
+
+    def test_recommended_always_in_unlocked(self):
+        for combo in itertools.product([False, True], repeat=5):
+            sonic, checkshot, sonic_tdr, has_tops, anchors = combo
+            inv = DataInventory(
+                "S",
+                wells=(_wd(sonic=sonic, checkshot=checkshot, sonic_tdr=sonic_tdr,
+                           tops=(3 if has_tops else 0)),),
+                n_tied_horizons=(2 if anchors else 0))
+            assert inv.recommended_rung() in inv.unlocked_rungs()
 
 
 class TestCorridor:

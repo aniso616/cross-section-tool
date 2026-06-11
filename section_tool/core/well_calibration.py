@@ -139,6 +139,77 @@ def calibrate_model(model: VelocityModel, markers, *, robust: bool = True) -> Ve
                                  "n_markers": len(list(markers))}})
 
 
+def resolve_marker_twt(depth_m: float, *, checkshot=None,
+                       anchor_twt: float | None = None) -> tuple[float | None, str]:
+    """The single, canonical source of a marker's TWT for well-tied calibration.
+
+    Priority (Part A permanent fix — TWT is always an INDEPENDENT measurement,
+    NEVER ``depth_to_twt(depth)`` off the current model):
+
+    1. **Checkshot / TDR lookup** at the marker's depth (m, section frame) when a
+       TDR covers it → an independent measured time.
+    2. else the **matching picked horizon's ``twt_anchor``** (independent
+       reflector tie) when supplied.
+    3. else ``None`` — the marker has no independent TWT and must be EXCLUDED
+       from the fit (the caller flags it).
+
+    Returns ``(twt_s | None, source)`` where source ∈ {checkshot, horizon_anchor,
+    excluded}.
+    """
+    if checkshot is not None:
+        lo, hi = checkshot.depth_range()
+        if lo - 1e-6 <= depth_m <= hi + 1e-6:
+            return float(checkshot.twt_at_depth(depth_m)), "checkshot"
+    if anchor_twt is not None and np.isfinite(anchor_twt):
+        return float(anchor_twt), "horizon_anchor"
+    return None, "excluded"
+
+
+def _anchor_lookup(picks) -> dict:
+    """name / formation_below → median ``twt_anchor`` for seismic-tied picks."""
+    out: dict[str, float] = {}
+    for hp in picks or []:
+        if not getattr(hp, "seismic_tied", False):
+            continue
+        anch = getattr(hp, "_twt_anchor", None)
+        if anch is None or len(anch) == 0:
+            continue
+        t = float(np.nanmedian(np.asarray(anch, dtype=float)))
+        if t != t:                       # all-NaN
+            continue
+        for key in (getattr(hp, "name", ""), getattr(hp, "formation_below", "")):
+            if key:
+                out.setdefault(key, t)
+    return out
+
+
+def build_well_markers(well, picks=None, *, checkshot=None) -> tuple[list[Marker], dict]:
+    """Markers for well-tied calibration, TWT sourced by :func:`resolve_marker_twt`.
+
+    Marker depth is the formation top's MD brought to the section frame (TVDSS)
+    through the well's deviation; TWT comes from the checkshot/TDR (or a matching
+    horizon anchor), never the model.  Markers with no independent TWT are
+    excluded and listed in the report.
+
+    Returns ``(markers, report)``; report = ``{"used": [...], "excluded": [...]}``.
+    """
+    cs = checkshot if checkshot is not None else (
+        well.primary_checkshot() if hasattr(well, "primary_checkshot") else None)
+    anchors = _anchor_lookup(picks)
+    markers: list[Marker] = []
+    report: dict = {"used": [], "excluded": []}
+    for name, md in sorted(well.formation_tops.items(), key=lambda kv: kv[1]):
+        tvdss = float(well.deviation.tvd_at_md(float(md))) - float(well.kb)
+        twt, source = resolve_marker_twt(
+            tvdss, checkshot=cs, anchor_twt=anchors.get(name))
+        if twt is None:
+            report["excluded"].append({"name": name, "md": float(md)})
+            continue
+        markers.append(Marker(tvdss, twt, name))
+        report["used"].append({"name": name, "twt_s": twt, "source": source})
+    return markers, report
+
+
 def well_td_control(well, checkshot) -> list[Marker]:
     """Build T-D markers from a well's formation tops + a *checkshot*.
 

@@ -100,7 +100,11 @@ class DataInventory:
 
     def unlocked_rungs(self) -> frozenset[str]:
         """Deterministic inventory → available rungs (a SET, supersets allowed)."""
-        rungs = {"bulk", "average", "layered"}      # always
+        rungs = set(ALWAYS_RUNGS)                    # bulk + average_vz, always
+        # 'layered' needs zone tops, i.e. seismic-tied picks (build_layered_from_
+        # formations raises without them) — so it is gated on anchors, not free.
+        if self.has_anchors:
+            rungs.add("layered")
         if self.any_td_tie:
             rungs.add("checkshot")
         if self.any_sonic_with_tie:
@@ -112,9 +116,32 @@ class DataInventory:
         # velocity_functions_present → Dix: reserved, not mapped yet (Prompt 08).
         return frozenset(rungs)
 
+    def recommended_rung(self) -> str:
+        """The single best available rung — highest in RECOMMENDATION_ORDER that
+        is unlocked. Deterministic; always returns at least ``bulk``."""
+        unlocked = self.unlocked_rungs()
+        for rung in RECOMMENDATION_ORDER:
+            if rung in unlocked:
+                return rung
+        return "bulk"
+
 
 # Methods that need no data — the floor of the ladder, always available.
-ALWAYS_RUNGS = frozenset({"bulk", "average", "layered"})
+# ('layered' is NOT here: it needs zone tops / seismic anchors — see unlocked_rungs.)
+ALWAYS_RUNGS = frozenset({"bulk", "average_vz"})
+
+# Composed precedence, top (most grounded) → bottom (least). recommended_rung()
+# returns the highest unlocked entry. The grounded rungs sit above the
+# interpretation/bootstrap rungs.
+RECOMMENDATION_ORDER: tuple[str, ...] = (
+    "sonic_checkshot",   # sonic log + a tie (drift-corrected) — best
+    "checkshot",         # a depth↔twt tie alone
+    "sonic_anchors",     # sonic log + seismic anchors
+    "marker_tied",       # tops + seismic anchors
+    "layered",           # interval velocities from picked zone tops
+    "average_vz",        # v0 + k·z bootstrap
+    "bulk",              # single constant velocity — always available
+)
 
 
 def build_well_data(well) -> WellData:

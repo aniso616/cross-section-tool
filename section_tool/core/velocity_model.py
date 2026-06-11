@@ -22,6 +22,8 @@ from __future__ import annotations
 import math
 from typing import Literal
 
+import numpy as np
+
 from section_tool.core.surfaces import new_entity_uuid
 
 SCHEMA_VERSION = 2
@@ -293,6 +295,22 @@ class VelocityModel:
             uuid=d.get("uuid"),
             construction=d.get("construction"),
         )
+
+    # ---- grounded constructors (data-driven rungs; logic in grounded_velocity) ----
+
+    @classmethod
+    def from_tdr(cls, well, tdr, **kw) -> "VelocityModel":
+        """Checkshot-tied: reproduce a TimeDepthRelation's knots with interval
+        velocities. See :func:`grounded_velocity.build_from_tdr`."""
+        from section_tool.core.grounded_velocity import build_from_tdr
+        return build_from_tdr(well, tdr, **kw)
+
+    @classmethod
+    def from_sonic(cls, well, curve=None, drift_target="none", **kw) -> "VelocityModel":
+        """Sonic V(z): integrate a sonic log, optionally drift-corrected.
+        See :func:`grounded_velocity.build_from_sonic`."""
+        from section_tool.core.grounded_velocity import build_from_sonic
+        return build_from_sonic(well, curve=curve, drift_target=drift_target, **kw)
 
     def __repr__(self) -> str:
         return (f"VelocityModel(layers={len(self.layers)}, "
