@@ -593,6 +593,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(zfit_a)
         view_menu.addSeparator()
         self._build_basemap_menu(view_menu)
+        self._build_elevation_menu(view_menu)
         view_menu.addSeparator()
         self._vd_action = QAction("Variable &Density Display", self)
         self._vd_action.triggered.connect(
@@ -3041,6 +3042,112 @@ class MainWindow(QMainWindow):
         current = self._map_view.basemap_source()
         for key, act in actions.items():
             act.setChecked(key == current)
+
+    # ------------------------------------------------------------------
+    # View ▸ Elevation (DEM hillshade)
+    # ------------------------------------------------------------------
+
+    def _build_elevation_menu(self, view_menu) -> None:
+        """View ▸ Elevation — fetch a DEM for the current extent + hillshade toggle."""
+        from PySide6.QtWidgets import QMenu as _QMenu
+        from section_tool.core.dem import dem_available, unavailable_reason
+        menu = _QMenu("&Elevation", self)
+        if not dem_available():
+            a = QAction(unavailable_reason(), self)
+            a.setEnabled(False)
+            menu.addAction(a)
+            view_menu.addMenu(menu)
+            return
+        fetch_a = QAction("&Fetch DEM for Current Extent…", self)
+        fetch_a.triggered.connect(self._on_fetch_dem)
+        menu.addAction(fetch_a)
+        menu.addSeparator()
+        self._hillshade_action = QAction("Show &Hillshade", self)
+        self._hillshade_action.setCheckable(True)
+        self._hillshade_action.setChecked(True)
+        self._hillshade_action.toggled.connect(self._map_view.set_hillshade_visible)
+        menu.addAction(self._hillshade_action)
+        view_menu.addMenu(menu)
+        # Status feedback when an off-thread fetch lands.
+        self._map_view._dem.loaded.connect(
+            lambda: self._flash_status("DEM loaded — hillshade on"))
+
+    def _on_fetch_dem(self) -> None:
+        """Explicit, confirmed DEM fetch for the current map extent."""
+        from PySide6.QtWidgets import (
+            QDialog, QComboBox, QFormLayout, QLabel, QLineEdit, QDialogButtonBox)
+        from section_tool.core.dem import DEM_SOURCES, DEM_SOURCE_ORDER
+
+        epsg = int(getattr(self._state.project, "crs_epsg", 0) or 0)
+        if not epsg:
+            QMessageBox.information(self, "Fetch DEM",
+                                    "Set a projected CRS for the project first.")
+            return
+        x0, x1, y0, y1 = self._map_view._basemap_extent()
+        span_x, span_y = abs(x1 - x0), abs(y1 - y0)
+        px = int(span_x / 30.0) * int(span_y / 30.0)        # ~30 m GSD estimate
+        size_mb = max(px * 4 / 1e6, 0.01)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Fetch DEM for Current Extent")
+        form = QFormLayout(dlg)
+        src_combo = QComboBox()
+        for key in DEM_SOURCE_ORDER:
+            src_combo.addItem(DEM_SOURCES[key].label, key)
+        form.addRow("Source:", src_combo)
+        key_edit = QLineEdit()
+        key_edit.setText(self._dem_api_key())
+        key_edit.setPlaceholderText("OpenTopography API key")
+        key_row_label = QLabel("API key:")
+        form.addRow(key_row_label, key_edit)
+        info = QLabel()
+        info.setWordWrap(True)
+        form.addRow(info)
+
+        def _refresh(_=0):
+            key = src_combo.currentData()
+            src = DEM_SOURCES[key]
+            needs = src.needs_key
+            key_edit.setVisible(needs)
+            key_row_label.setVisible(needs)
+            info.setText(
+                f"<b>{src.label}</b><br>{src.note}<br>"
+                f"Extent ≈ {span_x/1000:.1f} × {span_y/1000:.1f} km · "
+                f"~{px:,} px (~{size_mb:.1f} MB) · warped to EPSG:{epsg}.<br>"
+                f"<i>This downloads data from the network.</i>")
+        src_combo.currentIndexChanged.connect(_refresh)
+        _refresh()
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                              QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Fetch")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        source_key = src_combo.currentData()
+        api_key = key_edit.text().strip() or None
+        if DEM_SOURCES[source_key].needs_key:
+            if not api_key:
+                QMessageBox.warning(self, "Fetch DEM",
+                                    f"{DEM_SOURCES[source_key].label} needs an "
+                                    "OpenTopography API key.")
+                return
+            self._set_dem_api_key(api_key)          # stored locally, never committed
+        self._flash_status(f"Fetching DEM: {DEM_SOURCES[source_key].label}…")
+        self._map_view.fetch_dem_for_extent(source_key, api_key=api_key)
+
+    def _dem_api_key(self) -> str:
+        from PySide6.QtCore import QSettings
+        return QSettings("Geoscience", MainWindow.APP_NAME).value(
+            "opentopography_api_key", "", str)
+
+    def _set_dem_api_key(self, key: str) -> None:
+        from PySide6.QtCore import QSettings
+        QSettings("Geoscience", MainWindow.APP_NAME).setValue(
+            "opentopography_api_key", key)
 
     def _on_map_status(self, msg: str) -> None:
         # In the game UI the old _status_label is an orphaned, invisible stub;

@@ -622,3 +622,53 @@ class TestBasemapMenuEndToEnd:
         assert win._map_view.basemap_source() == "none"
         if getattr(win, "_basemap_actions", None):
             assert win._basemap_actions["none"].isChecked()
+
+
+# ---------------------------------------------------------------------------
+# DEM fetch + hillshade on a REAL MainWindow (offscreen, network mocked).
+# ---------------------------------------------------------------------------
+
+class TestDemFetchEndToEnd:
+    def test_fetch_dem_loads_hillshade(self, win, state, tmp_path):
+        import numpy as np
+        rasterio = pytest.importorskip("rasterio")
+        from rasterio.transform import from_bounds as _affine
+        from section_tool.core.crs import transform_points
+
+        lon0, lon1, lat0, lat1 = 4.0, 5.0, 54.0, 55.0
+        src = tmp_path / "src.tif"
+        h = w = 32
+        elev = np.tile((np.linspace(lon0, lon1, w) - lon0) * 1000.0,
+                       (h, 1)).astype("float32")
+        with rasterio.open(src, "w", driver="GTiff", height=h, width=w, count=1,
+                           dtype="float32", crs="EPSG:4326",
+                           transform=_affine(lon0, lat0, lon1, lat1, w, h),
+                           nodata=-9999.0) as ds:
+            ds.write(elev, 1)
+
+        state.project.crs_epsg = 32631
+        ex, ny = transform_points([lon0, lon1], [lat0, lat1], 4326, 32631)
+        state.add_section(Section([(ex[0], ny[0]), (ex[1], ny[1])],
+                                  name="L1", crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+
+        class _Ctx:
+            def __enter__(self): self._ds = rasterio.open(src); return self._ds
+            def __exit__(self, *a): self._ds.close()
+
+        # Network mocked: the opener yields the local fixture.
+        win._map_view._dem.fetch(
+            "copernicus", win._map_view._basemap_extent(), 32631,
+            str(tmp_path / "dem" / "elevation.tif"),
+            opener=lambda *a, **k: _Ctx())
+        win._map_view._dem._last_thread.join(timeout=10)
+        QApplication.processEvents()
+
+        assert win._map_view.has_dem()
+        win._map_view.render()
+        assert win._map_view._ax.get_images()              # hillshade drawn
+
+        # Hillshade toggle hides it.
+        win._map_view.set_hillshade_visible(False)
+        assert win._map_view._ax.get_images() == []
+        assert win._map_view.hillshade_visible() is False

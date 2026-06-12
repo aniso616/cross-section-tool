@@ -118,6 +118,12 @@ class MapView(QWidget):
         self._basemap_settle_timer.setInterval(300)
         self._basemap_settle_timer.timeout.connect(self._fetch_basemap)
 
+        # ---- hillshaded DEM underlay (fetched only on explicit request) ----
+        from section_tool.views.map_dem_layer import MapDemLayer
+        self._dem = MapDemLayer(parent=self)
+        self._dem.loaded.connect(self.request_render)
+        self._dem.failed.connect(lambda m: self.status_message.emit(f"DEM: {m}"))
+
         self._setup_ui()
         self._connect_signals()
 
@@ -245,6 +251,38 @@ class MapView(QWidget):
         self._basemap.set_source(key)
         if key != "none":
             self._schedule_basemap_fetch()
+
+    # ------------------------------------------------------------------
+    # Hillshaded DEM underlay (explicit fetch only)
+    # ------------------------------------------------------------------
+
+    def dem_path(self) -> str:
+        from section_tool.core.dem import dem_path_for_project
+        return dem_path_for_project(self._state.project_path)
+
+    def fetch_dem_for_extent(self, source_key: str, api_key: str | None = None,
+                             opener=None) -> None:
+        """Fetch a DEM for the current map extent (explicit user request)."""
+        epsg = getattr(self._state.project, "crs_epsg", 0)
+        self._dem.fetch(source_key, self._basemap_extent(), int(epsg or 0),
+                        self.dem_path(), api_key=api_key, opener=opener)
+
+    def set_hillshade_visible(self, on: bool) -> None:
+        self._dem.set_visible(on)
+        self.render()
+
+    def hillshade_visible(self) -> bool:
+        return self._dem.visible
+
+    def has_dem(self) -> bool:
+        return self._dem.has_hillshade()
+
+    def load_dem_from_project(self) -> None:
+        """Load this project's previously-stored DEM, if any (no fetch)."""
+        import os
+        p = self.dem_path()
+        if os.path.exists(p) and self._dem.load_geotiff(p):
+            self.request_render()
 
     def _render_vector_layers(self) -> None:
         """Render imported vector layers (shapefiles, geopackages, GeoJSON)."""
@@ -394,6 +432,7 @@ class MapView(QWidget):
         # and every data/AOI/section trace. The cached warped image is re-blitted
         # each render; the network fetch happens only on settle (_fetch_basemap).
         self._basemap.render(self._ax)
+        self._dem.render(self._ax)          # hillshade above basemap, under data
 
         self._render_vector_layers()
         self._render_seismic_coverage()
@@ -1168,7 +1207,9 @@ class MapView(QWidget):
         """Reset saved zoom on project load/new so map fits all new data."""
         self._saved_xlim = None
         self._saved_ylim = None
+        self._dem.clear()
         self.load_basemap_from_project()       # restore persisted basemap (default None)
+        self.load_dem_from_project()           # restore a previously-fetched DEM
         self.request_render()
 
     def _on_sections_changed(self, *_args) -> None:
