@@ -107,6 +107,17 @@ class MapView(QWidget):
         self._redraw_timer.setInterval(50)   # max 20 redraws/sec from signals
         self._redraw_timer.timeout.connect(self.render)
 
+        # ---- basemap underlay (web tiles warped to the project CRS) ----
+        # Fetch only on extent-settle (debounced), never on every pan tick —
+        # the same settle idea as the seismic resample-on-settle.
+        from section_tool.views.map_basemap_layer import MapBasemapLayer
+        self._basemap = MapBasemapLayer(parent=self)
+        self._basemap.updated.connect(self.request_render)
+        self._basemap_settle_timer = QTimer(self)
+        self._basemap_settle_timer.setSingleShot(True)
+        self._basemap_settle_timer.setInterval(300)
+        self._basemap_settle_timer.timeout.connect(self._fetch_basemap)
+
         self._setup_ui()
         self._connect_signals()
 
@@ -188,6 +199,52 @@ class MapView(QWidget):
     def set_grid_visible(self, visible: bool) -> None:
         self._show_grid = visible
         self.render()
+
+    # ------------------------------------------------------------------
+    # Basemap underlay
+    # ------------------------------------------------------------------
+
+    def _basemap_extent(self) -> tuple[float, float, float, float]:
+        xl = self._ax.get_xlim()
+        yl = self._ax.get_ylim()
+        return (float(xl[0]), float(xl[1]), float(min(yl)), float(max(yl)))
+
+    def _project_id(self) -> str:
+        # Project identity in the cache key — the cross-project collision lesson.
+        return self._state.project_path or "unsaved"
+
+    def _schedule_basemap_fetch(self) -> None:
+        """Debounced fetch after the extent settles — never on every pan tick."""
+        if self._basemap.source_key == "none":
+            return
+        self._basemap_settle_timer.start()
+
+    def _fetch_basemap(self) -> None:
+        epsg = getattr(self._state.project, "crs_epsg", 0)
+        try:
+            self._basemap.request(self._project_id(), int(epsg or 0),
+                                  self._basemap_extent())
+        except Exception:
+            pass
+
+    def set_basemap_source(self, key: str) -> None:
+        """Select the basemap source, persist it per project, fetch on settle."""
+        self._basemap.set_source(key)
+        self._state.set_meta("basemap_source", key)
+        if key == "none":
+            self.render()                  # drop the underlay immediately
+        else:
+            self._schedule_basemap_fetch()
+
+    def basemap_source(self) -> str:
+        return self._basemap.source_key
+
+    def load_basemap_from_project(self) -> None:
+        """Restore the persisted basemap source on project open (default None)."""
+        key = self._state.get_meta("basemap_source", "none") or "none"
+        self._basemap.set_source(key)
+        if key != "none":
+            self._schedule_basemap_fetch()
 
     def _render_vector_layers(self) -> None:
         """Render imported vector layers (shapefiles, geopackages, GeoJSON)."""
@@ -279,6 +336,7 @@ class MapView(QWidget):
         self._saved_ylim = None
         self._apply_map_limits()
         self._canvas.draw_idle()
+        self._schedule_basemap_fetch()         # fetch tiles for the fitted extent
 
     # ------------------------------------------------------------------
     # Rendering
@@ -332,6 +390,11 @@ class MapView(QWidget):
         self._crosshair_artists = []   # reset after clear
         self._configure_axes(self._ax)
 
+        # Basemap underlay first, at the most negative zorder — under the grid
+        # and every data/AOI/section trace. The cached warped image is re-blitted
+        # each render; the network fetch happens only on settle (_fetch_basemap).
+        self._basemap.render(self._ax)
+
         self._render_vector_layers()
         self._render_seismic_coverage()
         self._render_surfaces()
@@ -354,6 +417,10 @@ class MapView(QWidget):
             self._ax.set_ylim(self._saved_ylim)
 
         self._render_graticule()
+        # Re-assert 1:1 after the basemap (and any future raster) imshow, which
+        # can reset the axes aspect — the map must stay equal/datalim (regression
+        # guarded by test_map_basemap). Cheap; mirrors the section-view VE fix.
+        self._ax.set_aspect("equal", adjustable="datalim")
         self._canvas.draw_idle()
         self.view_changed.emit()
 
@@ -725,6 +792,8 @@ class MapView(QWidget):
         self._canvas.draw_idle()
 
     def _end_pan(self) -> None:
+        if self._pan_anchor is not None:
+            self._schedule_basemap_fetch()     # re-fetch tiles once the pan settles
         self._pan_anchor = None
 
     # ------------------------------------------------------------------
@@ -952,6 +1021,7 @@ class MapView(QWidget):
         self._saved_xlim = self._ax.get_xlim()
         self._saved_ylim = self._ax.get_ylim()
         self._canvas.draw_idle()
+        self._schedule_basemap_fetch()         # re-fetch tiles once zoom settles
 
     def _on_key_press(self, event) -> None:
         if event.key == "escape":
@@ -1098,6 +1168,7 @@ class MapView(QWidget):
         """Reset saved zoom on project load/new so map fits all new data."""
         self._saved_xlim = None
         self._saved_ylim = None
+        self.load_basemap_from_project()       # restore persisted basemap (default None)
         self.request_render()
 
     def _on_sections_changed(self, *_args) -> None:

@@ -571,3 +571,54 @@ class TestImportTdrEndToEnd:
         self._setup(win, state, p, monkeypatch, accept=False)
         win._on_import_tdr()
         assert len(state.project.wells[0].tdrs) == 0
+
+
+# ---------------------------------------------------------------------------
+# View ▸ Basemap on a REAL MainWindow (offscreen, network mocked) — the
+# real-window integration the stub-window gap kept missing.
+# ---------------------------------------------------------------------------
+
+class TestBasemapMenuEndToEnd:
+    def test_select_basemap_fetches_and_persists(self, win, state, monkeypatch):
+        import numpy as np
+        from section_tool.views.map_basemap_layer import basemap_available
+        if not basemap_available():
+            import pytest as _pt
+            _pt.skip("contextily not installed")
+        state.project.crs_epsg = 32631                 # authoritative project CRS (F3)
+        state.add_section(Section([(606000, 6080000), (610000, 6082000)],
+                                  name="L1", crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+
+        fetched = {"n": 0, "epsg": None}
+
+        def fake_fetch(provider, epsg, extent, zoom):
+            fetched["n"] += 1
+            fetched["epsg"] = epsg
+            return np.zeros((8, 8, 3), dtype=np.uint8), tuple(map(float, extent))
+
+        win._map_view._basemap._fetch_fn = fake_fetch
+        meta_writes = []
+        monkeypatch.setattr(state, "set_meta",
+                            lambda k, v: meta_writes.append((k, v)))
+
+        win._basemap_actions["satellite"].trigger()    # drive the real menu action
+        assert win._map_view.basemap_source() == "satellite"
+        assert ("basemap_source", "satellite") in meta_writes   # persisted per project
+        assert win._basemap_actions["satellite"].isChecked()
+
+        win._map_view._fetch_basemap()                 # what the settle timer fires
+        win._map_view._basemap._last_thread.join(timeout=5)
+        assert fetched["n"] == 1
+        assert fetched["epsg"] == 32631                # warped to the PROJECT CRS
+        assert win._map_view._basemap.has_image()
+
+        # Toggling back to None drops the underlay and never fetches.
+        win._basemap_actions["none"].trigger()
+        assert win._map_view.basemap_source() == "none"
+        assert not win._map_view._basemap.has_image()
+
+    def test_basemap_menu_default_is_none(self, win):
+        assert win._map_view.basemap_source() == "none"
+        if getattr(win, "_basemap_actions", None):
+            assert win._basemap_actions["none"].isChecked()

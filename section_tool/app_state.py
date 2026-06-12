@@ -221,6 +221,21 @@ class AppState(QObject):
             except Exception:
                 pass
 
+    def get_meta(self, key: str, default: str = "") -> str:
+        """Read a per-project metadata value (project_meta key-value store).
+
+        Returns *default* for in-memory projects with no database open."""
+        if self._pm.is_open:
+            try:
+                return self._pm.db.get_meta(key, default)
+            except Exception:
+                return default
+        return default
+
+    def set_meta(self, key: str, value) -> None:
+        """Persist a per-project metadata value (no-op for in-memory projects)."""
+        self._db_write(lambda: self._pm.db.set_meta(key, str(value)))
+
     # ------------------------------------------------------------------
     # Read-only properties
     # ------------------------------------------------------------------

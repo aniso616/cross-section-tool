@@ -592,6 +592,8 @@ class MainWindow(QMainWindow):
         zfit_a.triggered.connect(self._zoom_to_fit)
         view_menu.addAction(zfit_a)
         view_menu.addSeparator()
+        self._build_basemap_menu(view_menu)
+        view_menu.addSeparator()
         self._vd_action = QAction("Variable &Density Display", self)
         self._vd_action.triggered.connect(
             lambda: self._section_view.set_display_mode("variable_density"))
@@ -883,6 +885,8 @@ class MainWindow(QMainWindow):
         s.fault_pick_added.connect(lambda _: self._update_tool_availability())
         s.fault_pick_removed.connect(lambda _: self._update_tool_availability())
         s.project_changed.connect(self._update_tool_availability)
+        # Reflect the project's restored basemap source in the menu checkmarks.
+        s.project_changed.connect(self._sync_basemap_menu)
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
@@ -2991,6 +2995,52 @@ class MainWindow(QMainWindow):
             return
         self._status_label.setText(msg)
         QTimer.singleShot(2000, self._update_status)
+
+    def _build_basemap_menu(self, view_menu) -> None:
+        """View ▸ Basemap submenu — None / Satellite / OSM / OpenTopo (exclusive).
+
+        Default None (no surprise network on open). When contextily is absent the
+        submenu shows a single disabled "install contextily" entry rather than
+        crashing."""
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu as _QMenu
+        from section_tool.views.map_basemap_layer import (
+            BASEMAP_ORDER, BASEMAP_LABELS, basemap_available, unavailable_reason)
+        menu = _QMenu("&Basemap", self)
+        self._basemap_actions = {}
+        if not basemap_available():
+            a = QAction(unavailable_reason(), self)
+            a.setEnabled(False)
+            menu.addAction(a)
+            view_menu.addMenu(menu)
+            return
+        self._basemap_action_group = QActionGroup(self)
+        self._basemap_action_group.setExclusive(True)
+        for key in BASEMAP_ORDER:
+            act = QAction(BASEMAP_LABELS.get(key, key), self)
+            act.setCheckable(True)
+            act.setChecked(key == "none")
+            act.triggered.connect(
+                lambda _checked=False, k=key: self._on_basemap_selected(k))
+            self._basemap_action_group.addAction(act)
+            self._basemap_actions[key] = act
+            menu.addAction(act)
+        view_menu.addMenu(menu)
+
+    def _on_basemap_selected(self, key: str) -> None:
+        from section_tool.views.map_basemap_layer import BASEMAP_LABELS
+        self._map_view.set_basemap_source(key)
+        if key != "none":
+            self._flash_status(f"Basemap: {BASEMAP_LABELS.get(key, key)} — fetching…")
+
+    def _sync_basemap_menu(self) -> None:
+        """Reflect the project's restored basemap source in the menu checkmarks."""
+        actions = getattr(self, "_basemap_actions", None)
+        if not actions:
+            return
+        current = self._map_view.basemap_source()
+        for key, act in actions.items():
+            act.setChecked(key == current)
 
     def _on_map_status(self, msg: str) -> None:
         # In the game UI the old _status_label is an orphaned, invisible stub;
