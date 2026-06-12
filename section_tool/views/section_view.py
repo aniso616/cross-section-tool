@@ -1404,7 +1404,6 @@ class SectionView(QWidget):
         self._render_annotations(section)
         self._render_depth_scale(section)
         self._render_distance_scale(section)
-        self._render_seismic_watermark(section)
 
     # ------------------------------------------------------------------
     # Axis setup
@@ -1630,27 +1629,6 @@ class SectionView(QWidget):
         self._ax.xaxis.set_major_locator(MultipleLocator(x_interval))
         self._ax.yaxis.set_major_locator(MultipleLocator(y_interval))
         self._ax.ticklabel_format(style="plain", axis="both")
-
-    def _render_seismic_watermark(self, section: Section) -> None:
-        sds = getattr(section, "seismic_display", None)
-        if sds is None or sds.stretch_mode != "linear":
-            return
-        has_twt = any(
-            (ds := self._seismic_cache.get(ref.path)) is not None
-            and getattr(ds, "domain", "") == "twt"
-            for ref in self._state.project.seismic_refs
-        )
-        ex_data, ex_meta = self._state.get_seismic_for_section(section.name)
-        if not has_twt and not (ex_meta and ex_meta.get("domain") == "twt"):
-            return
-        self._overlay_artists.append(
-            self._ax.text(
-                0.99, 0.01,
-                f"Linear stretch  V = {sds.constant_velocity:.0f} m/s",
-                fontsize=7, color="#999999", style="italic",
-                ha="right", va="bottom", zorder=20,
-                transform=self._ax.transAxes,
-            ))
 
     def _render_annotations(self, section: Section) -> None:
         for ann in self._state.project.annotations:

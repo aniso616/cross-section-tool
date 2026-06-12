@@ -659,6 +659,37 @@ def test_conversion_caption():
     assert "well-tied" in _conversion_caption(calibrated)
 
 
+def test_only_single_source_stretch_caption_on_section(qapp):
+    """One section, one stretch caption, one source. The stale 'Linear stretch
+    V=…' watermark (which diverged from the footer once a real model applied) is
+    gone; the only velocity/stretch description on the axes is conversion_caption."""
+    from section_tool.app_state import AppState
+    from section_tool.core.section import Section
+    from section_tool.core.seismic_settings import SeismicDisplaySettings
+    from section_tool.core.velocity_model import VelocityModel, conversion_caption
+    from section_tool.views.section_view import SectionView
+
+    state = AppState()
+    sec = Section([(0.0, 0.0), (3000.0, 0.0)], name="L1")
+    sec.seismic_display = SeismicDisplaySettings(stretch_mode="linear",
+                                                 constant_velocity=2000.0)
+    state.add_section(sec)
+    state.set_active_section(sec)
+    view = SectionView(state)
+    # An applied model owns the caption; recreate the TWT condition that used to
+    # trigger the second 'Linear stretch' watermark.
+    model = VelocityModel.bulk(2400.0)
+    state.project.velocity_model = model
+    view._state.get_seismic_for_section = lambda *a, **k: (None, {"domain": "twt"})
+    view.render()
+
+    texts = [t.get_text() for t in view.axes.texts]
+    assert not any("Linear stretch" in s for s in texts)         # no stale watermark
+    cap = conversion_caption(model)
+    stretch_like = [s for s in texts if "m/s" in s or "stretch" in s.lower()]
+    assert stretch_like == [cap]                                  # exactly the one source
+
+
 # ---------------------------------------------------------------------------
 # Segment intersection helper
 # ---------------------------------------------------------------------------
