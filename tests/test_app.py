@@ -513,3 +513,61 @@ class TestPickChainGuard:
         # The project panel must have at least one receiver for add_requested
         panel = win._project_panel
         assert panel.add_requested is not None  # signal object exists
+
+
+# ---------------------------------------------------------------------------
+# Import Time–Depth Data: end-to-end on a REAL window (regression — the
+# handler reached for a phantom self._statusbar and crashed AFTER the well was
+# committed, so a successful import looked like an Unexpected Error).
+# ---------------------------------------------------------------------------
+
+_TD_TXT = "30\t0\n553.6\t0.544\n1695\t1.67\n3150\t3.234\n"   # depth-MD, TWT-s
+
+
+def _well_F0201():
+    from section_tool.core.wells import Well
+    return Well("F02-01", 606554.0, 6080126.0, kb=30.0, td=3200.0)
+
+
+class TestImportTdrEndToEnd:
+    def _setup(self, win, state, td_path, monkeypatch, accept=True):
+        from PySide6.QtWidgets import QFileDialog, QDialog
+        from section_tool.views import tdr_import_dialog as tdrdlg
+        state.add_section(Section([(0, 0), (3000, 0)], name="L1"))
+        state.set_active_section(state.project.sections[0])
+        state.add_well(_well_F0201())
+        monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                            staticmethod(lambda *a, **k: (str(td_path), "")))
+        code = (QDialog.DialogCode.Accepted if accept
+                else QDialog.DialogCode.Rejected)
+        monkeypatch.setattr(tdrdlg.TdrImportDialog, "exec", lambda self: code)
+
+    def test_import_tdr_does_not_crash_and_lands(self, win, state, tmp_path,
+                                                 monkeypatch):
+        p = tmp_path / "F02-01_TD.txt"; p.write_text(_TD_TXT, encoding="utf-8")
+        self._setup(win, state, p, monkeypatch)
+        win._on_import_tdr()                       # must NOT raise (the _statusbar bug)
+        tdrs = state.project.wells[0].tdrs
+        assert len(tdrs) == 1
+        assert tdrs[0].kind == "checkshot"
+        assert tdrs[0].source == "F02-01_TD.txt"
+
+    def test_failed_import_leaves_zero_tdr_rows(self, win, state, tmp_path,
+                                                monkeypatch):
+        # A file that parses but whose load raises (non-monotonic TWT) must leave
+        # the well clean — the import commits only after a successful load.
+        bad = tmp_path / "bad.txt"
+        bad.write_text("0\t1.0\n100\t0.5\n200\t2.0\n", encoding="utf-8")  # TWT dips
+        self._setup(win, state, bad, monkeypatch)
+        from PySide6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, "warning",
+                            staticmethod(lambda *a, **k: None))  # don't block on the error
+        win._on_import_tdr()
+        assert len(state.project.wells[0].tdrs) == 0
+
+    def test_cancelled_dialog_imports_nothing(self, win, state, tmp_path,
+                                              monkeypatch):
+        p = tmp_path / "F02-01_TD.txt"; p.write_text(_TD_TXT, encoding="utf-8")
+        self._setup(win, state, p, monkeypatch, accept=False)
+        win._on_import_tdr()
+        assert len(state.project.wells[0].tdrs) == 0

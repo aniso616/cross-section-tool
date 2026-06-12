@@ -1203,9 +1203,8 @@ class MainWindow(QMainWindow):
             wells = self._state.project.wells
             if last_idx < len(wells):
                 self._map_view.start_place_well(last_idx)
-                self._statusbar.showMessage(
-                    f"Click on the map to place well '{wells[last_idx].name}'", 0
-                )
+                self._flash_status(
+                    f"Click on the map to place well '{wells[last_idx].name}'")
 
     def _build_well_from_dialog(self, dlg, las, header, max_samples: int):
         """Construct a Well from a completed LASImportDialog."""
@@ -1942,8 +1941,7 @@ class MainWindow(QMainWindow):
                                     "No markers found in the file.")
             return
         self._state.update_well(idx, updated)
-        self._statusbar.showMessage(
-            f"Imported {n} formation markers into {well.name}.", 5000)
+        self._flash_status(f"Imported {n} formation markers into {well.name}.")
 
     def _on_import_tdr(self) -> None:
         """Import → Time–Depth Data: one door, classify the file by evidence.
@@ -1986,11 +1984,14 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Import Error", str(exc))
             return
-        self._state.update_well(idx, updated)
+        # Commit last: compute the message before update_well so the only step
+        # after the state mutation is the (infallible) status flash. A failure in
+        # load_tdr_as/add_tdr above returns before this — leaving zero TDR rows.
         lo, hi = tdr.depth_range()
-        self._statusbar.showMessage(
+        self._state.update_well(idx, updated)
+        self._flash_status(
             f"Imported {tdr.kind} ({tdr.n_points} pts, {lo:.0f}–{hi:.0f} m "
-            f"{tdr.depth_reference}) into {well.name}.", 6000)
+            f"{tdr.depth_reference}) into {well.name}.")
 
     def _on_new_section_ns(self) -> None:
         """New north–south section via dialog."""
@@ -2978,7 +2979,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Recovery Failed", str(exc))
 
     def _flash_status(self, msg: str) -> None:
-        """Briefly show *msg* in the status bar, then restore."""
+        """Briefly show *msg* in the status bar, then restore.
+
+        The single status-feedback path for one-shot notifications. Routes to
+        the visible game-UI status strip when present (the classic _status_label
+        is an orphaned, invisible stub there — see _on_map_status); falls back to
+        the classic label otherwise."""
+        if getattr(self, "status_strip", None) is not None:
+            self.status_strip.set_hint(msg)
+            QTimer.singleShot(2000, lambda: self.status_strip.set_hint(""))
+            return
         self._status_label.setText(msg)
         QTimer.singleShot(2000, self._update_status)
 
