@@ -1286,6 +1286,21 @@ class SectionView(QWidget):
             if self._saved_ylim is not None:
                 self._saved_ylim = (self._saved_ylim[1], self._saved_ylim[0])
 
+        # Enforce the vertical-exaggeration aspect and BAKE it into the view
+        # limits now (imshow above may have reset aspect to 'auto'). apply_aspect
+        # in 'datalim' mode mutates the limits to satisfy ve, so the overlays
+        # (depth scale, picks) and the pyqtgraph seismic sync below all read the
+        # same aspect-correct limits — not the pre-apply values.
+        self._ax.set_aspect(max(float(section.vertical_exaggeration), 0.01),
+                            adjustable="datalim")
+        try:
+            self._ax.apply_aspect()
+        except Exception:
+            pass
+        _yla = self._ax.get_ylim()
+        if _yla[0] < _yla[1]:                    # keep depth inverted
+            self._ax.set_ylim(_yla[1], _yla[0])
+
         self._render_overlays(section)
 
         # Final safety after overlays: Y axis must stay inverted (depth 0 = top)
@@ -1415,9 +1430,11 @@ class SectionView(QWidget):
         _span = max(hi - lo, 1.0)
         self._ax.set_xlim(lo - 0.03 * _span, hi + 0.05 * _span)
 
-        # Y axis — depth down, inverted
+        # Y axis — depth down, inverted. Vertical exaggeration is NOT applied by
+        # scaling this range (that left the on-screen aspect at the mercy of the
+        # widget size); it is enforced below as a true data aspect via set_aspect.
         max_d = self._compute_max_depth(section)
-        y_range = max_d / max(ve, 0.01)
+        y_range = max_d
         # Ensure all wells are visible even at high VE (well depth may exceed y_range).
         # Clamp to 0-50 000 m — rules out northing coordinates stored in wrong field.
         for well in self._state.project.wells:
@@ -1435,6 +1452,13 @@ class SectionView(QWidget):
         self._ax.set_ylim(y_range, 0.0)   # inverted: 0 at top
         # Prevent imshow / other artists from autoscaling Y away from this range
         self._ax.set_autoscaley_on(False)
+
+        # Vertical exaggeration as a TRUE data aspect: pixels-per-metre vertical
+        # = ve × pixels-per-metre horizontal. ve=1 ⇒ 1 m depth and 1 m distance
+        # get equal pixels. 'datalim' keeps the docked axes box fixed and expands
+        # the data limits to honour the ratio (the map view's 1:1 pattern). Each
+        # imshow resets aspect to 'auto', so this is re-asserted per full render.
+        self._ax.set_aspect(max(float(ve), 0.01), adjustable="datalim")
 
         # Labels — check seismic domain to set Y label correctly
         units = section.depth_units
@@ -3515,17 +3539,15 @@ class SectionView(QWidget):
         value = self._ve_spin.value()
         if value <= 0:
             return
-        # VE change only affects ylim, not seismic data — use fast path.
-        # Pre-compute new ylim so the fast path can apply it without _setup_axes.
+        # VE is a true data aspect now (enforced in _setup_axes / _full_render),
+        # not a ylim rescale. Clear any persisted zoom so the next render refits
+        # to the full section width and applies the new aspect from defaults.
         section = self._state.active_section
         if section is not None:
-            max_d = self._compute_max_depth(section)
-            y_range = max_d / value
-            new_ylim = (y_range, 0.0)
-            self._pending_ylim = new_ylim
-            self._saved_ylim   = new_ylim   # persist so rubber-band renders keep it
-            self._saved_xlim   = None       # let xlim reset to full section width on VE change
             self._pending_xlim = None
+            self._pending_ylim = None
+            self._saved_xlim   = None
+            self._saved_ylim   = None
             self._user_has_zoomed = False   # full section width on VE change
 
         if self._ve_lock_btn.isChecked():

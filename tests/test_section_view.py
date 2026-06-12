@@ -277,13 +277,19 @@ class TestAutoRender:
         sec = _east_section()
         state.add_section(sec)
         state.set_active_section(sec)
-        pick = _horizon_pick()
+        pick = _horizon_pick()   # red (#ff0000)
         state.add_horizon_pick(pick)
         QTest.qWait(100)
-        n_with = len(view.axes.lines)
+        # Count the pick's own artist by colour, not the total line count: the
+        # latter also includes depth-scale ticks whose number tracks the (now
+        # vertical-exaggeration-aware) y-range, so it is not a stable proxy.
+        def _red_lines():
+            return [l for l in view.axes.lines
+                    if str(l.get_color()).lower() in ("#ff0000", "red")]
+        assert len(_red_lines()) >= 1
         state.remove_horizon_pick(pick)
         QTest.qWait(100)
-        assert len(view.axes.lines) < n_with
+        assert len(_red_lines()) == 0
 
     def test_well_added_triggers_render(self, view, state):
         sec = _east_section()
@@ -750,3 +756,61 @@ class TestNavigationDoesNotRestretch:
         view._seismic_layer_key = None
         view._update_seismic_layer(sec)
         assert lat["n"] == 1                         # reused on navigation
+
+
+# ---------------------------------------------------------------------------
+# Vertical exaggeration is a TRUE data aspect, not a ylim rescale (Fix 01,
+# Issue 2). VE=1 ⇒ 1 m depth and 1 m distance get equal pixels; the readout
+# (the axes aspect / spinbox value) can no longer diverge from the transform.
+# ---------------------------------------------------------------------------
+
+class TestVerticalExaggeration:
+    @staticmethod
+    def _measured_ve(view):
+        """pixels-per-metre vertical ÷ horizontal, read from the live transform."""
+        ax = view.axes
+        ax.apply_aspect()
+        t = ax.transData
+        x0, y0 = t.transform((0.0, 0.0))
+        ppm_x = abs(t.transform((1.0, 0.0))[0] - x0)
+        ppm_y = abs(t.transform((0.0, 1.0))[1] - y0)
+        assert ppm_x > 0
+        return ppm_y / ppm_x
+
+    @pytest.mark.parametrize("ve", [1.0, 2.0, 5.0])
+    def test_transform_ppm_ratio_equals_ve(self, view, state, ve):
+        sec = _east_section(length=4000.0)
+        sec.vertical_exaggeration = ve
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.render()
+        # The on-screen exaggeration matches the setting, independent of widget size.
+        assert self._measured_ve(view) == pytest.approx(ve, rel=1e-3)
+        # The axes aspect IS the VE value (a number), never silently 'auto'.
+        assert float(view.axes.get_aspect()) == pytest.approx(ve, rel=1e-6)
+
+    def test_section_load_does_not_reset_aspect(self, view, state):
+        sec = _east_section(length=4000.0)
+        sec.vertical_exaggeration = 3.0
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.render()
+        view.render()                       # a second full render must keep the aspect
+        assert float(view.axes.get_aspect()) == pytest.approx(3.0, rel=1e-6)
+        assert self._measured_ve(view) == pytest.approx(3.0, rel=1e-3)
+
+    def test_changing_ve_changes_the_transform(self, view, state):
+        sec = _east_section(length=4000.0)
+        sec.vertical_exaggeration = 1.0
+        state.add_section(sec)
+        state.set_active_section(sec)
+        view.render()
+        ve1 = self._measured_ve(view)
+        view._ve_spin.setValue(4.0)         # drive the control as the user would
+        # The spinbox is wired to the debounce timer, whose slot applies the VE.
+        assert view._ve_timer.isActive()
+        view._on_ve_changed()               # fire what the timer fires
+        view.render()
+        ve2 = self._measured_ve(view)
+        assert ve1 == pytest.approx(1.0, rel=1e-3)
+        assert ve2 == pytest.approx(4.0, rel=1e-3)
