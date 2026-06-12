@@ -24,6 +24,7 @@ depth-reference / unit defaults (the import dialog exposes them).
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -34,6 +35,13 @@ from section_tool.core.zdomain import ZDomain
 # Above this magnitude a TWT column is milliseconds, not seconds: a two-way time
 # of 30 s would be ~45 km of section — far beyond any well. Safe ms/s splitter.
 _TWT_S_CEILING = 30.0
+
+# Shape heuristic thresholds. A checkshot is a sparse, irregularly-spaced set of
+# measured pairs (F3's is 25 pairs); a sonic-integrated TDR is a dense, regular
+# grid (F3's is 625 points on a 5 m grid). The split is on point count + spacing
+# regularity, not on the menu item the user happened to click.
+_DENSE_POINTS = 100        # ≥ this many points → "dense"
+_REGULAR_CV = 0.05         # spacing coefficient-of-variation below this → "regular grid"
 
 
 def detect_twt_domain(twt_values) -> ZDomain:
@@ -147,3 +155,121 @@ def load_sonic_tdr(path, well, *, twt_domain: ZDomain | None = ZDomain.TWT_MS
         depth_col=0, twt_col=1, twt_domain=twt_domain,
         depth_domain=ZDomain.DEPTH_M, depth_input_reference="TVDSS",
         resolve_md_to_tvdss=False)
+
+
+# ---------------------------------------------------------------------------
+# Evidence-based classification — what does this file's *shape* look like?
+# One import door classifies; it never lets data wear a grade the evidence
+# contradicts without the user overriding it explicitly.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TdrClassification:
+    """What the numbers in a time-depth file look like, and the kind they imply.
+
+    ``suggested_kind`` is a heuristic from point count + spacing regularity;
+    the import dialog pre-selects it but the user can override.  ``evidence``
+    is the one-line human justification shown in the dialog.
+    """
+    n_points: int
+    depth_min: float
+    depth_max: float
+    median_spacing: float
+    spacing_regular: bool
+    twt_domain: ZDomain          # detected ms vs s (display units)
+    twt_min: float               # in the detected units
+    twt_max: float
+    suggested_kind: str          # checkshot | sonic_integrated | imported
+    suggested_depth_reference: str
+    evidence: str
+
+
+def _spacing_stats(depth: np.ndarray) -> tuple[float, bool]:
+    """(median |Δdepth|, is the spacing a near-constant regular grid?)."""
+    d = np.sort(np.asarray(depth, dtype=float))
+    diffs = np.diff(d)
+    diffs = diffs[diffs > 0]
+    if diffs.size == 0:
+        return 0.0, False
+    med = float(np.median(diffs))
+    mean = float(np.mean(diffs))
+    cv = float(np.std(diffs) / mean) if mean > 0 else float("inf")
+    return med, bool(cv < _REGULAR_CV)
+
+
+def classify_tdr_table(table: np.ndarray, *, depth_col: int = 0,
+                       twt_col: int = 1) -> TdrClassification:
+    """Classify a parsed (n, ncols) numeric table by its depth/TWT shape."""
+    depth = np.asarray(table[:, depth_col], dtype=float)
+    twt = np.asarray(table[:, twt_col], dtype=float)
+    n = int(len(depth))
+    median_spacing, regular = _spacing_stats(depth)
+    twt_domain = detect_twt_domain(twt)
+    dense = n >= _DENSE_POINTS
+
+    if dense and regular:
+        kind, ref = "sonic_integrated", "TVDSS"
+        evidence = (f"{n} points on a regular ~{median_spacing:.0f} m grid — this "
+                    f"looks like an integrated/sonic TDR, not a checkshot.")
+    elif n <= _DENSE_POINTS:
+        kind, ref = "checkshot", "MD"
+        evidence = (f"{n} irregularly-spaced pairs — this looks like a measured "
+                    f"checkshot (depth↔TWT tie).")
+    else:
+        kind, ref = "imported", "TVDSS"
+        evidence = (f"{n} points, {'regular' if regular else 'irregular'} spacing — "
+                    f"kind is unclear; defaulting to a generic imported TDR.")
+
+    return TdrClassification(
+        n_points=n,
+        depth_min=float(np.min(depth)), depth_max=float(np.max(depth)),
+        median_spacing=median_spacing, spacing_regular=regular,
+        twt_domain=twt_domain,
+        twt_min=float(np.min(twt)), twt_max=float(np.max(twt)),
+        suggested_kind=kind, suggested_depth_reference=ref, evidence=evidence)
+
+
+def classify_tdr_file(path: str | os.PathLike, *, depth_col: int = 0,
+                      twt_col: int = 1) -> TdrClassification:
+    """Read *path* and classify it. Raises if no numeric rows are found."""
+    table = read_numeric_columns(path, min_cols=max(depth_col, twt_col) + 1)
+    return classify_tdr_table(table, depth_col=depth_col, twt_col=twt_col)
+
+
+def load_tdr_as(
+    path: str | os.PathLike,
+    well,
+    *,
+    kind: str,
+    depth_reference: str = "TVDSS",
+    twt_domain: ZDomain | None = None,
+    depth_col: int = 0,
+    twt_col: int = 1,
+) -> TimeDepthRelation:
+    """Load with a user/heuristic-chosen *kind* and *depth_reference*.
+
+    The single import door's loader.  ``depth_reference == "MD"`` means the depth
+    column is measured-depth-from-KB and is resolved to TVDSS via the well
+    (matching :func:`load_checkshot`); any other reference is taken at face value
+    (matching :func:`load_sonic_tdr`).
+    """
+    return load_tdr(
+        path, well, kind=kind, depth_col=depth_col, twt_col=twt_col,
+        twt_domain=twt_domain, depth_domain=ZDomain.DEPTH_M,
+        depth_input_reference=depth_reference,
+        resolve_md_to_tvdss=(depth_reference == "MD"))
+
+
+def tdr_shape_is_sonic(depth_m) -> bool:
+    """True if a TDR's depth column has the dense, regular shape of a sonic TDR.
+
+    Integrity check for already-loaded relations: a relation stamped
+    ``kind="checkshot"`` whose depths look like this was almost certainly a
+    sonic/integrated TDR imported through the wrong door (see the panel chip,
+    which flags it for re-verification rather than trusting the grade silently).
+    """
+    depth = np.asarray(depth_m, dtype=float)
+    if depth.size < _DENSE_POINTS:
+        return False
+    _median, regular = _spacing_stats(depth)
+    return regular

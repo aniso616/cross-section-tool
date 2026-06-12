@@ -277,6 +277,15 @@ def build_from_sonic(
         cs = checkshot if checkshot is not None else well.primary_checkshot()
         if cs is None:
             raise ValueError("drift_target='checkshot' needs a checkshot TDR")
+        if getattr(cs, "kind", None) == "sonic_integrated":
+            # Drift-correcting a sonic V(z) to a sonic-integrated TDR is
+            # self-calibration — the "tie" is the same sonic data the model is
+            # built from, so it would report a spurious near-zero misfit. Refuse.
+            raise ValueError(
+                "drift_target='checkshot' requires a measured checkshot TDR, not "
+                "a sonic-integrated one: correcting a sonic model to a sonic TDR "
+                "is self-calibration. Import a checkshot, or use drift_target="
+                "'anchors'/'none'.")
         zk = depths_to_tvdss(cs.depth_m, cs.depth_reference, well)
         obs = np.asarray(cs.twt_s, dtype=float)
         provenance = "well_calibrated"

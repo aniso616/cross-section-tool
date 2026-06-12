@@ -494,12 +494,9 @@ class MainWindow(QMainWindow):
         self._import_markers_action = QAction("Well Formation Markers (MD)…", self)
         self._import_markers_action.triggered.connect(self._on_import_markers)
         import_menu.addAction(self._import_markers_action)
-        self._import_checkshot_action = QAction("Well Checkshot (T-D)…", self)
-        self._import_checkshot_action.triggered.connect(self._on_import_checkshot)
-        import_menu.addAction(self._import_checkshot_action)
-        self._import_sonic_tdr_action = QAction("Well Sonic TDR…", self)
-        self._import_sonic_tdr_action.triggered.connect(self._on_import_sonic_tdr)
-        import_menu.addAction(self._import_sonic_tdr_action)
+        self._import_tdr_action = QAction("Time–Depth Data (checkshot / sonic)…", self)
+        self._import_tdr_action.triggered.connect(self._on_import_tdr)
+        import_menu.addAction(self._import_tdr_action)
         import_menu.addSeparator()
         self._import_segy_action = QAction("SEG-Y Seismic…", self)
         self._import_segy_action.triggered.connect(self._on_import_segy)
@@ -1456,7 +1453,7 @@ class MainWindow(QMainWindow):
         def _import(action_token: str):
             # Launch the matching Prompt-05 importer; the panel refreshes after.
             {
-                "checkshot": self._on_import_checkshot,
+                "checkshot": self._on_import_tdr,
                 "las":       self._on_import_las,
                 "markers":   self._on_import_markers,
             }.get(action_token, lambda: None)()
@@ -1948,32 +1945,43 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(
             f"Imported {n} formation markers into {well.name}.", 5000)
 
-    def _on_import_checkshot(self) -> None:
-        """Import → Well Checkshot: F3 *_TD.txt (depth-MD, TWT-s) → TVDSS TDR."""
-        self._import_tdr("checkshot")
+    def _on_import_tdr(self) -> None:
+        """Import → Time–Depth Data: one door, classify the file by evidence.
 
-    def _on_import_sonic_tdr(self) -> None:
-        """Import → Well Sonic TDR: F3 *_DT_TVDSS.txt (TVDSS, TWT-ms)."""
-        self._import_tdr("sonic_integrated")
-
-    def _import_tdr(self, kind: str) -> None:
-        title = ("Import Checkshot" if kind == "checkshot"
-                 else "Import Sonic TDR")
-        idx, well = self._choose_target_well(title)
+        Parses the file, shows what was found (point count, spacing regularity,
+        TWT units) with a heuristic kind pre-selected, then imports the
+        user-confirmed kind. The interface never lets a sonic TDR silently wear a
+        'checkshot' grade — the evidence and the choice are both on screen.
+        """
+        idx, well = self._choose_target_well("Import Time–Depth Data")
         if well is None:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, f"{title} for {well.name}", "",
+            self, f"Import Time–Depth Data for {well.name}", "",
             "Time-Depth Files (*.txt *.dat *.csv);;All Files (*)")
         if not path:
             return
-        from section_tool.io.tdr_io import load_checkshot, load_sonic_tdr
+        import os as _os
+        from PySide6.QtWidgets import QDialog
+        from section_tool.io.tdr_io import classify_tdr_file, load_tdr_as
+        from section_tool.views.tdr_import_dialog import TdrImportDialog
+        try:
+            cls = classify_tdr_file(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Import Error", str(exc))
+            return
+        dlg = TdrImportDialog(_os.path.basename(path), cls, well.name, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
         import copy
         updated = copy.deepcopy(well)
         try:
             with _wait_cursor():
-                tdr = (load_checkshot(path, updated) if kind == "checkshot"
-                       else load_sonic_tdr(path, updated))
+                tdr = load_tdr_as(
+                    path, updated,
+                    kind=dlg.result_kind(),
+                    depth_reference=dlg.result_depth_reference(),
+                    twt_domain=dlg.result_twt_domain())
                 updated.add_tdr(tdr)
         except Exception as exc:
             QMessageBox.warning(self, "Import Error", str(exc))

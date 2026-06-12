@@ -109,8 +109,16 @@ class DepthStretchController:
                      if sw is not None else ("No sonic loaded", False))
         cw = self._checkshot_well()
         cs = cw.primary_checkshot() if cw else None
-        chips.append((f"Checkshot · {cs.n_points} pts", True)
-                     if cs is not None else ("No checkshot loaded", False))
+        if cs is not None:
+            from section_tool.io.tdr_io import tdr_shape_is_sonic
+            if tdr_shape_is_sonic(cs.depth_m):
+                # Stamped 'checkshot' but dense/regular like a sonic TDR — almost
+                # certainly imported through the wrong door. Flag, don't trust.
+                chips.append((f"Checkshot? · {cs.n_points} pts — verify kind", True))
+            else:
+                chips.append((f"Checkshot · {cs.n_points} pts", True))
+        else:
+            chips.append(("No checkshot loaded", False))
         tw = self._tops_well()
         chips.append((f"{len(tw.formation_tops)} tops · {tw.name}", True)
                      if tw is not None else ("No tops loaded", False))
