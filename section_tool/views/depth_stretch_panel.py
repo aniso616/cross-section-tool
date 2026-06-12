@@ -118,11 +118,24 @@ class DepthStretchPanel(QDialog):
     # ------------------------------------------------------------------
 
     def _clear_layout(self, layout) -> None:
+        """Tear a layout down completely — widgets AND nested layouts.
+
+        The card mixes addWidget() with an addLayout() knob form; a non-recursive
+        clear leaves the nested form (and its knob widgets) parented to the card,
+        where they survive a rung swap and render under the new rung's knobs.
+        Reparent before deleteLater so the widgets leave the display atomically
+        (deleteLater alone is async — they'd briefly overlap)."""
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.setParent(None)
                 w.deleteLater()
+            else:
+                child = item.layout()
+                if child is not None:
+                    self._clear_layout(child)
+                    child.deleteLater()
 
     def _knobs(self) -> dict:
         out = {}
@@ -187,10 +200,15 @@ class DepthStretchPanel(QDialog):
         prov.setStyleSheet(f"color:{_TEXT_MUTED}; font-style:italic; font-size:8pt;")
         self._card_layout.addWidget(prov)
 
-        # Disclosure: this rung's knobs
-        form = QFormLayout()
+        # Disclosure: this rung's knobs, in a single owner widget. Clearing the
+        # card deletes this container whole, so no previous-rung knob can survive
+        # a swap and overlap the new ones (the leak was a bare nested layout).
+        self._knob_container = QWidget()
+        self._knob_container.setObjectName("knob_container")
+        form = QFormLayout(self._knob_container)
+        form.setContentsMargins(0, 0, 0, 0)
         self._build_knobs(spec.key, form)
-        self._card_layout.addLayout(form)
+        self._card_layout.addWidget(self._knob_container)
 
         apply_btn = QPushButton(f"Apply  ·  {spec.label}")
         apply_btn.setStyleSheet(
@@ -225,6 +243,10 @@ class DepthStretchPanel(QDialog):
             note = QLabel(f"well: {getattr(w, 'name', '—')}")
             note.setStyleSheet(f"color:{_TEXT_MUTED}; font-size:8pt;")
             form.addRow("Source:", note)
+
+        # Stable handles for assertions / debugging: knob_<key>.
+        for key, widget in self._knob_widgets.items():
+            widget.setObjectName(f"knob_{key}")
 
     def _render_row(self, spec, rec: str) -> QWidget:
         row = QFrame()

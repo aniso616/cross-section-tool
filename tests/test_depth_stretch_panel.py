@@ -134,6 +134,59 @@ def test_panel_select_swaps_card(qapp):
 
 
 # ---------------------------------------------------------------------------
+# Card knob area is rebuilt atomically on rung swap — no orphaned widgets
+# (the screenshotted overlap: bulk's velocity spinner survived a swap to
+# checkshot-tied and stacked under the new rung's knobs).
+# ---------------------------------------------------------------------------
+
+_EXPECTED_KNOBS = {
+    "bulk":            {"knob_setting", "knob_bulk_v"},
+    "average_vz":      {"knob_setting", "knob_v0", "knob_k"},
+    "checkshot":       {"knob_setting"},
+    "sonic_checkshot": {"knob_setting"},
+    "sonic_anchors":   {"knob_setting"},
+    "layered":         {"knob_setting"},
+    "marker_tied":     {"knob_setting"},
+}
+
+
+def _card_knob_names(panel):
+    """objectNames of the spin/combo knobs currently parented under the card."""
+    from PySide6.QtWidgets import QDoubleSpinBox, QComboBox
+    knobs = (panel._card.findChildren(QDoubleSpinBox)
+             + panel._card.findChildren(QComboBox))
+    return sorted(w.objectName() for w in knobs)
+
+
+def test_card_knob_area_rebuilt_atomically_on_swap(qapp):
+    st = _state()
+    panel = DepthStretchPanel(st)
+    rungs = list(_EXPECTED_KNOBS)
+    # Several full cycles across every rung: widgets must never accumulate.
+    for _ in range(3):
+        for rung in rungs:
+            panel._select(rung)
+            names = _card_knob_names(panel)
+            assert set(names) == _EXPECTED_KNOBS[rung], (
+                f"after selecting {rung}: card knobs were {names}")
+            # Exactly the active rung's widgets — no duplicates, no leaks.
+            assert len(names) == len(_EXPECTED_KNOBS[rung])
+            assert panel._knob_container.objectName() == "knob_container"
+
+
+def test_bulk_to_checkshot_swap_drops_bulk_spinner(qapp):
+    # The exact regression: bulk's 2400 m/s spinner must not survive a swap to
+    # checkshot-tied and overlap the "Source: well" row.
+    st = _state()
+    panel = DepthStretchPanel(st)
+    panel._select("bulk")
+    assert "knob_bulk_v" in _card_knob_names(panel)
+    panel._select("checkshot")
+    assert "knob_bulk_v" not in _card_knob_names(panel)
+    assert _card_knob_names(panel) == ["knob_setting"]
+
+
+# ---------------------------------------------------------------------------
 # Locked-rung Import action triggers the importer callback + refreshes
 # ---------------------------------------------------------------------------
 
