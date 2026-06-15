@@ -1,3 +1,18 @@
+## Running the app
+
+Claude Code must **not** launch or babysit the GUI across tool calls. A
+`Start-Process` (or any spawned GUI process) started inside one tool call is
+reaped when that tool call returns — the child PID dies with the call's
+process group, which then reads as a false "the app crashed." There is no way
+to keep a window alive between tool calls from here.
+
+So: **the user launches the app in their own terminal**, where the window is
+tied to their interactive session and stays up. Claude's job is to make code
+changes, run tests, commit, and push — then stop and let the user run it.
+
+Activate the env first: `conda activate cross-section-tool` (env lives at
+`C:\Users\prkbr\miniconda3\envs\cross-section-tool`).
+
 ## Common confusion: "blank" section view
 
 When a new section is created with no horizons/polygons/wells, or when
