@@ -184,6 +184,38 @@ def test_fetch_logs_request_bbox_in_degrees_not_metres(tmp_path, caplog):
     assert "DEM warp" in caplog.text                    # warp boundary announced
 
 
+def test_auto_vert_exag_lifts_low_relief_and_clamps():
+    """Gentle relief over coarse pixels gets exaggerated into the marine band;
+    a flat grid falls back to the documented constant; the result is recorded."""
+    gentle = np.full((20, 20), -40.0, dtype="float32")
+    gentle[:, 10:] = -36.0                                  # 4 m of relief
+    ve = D.auto_vert_exag(gentle, dx=300.0, dy=300.0)
+    assert 1.0 < ve <= 40.0                                # lifted, capped at hi
+    # A perfectly flat grid can't be shaded — documented fallback, not a blow-up.
+    flat = np.full((20, 20), -40.0, dtype="float32")
+    assert D.auto_vert_exag(flat, dx=300.0, dy=300.0) == D.DEFAULT_MARINE_VERT_EXAG
+    # Steep land needs no lift: clamped down to 1.0, never de-exaggerated below it.
+    steep = np.tile(np.linspace(0, 3000, 20), (20, 1)).astype("float32")
+    assert D.auto_vert_exag(steep, dx=30.0, dy=30.0) == pytest.approx(1.0)
+
+
+def test_planar_bathymetry_tint_carries_depth_when_relief_flat():
+    """A tilted plane has constant gradient, so its hillshade is a single flat
+    value at ANY vert_exag (the live F3 blank — vert_exag can't fix a plane). The
+    elevation tint must vary across the slope so depth still reads as colour."""
+    h = w = 40
+    _yy, xx = np.mgrid[0:h, 0:w]
+    plane = (-50.0 + xx * (20.0 / w)).astype("float32")    # smooth -50 -> -30 m
+    dx = dy = 100.0
+    ve = D.auto_vert_exag(plane, dx=dx, dy=dy)
+    grey = D.hillshade(plane, dx=dx, dy=dy, vert_exag=ve)
+    assert float(grey.max() - grey.min()) < 1e-3           # relief shading is flat
+    rgb = D.shaded_relief(plane, dx=dx, dy=dy, vert_exag=ve)
+    assert rgb.shape[:2] == plane.shape and rgb.shape[2] == 4
+    assert float(rgb[..., :3].std()) > 0.05                # tint varies = depth
+    assert not np.allclose(rgb[:, 0, :3], rgb[:, -1, :3], atol=0.05)
+
+
 def test_warp_flags_constant_surface(tmp_path, caplog):
     """An all-equal warp result (elevation lost / flat seabed) is logged loudly —
     it is the silent-blank break point, computed on finite cells before fill."""

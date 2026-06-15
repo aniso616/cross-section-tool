@@ -197,10 +197,81 @@ def hillshade(dem2d: np.ndarray, *, dx: float = 30.0, dy: float = 30.0,
               azimuth: float = DEFAULT_AZIMUTH,
               altitude: float = DEFAULT_ALTITUDE,
               vert_exag: float = 1.0) -> np.ndarray:
-    """Greyscale hillshade in [0, 1] via matplotlib's LightSource."""
+    """Greyscale hillshade in [0, 1] via matplotlib's LightSource.
+
+    *vert_exag* scales the elevation against the (metric) pixel spacing before
+    shading. ``1.0`` is right for steep land at native resolution but flattens
+    gentle seabed sampled at hundreds-of-metres/pixel to a featureless wash —
+    callers on low-relief grids should size it with :func:`auto_vert_exag`.
+    """
     ls = LightSource(azdeg=azimuth, altdeg=altitude)
     arr = np.asarray(dem2d, dtype=float)
     return ls.hillshade(arr, dx=dx, dy=dy, vert_exag=vert_exag)
+
+
+DEFAULT_MARINE_VERT_EXAG = 20.0   # documented fallback when relief is ~flat
+
+
+def auto_vert_exag(dem2d: np.ndarray, *, dx: float, dy: float,
+                   target_relief_px: float = 3.0,
+                   lo: float = 1.0, hi: float = 40.0) -> float:
+    """A vertical exaggeration that lifts low-gradient relief into visible shading.
+
+    ``vert_exag=1`` suits steep terrain at native resolution but renders gentle
+    bathymetry (a few metres of relief over hundreds-of-metres pixels — the
+    GEBCO/F3 case) as a flat grey wash. Scale so the data's elevation range maps
+    to roughly *target_relief_px* pixels of apparent height::
+
+        vert_exag = target_relief_px * mean_pixel_size / elevation_range
+
+    clamped to ``[lo, hi]``: *lo*=1 never de-exaggerates already-steep land
+    (onshore DEMs), *hi*=40 caps the lift for gentle marine relief. A truly flat
+    grid
+    (range ≈ 0) can't be shaded into relief, so it falls back to
+    :data:`DEFAULT_MARINE_VERT_EXAG`. The chosen value is returned so callers can
+    record it.
+    """
+    arr = np.asarray(dem2d, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return DEFAULT_MARINE_VERT_EXAG
+    rng = float(finite.max() - finite.min())
+    if rng < 1e-6:
+        return DEFAULT_MARINE_VERT_EXAG
+    mean_px = (abs(dx) + abs(dy)) / 2.0 or 1.0
+    ve = target_relief_px * mean_px / rng
+    return float(min(max(ve, lo), hi))
+
+
+DEFAULT_DEM_CMAP = "terrain"   # topo+bathy ramp: depth reads as colour, not relief
+
+
+def _get_cmap(name: str):
+    try:
+        from matplotlib import colormaps
+        return colormaps[name]
+    except Exception:                                   # pragma: no cover - old mpl
+        from matplotlib.cm import get_cmap
+        return get_cmap(name)
+
+
+def shaded_relief(data: np.ndarray, *, dx: float, dy: float, vert_exag: float,
+                  cmap: str = DEFAULT_DEM_CMAP,
+                  azimuth: float = DEFAULT_AZIMUTH,
+                  altitude: float = DEFAULT_ALTITUDE,
+                  blend_mode: str = "soft") -> np.ndarray:
+    """Elevation tinted by *cmap* and lit by a hillshade — an RGBA image in [0,1].
+
+    A pure greyscale hillshade collapses to a single flat value on near-planar
+    bathymetry (constant gradient → one shading direction), which is exactly why
+    the F3 seabed read as blank no matter the exaggeration. Tinting by elevation
+    keeps depth legible even where the relief shading is flat. Built on
+    matplotlib's :meth:`LightSource.shade`.
+    """
+    ls = LightSource(azdeg=azimuth, altdeg=altitude)
+    arr = np.asarray(data, dtype=float)
+    return ls.shade(arr, cmap=_get_cmap(cmap), blend_mode=blend_mode,
+                    vert_exag=vert_exag, dx=dx, dy=dy)
 
 
 def pixel_size(dem: DEMArray) -> "tuple[float, float]":

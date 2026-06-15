@@ -105,6 +105,42 @@ def _fixture_gebco_4326(path):
     return str(path)
 
 
+def test_planar_seabed_renders_tinted_relief_not_blank(qapp, tmp_path, caplog):
+    """The regression that would have caught the live F3 blank: a near-planar
+    seabed (constant gradient) shades to ONE flat grey value, so pure hillshade
+    is invisible at any vert_exag. The layer must render an elevation-TINTED
+    relief that still varies across the slope (carries depth) — and flag that the
+    grey relief alone is flat. (Pure-grey + vert_exag-only would NOT close this.)"""
+    dest = tmp_path / "dem" / "elevation.tif"
+    dest.parent.mkdir(parents=True)
+    h = w = 48
+    _yy, xx = np.mgrid[0:h, 0:w]
+    plane = (-50.0 + xx * (20.0 / w)).astype("float32")    # smooth tilted seabed
+    with rasterio.open(dest, "w", driver="GTiff", height=h, width=w, count=1,
+                       dtype="float32", crs="EPSG:32631",
+                       transform=_affine_from_bounds(600000, 6080000,
+                                                     610000, 6090000, w, h),
+                       nodata=None) as ds:
+        ds.write(plane, 1)
+
+    state, mv = _map_with_section(qapp)
+    with caplog.at_level("WARNING", logger="section_tool.views.map_dem_layer"):
+        assert mv._dem.load_geotiff(str(dest))
+
+    # Pure grey relief is flat (the blank) and is flagged...
+    assert float(mv._dem._hs.max() - mv._dem._hs.min()) < 1e-3
+    assert "near-planar" in caplog.text
+    assert mv._dem._vert_exag is not None and mv._dem._vert_exag > 1.0
+    # ...but the tinted RGB carries depth: it varies across the slope.
+    rgb = mv._dem._rgb
+    assert rgb is not None and float(rgb[..., :3].std()) > 0.05
+    assert not np.allclose(rgb[:, 0, :3], rgb[:, -1, :3], atol=0.05)
+    # and it actually draws an image under the data.
+    mv.render()
+    imgs = mv._ax.get_images()
+    assert imgs and any(-10 < im.get_zorder() < 0 for im in imgs)
+
+
 def test_negative_bathymetry_warps_and_hillshades(qapp, tmp_path):
     """GEBCO-style negative elevations must warp + hillshade to a valid layer
     (not all-zeroed, not NaN, in [0,1]). Locks the offshore case on a fixture."""

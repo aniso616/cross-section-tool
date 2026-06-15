@@ -31,9 +31,11 @@ class MapDemLayer(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._visible = True
-        self._hs = None                # 2D hillshade in [0, 1]
+        self._hs = None                # 2D greyscale hillshade in [0, 1] (diagnostic)
+        self._rgb = None               # RGBA elevation-tinted relief (what renders)
         self._extent = None            # (left, right, bottom, top) project CRS
         self._provenance = {}
+        self._vert_exag = None         # vertical exaggeration used for the shading
         self._last_thread = None       # test hook
 
     # ---- visibility ------------------------------------------------------
@@ -75,49 +77,68 @@ class MapDemLayer(QObject):
         h, w = data.shape
         if h == 0 or w == 0:
             return False, f"stored DEM has empty dimensions ({w}x{h})"
-        # Ground sample distance from the stored extent (project-CRS metres).
+        # Ground sample distance from the stored extent — real project-CRS metres
+        # per pixel (EPSG:metres). These drive the shading: a default of 1.0 would
+        # itself flatten the hillshade, so a non-positive size is a real fault.
         dx = abs(extent[1] - extent[0]) / max(w, 1)
         dy = abs(extent[3] - extent[2]) / max(h, 1)
+        if dx <= 0 or dy <= 0:
+            log.warning("DEM pixel size non-positive (dx=%.3f dy=%.3f) — extent "
+                        "or dimensions are degenerate; shading will flatten", dx, dy)
+            dx, dy = dx or 1.0, dy or 1.0
+        # Size the vertical exaggeration to the data so gentle (marine) relief
+        # shades visibly instead of washing out — the low-relief blank fix.
+        vert_exag = _dem.auto_vert_exag(data, dx=dx, dy=dy)
         try:
-            hs = _dem.hillshade(data, dx=dx or 1.0, dy=dy or 1.0)
+            hs = _dem.hillshade(data, dx=dx, dy=dy, vert_exag=vert_exag)
+            rgb = _dem.shaded_relief(data, dx=dx, dy=dy, vert_exag=vert_exag)
         except Exception as exc:
-            log.exception("DEM hillshade failed")
-            return False, f"hillshade computation failed: {exc}"
+            log.exception("DEM shading failed")
+            return False, f"shading computation failed: {exc}"
 
-        self._hs = hs
+        self._hs = hs                      # greyscale relief — kept for diagnostics
+        self._rgb = rgb                    # elevation-tinted relief — what renders
         self._extent = extent
         self._provenance = prov or {}
+        self._vert_exag = vert_exag        # recorded: the exaggeration actually used
 
         elev_min, elev_max = float(np.nanmin(data)), float(np.nanmax(data))
         hs_min, hs_max = float(hs.min()), float(hs.max())
         flat = (hs_max - hs_min) < 1e-3
         detail = (f"DEM layer: {w}x{h} EPSG:{epsg} "
                   f"extent={tuple(round(v) for v in extent)} "
+                  f"px=({dx:.1f},{dy:.1f})m vert_exag={vert_exag:.1f} "
                   f"elev[{elev_min:.1f},{elev_max:.1f}] "
                   f"hillshade[{hs_min:.3f},{hs_max:.3f}] "
-                  f"visible={self._visible} z={_DEM_ZORDER}")
+                  f"tinted=yes visible={self._visible} z={_DEM_ZORDER}")
         log.info(detail)
         if flat:
-            # Not a hard failure (the data loaded), but a flat hillshade reads as
-            # a blank/uniform wash — surface it instead of letting it look broken.
-            log.warning("DEM hillshade is near-constant (range %.4f) — low relief "
-                        "or vert_exag too small for this terrain", hs_max - hs_min)
+            # The relief shading alone is a flat wash here (near-planar terrain —
+            # one shading direction at any exaggeration). Not a failure: the
+            # elevation tint still carries depth, which is why we render the
+            # tinted RGB rather than pure grey. Logged so the cause is on record.
+            log.warning("DEM relief shading near-constant (range %.4f) — near-planar "
+                        "terrain; depth carried by the elevation tint instead",
+                        hs_max - hs_min)
         return True, detail
 
     def clear(self) -> None:
         self._hs = None
+        self._rgb = None
         self._extent = None
         self._provenance = {}
 
     # ---- render (re-blit each map render) --------------------------------
 
     def render(self, ax) -> None:
-        if not self._visible or self._hs is None or self._extent is None:
+        if not self._visible or self._rgb is None or self._extent is None:
             return
         left, right, bottom, top = self._extent
-        ax.imshow(self._hs, extent=(left, right, bottom, top), origin="upper",
-                  zorder=_DEM_ZORDER, cmap="gray", vmin=0.0, vmax=1.0,
-                  interpolation="bilinear", aspect="auto", alpha=0.85)
+        # Tinted relief (elevation colour + hillshade): depth stays legible on
+        # near-planar bathymetry where pure grey shading washes out.
+        ax.imshow(self._rgb, extent=(left, right, bottom, top), origin="upper",
+                  zorder=_DEM_ZORDER, interpolation="bilinear",
+                  aspect="auto", alpha=0.9)
 
     # ---- off-thread fetch ------------------------------------------------
 
