@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 from matplotlib.colors import LightSource
@@ -130,9 +133,27 @@ def reproject_to_project(src, bounds_proj, project_epsg, *,
         resampling=Resampling.bilinear,
     )
 
-    ocean_filled = bool(np.any(~np.isfinite(dst)))
+    # Warp-boundary diagnostics: an all-nodata or all-equal result here is the
+    # break point for a "silent blank" map. Captured BEFORE the ocean fill so
+    # the nodata fraction is the true warp coverage, not the filled value.
+    finite = np.isfinite(dst)
+    nodata_frac = float(np.mean(~finite))
+    if np.any(finite):
+        w_min, w_max = float(np.min(dst[finite])), float(np.max(dst[finite]))
+    else:
+        w_min = w_max = float("nan")
+    log.info(
+        "DEM warp: dst=%dx%d src.crs=%s dst=EPSG:%s nodata_frac=%.3f "
+        "elev[min=%.1f max=%.1f]",
+        dst_w, dst_h, src.crs, project_epsg, nodata_frac, w_min, w_max)
+    if nodata_frac >= 0.999:
+        log.warning("DEM warp produced ~all-nodata — check bbox / src-dst CRS")
+    elif np.isfinite(w_min) and w_max - w_min < 1e-6:
+        log.warning("DEM warp produced a constant surface (%.1f) — elevation lost", w_min)
+
+    ocean_filled = bool(np.any(~finite))
     if ocean_filled:
-        dst = np.where(np.isfinite(dst), dst, float(fill_value)).astype(np.float32)
+        dst = np.where(finite, dst, float(fill_value)).astype(np.float32)
 
     # Extent from the destination affine (origin upper-left).
     e_left = dst_transform.c
@@ -245,6 +266,12 @@ def fetch_dem(source_key: str, bounds_proj, project_epsg: int, dest_path: str, *
     lons, lats = transform_points(xs, ys, project_epsg, _WGS84)
     bounds_ll = (float(min(lons)), float(min(lats)),
                  float(max(lons)), float(max(lats)))   # (w, s, e, n)
+    # The request window the opener actually sends. Logged so a "200 but blank"
+    # can be checked against the known-good curl bbox: this must read in WGS84
+    # degrees (e.g. F3 ~4–5°E / 54–54.3°N), never project-CRS metres.
+    log.info("DEM request: source=%s bbox(WGS84 w/s/e/n)=%.4f/%.4f/%.4f/%.4f "
+             "from project bounds=%s EPSG:%s",
+             source_key, *bounds_ll, bounds_proj, project_epsg)
 
     with opener(source_key, bounds_ll, api_key) as src:
         dem = reproject_to_project(src, bounds_proj, project_epsg,

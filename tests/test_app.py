@@ -672,3 +672,28 @@ class TestDemFetchEndToEnd:
         win._map_view.set_hillshade_visible(False)
         assert win._map_view._ax.get_images() == []
         assert win._map_view.hillshade_visible() is False
+
+    def test_fetch_dem_failure_flashes_specific_stage(self, win, state,
+                                                      tmp_path, monkeypatch):
+        """A failed fetch must reach _flash_status with a specific stage message —
+        the blank-map-silent regression. Exercises the real handler wiring
+        (_dem.failed → _flash_status) added in _build_elevation_menu."""
+        pytest.importorskip("rasterio")
+        state.project.crs_epsg = 32631
+        state.add_section(Section([(606000, 6080000), (610000, 6082000)],
+                                  name="L1", crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+
+        flashed = []
+        monkeypatch.setattr(win, "_flash_status", flashed.append)
+
+        def boom(*a, **k):
+            raise RuntimeError("HTTP 500 from source")
+
+        win._map_view._dem.fetch(
+            "gebco", win._map_view._basemap_extent(), 32631,
+            str(tmp_path / "dem" / "elevation.tif"), opener=boom)
+        win._map_view._dem._last_thread.join(timeout=10)
+        QApplication.processEvents()
+        assert any("DEM failed" in m for m in flashed)
+        assert any("HTTP 500" in m for m in flashed)

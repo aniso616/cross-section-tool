@@ -141,6 +141,59 @@ def test_fetch_dem_with_injected_opener(tmp_path):
     assert dest.exists()
 
 
+# ---------------------------------------------------------------------------
+# Boundary instrumentation: the request bbox must be WGS84 degrees (not metres),
+# and the warp must announce its coverage so a "200 but blank" is never silent.
+# ---------------------------------------------------------------------------
+
+def _make_flat_4326(path, value=-40.0):
+    """A constant-bathymetry EPSG:4326 DEM — the low-relief GEBCO case."""
+    h = w = 40
+    elev = np.full((h, w), value, dtype="float32")
+    transform = _affine_from_bounds(_LON0, _LAT0, _LON1, _LAT1, w, h)
+    with rasterio.open(path, "w", driver="GTiff", height=h, width=w, count=1,
+                       dtype="float32", crs="EPSG:4326", transform=transform,
+                       nodata=-9999.0) as ds:
+        ds.write(elev, 1)
+    return str(path)
+
+
+def test_fetch_logs_request_bbox_in_degrees_not_metres(tmp_path, caplog):
+    """The request window fetch_dem hands the opener must read in WGS84 degrees
+    (~4–5 / 54–55), proving the project-CRS extent is reprojected before the
+    request — the Step-3 'app sends metres' suspect, pinned by a test."""
+    src_path = _make_fixture_4326(tmp_path / "src.tif")
+
+    class _Ctx:
+        def __enter__(self): self._ds = rasterio.open(src_path); return self._ds
+        def __exit__(self, *a): self._ds.close()
+
+    seen = {}
+
+    def opener(source_key, bounds_ll, api_key):
+        seen["bbox"] = bounds_ll
+        return _Ctx()
+
+    dest = tmp_path / "dem" / "elevation.tif"
+    with caplog.at_level("INFO", logger="section_tool.core.dem"):
+        D.fetch_dem("gebco", _proj_bounds(), _PROJ, str(dest), opener=opener)
+    w, s, e, n = seen["bbox"]
+    assert 3.0 < w < 6.0 and 3.0 < e < 6.0              # degrees, not 4e5 metres
+    assert 53.0 < s < 56.0 and 53.0 < n < 56.0
+    assert "DEM request" in caplog.text and "WGS84" in caplog.text
+    assert "DEM warp" in caplog.text                    # warp boundary announced
+
+
+def test_warp_flags_constant_surface(tmp_path, caplog):
+    """An all-equal warp result (elevation lost / flat seabed) is logged loudly —
+    it is the silent-blank break point, computed on finite cells before fill."""
+    src_path = _make_flat_4326(tmp_path / "src.tif", value=-40.0)
+    with caplog.at_level("WARNING", logger="section_tool.core.dem"):
+        with rasterio.open(src_path) as src:
+            D.reproject_to_project(src, _proj_bounds(), _PROJ)
+    assert "constant surface" in caplog.text
+
+
 def test_source_registry():
     assert D.DEM_SOURCE_ORDER == ("copernicus", "gebco", "eudtm")
     assert D.DEM_SOURCES["copernicus"].needs_key is False

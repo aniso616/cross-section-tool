@@ -8,11 +8,16 @@ marshalled back via a Qt signal.
 """
 from __future__ import annotations
 
+import logging
+import os
 import threading
 
+import numpy as np
 from PySide6.QtCore import QObject, Signal
 
 from section_tool.core import dem as _dem
+
+log = logging.getLogger(__name__)
 
 _DEM_ZORDER = -9            # above the basemap (-10), under the grid (0) and data
 
@@ -51,18 +56,53 @@ class MapDemLayer(QObject):
 
     def load_geotiff(self, path: str) -> bool:
         """Load a stored DEM GeoTIFF and compute its hillshade. Returns success."""
+        ok, _detail = self._load_geotiff_diagnosed(path)
+        return ok
+
+    def _load_geotiff_diagnosed(self, path: str) -> "tuple[bool, str]":
+        """Load + hillshade with stage-specific diagnostics. Never raises.
+
+        Returns ``(ok, detail)`` where *detail* is a specific message for the
+        failed stage (read / hillshade) on failure, or the layer stats on
+        success. The old single bare ``except`` here swallowed the real cause,
+        which is exactly how a blank map stayed silent — so every exit reports.
+        """
         try:
-            data, extent, _epsg, prov = _dem.load_dem_geotiff(path)
-        except Exception:
-            return False
-        # Ground sample distance from the stored extent (project-CRS metres).
+            data, extent, epsg, prov = _dem.load_dem_geotiff(path)
+        except Exception as exc:                       # the actual read error
+            log.exception("DEM load failed: %s", path)
+            return False, f"could not read stored DEM: {exc}"
         h, w = data.shape
+        if h == 0 or w == 0:
+            return False, f"stored DEM has empty dimensions ({w}x{h})"
+        # Ground sample distance from the stored extent (project-CRS metres).
         dx = abs(extent[1] - extent[0]) / max(w, 1)
         dy = abs(extent[3] - extent[2]) / max(h, 1)
-        self._hs = _dem.hillshade(data, dx=dx or 1.0, dy=dy or 1.0)
+        try:
+            hs = _dem.hillshade(data, dx=dx or 1.0, dy=dy or 1.0)
+        except Exception as exc:
+            log.exception("DEM hillshade failed")
+            return False, f"hillshade computation failed: {exc}"
+
+        self._hs = hs
         self._extent = extent
         self._provenance = prov or {}
-        return True
+
+        elev_min, elev_max = float(np.nanmin(data)), float(np.nanmax(data))
+        hs_min, hs_max = float(hs.min()), float(hs.max())
+        flat = (hs_max - hs_min) < 1e-3
+        detail = (f"DEM layer: {w}x{h} EPSG:{epsg} "
+                  f"extent={tuple(round(v) for v in extent)} "
+                  f"elev[{elev_min:.1f},{elev_max:.1f}] "
+                  f"hillshade[{hs_min:.3f},{hs_max:.3f}] "
+                  f"visible={self._visible} z={_DEM_ZORDER}")
+        log.info(detail)
+        if flat:
+            # Not a hard failure (the data loaded), but a flat hillshade reads as
+            # a blank/uniform wash — surface it instead of letting it look broken.
+            log.warning("DEM hillshade is near-constant (range %.4f) — low relief "
+                        "or vert_exag too small for this terrain", hs_max - hs_min)
+        return True, detail
 
     def clear(self) -> None:
         self._hs = None
@@ -83,18 +123,42 @@ class MapDemLayer(QObject):
 
     def fetch(self, source_key: str, bounds_proj, project_epsg: int,
               dest_path: str, *, api_key: str | None = None, opener=None) -> None:
-        """Fetch + store + load a DEM off the UI thread; emit :attr:`loaded`."""
+        """Fetch + store + load a DEM off the UI thread; emit :attr:`loaded`.
+
+        The post-fetch path is split into named stages so a blank map can never
+        again be silent about *which* stage broke: fetch/warp/store, the stored
+        file, then load+hillshade each emit a specific :attr:`failed` message.
+        """
         def _work():
+            # Stage A — fetch + warp + store (network + rasterio in fetch_dem,
+            # which logs the request bbox and warp stats at the boundaries).
             try:
-                _dem.fetch_dem(source_key, bounds_proj, int(project_epsg),
-                               dest_path, api_key=api_key, opener=opener)
+                res = _dem.fetch_dem(source_key, bounds_proj, int(project_epsg),
+                                     dest_path, api_key=api_key, opener=opener)
             except Exception as exc:
-                self.failed.emit(str(exc))
+                log.exception("DEM fetch/warp/store failed")
+                self.failed.emit(f"fetch/warp failed: {exc}")
                 return
-            if self.load_geotiff(dest_path):
-                self.loaded.emit()
-            else:
-                self.failed.emit("DEM stored but could not be loaded.")
+
+            # Stage A check — a real file with bytes, not an error body silently
+            # written as a zero-length or HTML "GeoTIFF".
+            try:
+                size = os.path.getsize(res.path)
+            except OSError as exc:
+                self.failed.emit(f"stored DEM missing: {exc}")
+                return
+            if size <= 0:
+                self.failed.emit(f"stored DEM is 0 bytes ({res.path})")
+                return
+            log.info("DEM stored: %s (%d bytes) ocean_filled=%s",
+                     res.path, size, res.ocean_filled)
+
+            # Stage B/C — load + hillshade, with stats and a specific message.
+            ok, detail = self._load_geotiff_diagnosed(res.path)
+            if not ok:
+                self.failed.emit(detail)
+                return
+            self.loaded.emit()
 
         t = threading.Thread(target=_work, daemon=True)
         self._last_thread = t

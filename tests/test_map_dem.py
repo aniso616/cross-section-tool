@@ -89,6 +89,95 @@ def test_visibility_toggle(qapp, tmp_path):
     assert mv._ax.get_images()                              # back
 
 
+def _fixture_gebco_4326(path):
+    """Negative, gently-sloping bathymetry — the offshore (GEBCO) case the demo
+    actually fetches. Unlike the positive 0..1000 m ramp, every cell is below sea
+    level and the relief is low (−50 → −30 m), which is where the live blank showed.
+    """
+    h = w = 40
+    lons = np.linspace(_LON0, _LON1, w)
+    elev = np.tile(-50.0 + (lons - _LON0) * 20.0, (h, 1)).astype("float32")
+    transform = _affine_from_bounds(_LON0, _LAT0, _LON1, _LAT1, w, h)
+    with rasterio.open(path, "w", driver="GTiff", height=h, width=w, count=1,
+                       dtype="float32", crs="EPSG:4326", transform=transform,
+                       nodata=-9999.0) as ds:
+        ds.write(elev, 1)
+    return str(path)
+
+
+def test_negative_bathymetry_warps_and_hillshades(qapp, tmp_path):
+    """GEBCO-style negative elevations must warp + hillshade to a valid layer
+    (not all-zeroed, not NaN, in [0,1]). Locks the offshore case on a fixture."""
+    src = _fixture_gebco_4326(tmp_path / "src.tif")
+    with rasterio.open(src) as ds:
+        dem = D.reproject_to_project(ds, _proj_bounds(), _PROJ)
+    assert float(np.nanmin(dem.data)) < -25.0          # bathymetry survived the warp
+    dest = tmp_path / "dem" / "elevation.tif"
+    D.write_dem_geotiff(dem, str(dest),
+                        D.make_provenance("gebco", _proj_bounds(), _PROJ,
+                                          dem.ocean_filled))
+    state, mv = _map_with_section(qapp)
+    ok, detail = mv._dem._load_geotiff_diagnosed(str(dest))
+    assert ok and mv._dem.has_hillshade()
+    hs = mv._dem._hs
+    assert np.all(np.isfinite(hs)) and hs.min() >= 0.0 and hs.max() <= 1.0
+    assert "EPSG:" in detail and "hillshade[" in detail
+
+
+def test_flat_dem_loads_but_flags_constant_hillshade(qapp, tmp_path, caplog):
+    """A uniform DEM loads fine but its hillshade is a flat grey wash that reads
+    as blank. The layer must FLAG that (the suspected low-relief cause), never go
+    silent — this is the durable diagnostic regardless of the live root cause."""
+    dest = tmp_path / "dem" / "elevation.tif"
+    dest.parent.mkdir(parents=True)
+    h = w = 32
+    data = np.full((h, w), -40.0, dtype="float32")     # constant bathymetry
+    with rasterio.open(dest, "w", driver="GTiff", height=h, width=w, count=1,
+                       dtype="float32", crs="EPSG:32631",
+                       transform=_affine_from_bounds(600000, 6080000,
+                                                     610000, 6090000, w, h),
+                       nodata=None) as ds:
+        ds.write(data, 1)
+    state, mv = _map_with_section(qapp)
+    with caplog.at_level("WARNING", logger="section_tool.views.map_dem_layer"):
+        ok, detail = mv._dem._load_geotiff_diagnosed(str(dest))
+    assert ok and mv._dem.has_hillshade()              # not a hard failure
+    assert "near-constant" in caplog.text              # but flagged, not silent
+    assert "hillshade[" in detail
+
+
+def test_corrupt_dem_reports_specific_stage_not_silence(qapp, tmp_path):
+    """A non-GeoTIFF body (e.g. an OpenTopography HTML error written to disk)
+    must surface a specific 'could not read' message, not a silent blank."""
+    bad = tmp_path / "dem" / "elevation.tif"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"<html>OpenTopography error: invalid demtype</html>")
+    state, mv = _map_with_section(qapp)
+    ok, detail = mv._dem._load_geotiff_diagnosed(str(bad))
+    assert ok is False
+    assert "could not read" in detail.lower()
+    assert not mv._dem.has_hillshade()
+
+
+def test_fetch_stage_a_failure_emits_specific_message(qapp, tmp_path):
+    """When fetch/warp/store raises, fetch() emits a stage-tagged failed message
+    carrying the cause — not the old generic 'could not be loaded'."""
+    from PySide6.QtWidgets import QApplication
+    state, mv = _map_with_section(qapp)
+    got: list[str] = []
+    mv._dem.failed.connect(got.append)
+
+    def boom(*a, **k):
+        raise RuntimeError("HTTP 500 from source")
+
+    mv._dem.fetch("gebco", _proj_bounds(), _PROJ,
+                  str(tmp_path / "dem" / "elevation.tif"), opener=boom)
+    mv._dem._last_thread.join(timeout=10)
+    QApplication.processEvents()
+    assert any("fetch/warp failed" in m for m in got)
+    assert any("HTTP 500" in m for m in got)
+
+
 def test_fetch_into_layer_with_injected_opener(qapp, tmp_path):
     state, mv = _map_with_section(qapp)
     src = _fixture_4326(tmp_path / "src.tif")

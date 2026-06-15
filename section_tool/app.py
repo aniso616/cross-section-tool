@@ -3068,9 +3068,12 @@ class MainWindow(QMainWindow):
         self._hillshade_action.toggled.connect(self._map_view.set_hillshade_visible)
         menu.addAction(self._hillshade_action)
         view_menu.addMenu(menu)
-        # Status feedback when an off-thread fetch lands.
+        # Status feedback when an off-thread fetch lands — success and the
+        # stage-specific failure both flash so a blank map is never silent.
         self._map_view._dem.loaded.connect(
             lambda: self._flash_status("DEM loaded — hillshade on"))
+        self._map_view._dem.failed.connect(
+            lambda m: self._flash_status(f"DEM failed — {m}"))
 
     def _on_fetch_dem(self) -> None:
         """Explicit, confirmed DEM fetch for the current map extent."""
