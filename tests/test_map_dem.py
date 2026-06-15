@@ -214,6 +214,33 @@ def test_fetch_stage_a_failure_emits_specific_message(qapp, tmp_path):
     assert any("HTTP 500" in m for m in got)
 
 
+def test_dem_artist_on_axes_after_fetch(qapp, tmp_path):
+    """Render-path regression: once a fetch completes, the tinted DEM artist must
+    actually be on the map axes — visible, non-zero alpha, correct project-CRS
+    extent, under the data (zorder −9). Guards the loaded→render→imshow wiring."""
+    state, mv = _map_with_section(qapp)
+    src = _fixture_gebco_4326(tmp_path / "src.tif")    # valid negative bathymetry
+
+    class _Ctx:
+        def __enter__(self): self._ds = rasterio.open(src); return self._ds
+        def __exit__(self, *a): self._ds.close()
+
+    dest = str(tmp_path / "dem" / "elevation.tif")
+    mv._dem.fetch("gebco", _proj_bounds(), _PROJ, dest, opener=lambda *a, **k: _Ctx())
+    mv._dem._last_thread.join(timeout=10)
+    assert mv._dem.has_hillshade() and mv._dem._rgb is not None
+
+    mv.render()
+    imgs = [im for im in mv._ax.get_images() if -10 < im.get_zorder() < 0]
+    assert imgs, "DEM artist must be on the map axes under the data"
+    im = imgs[0]
+    assert im.get_visible()
+    assert im.get_alpha() and im.get_alpha() > 0
+    ext = im.get_extent()
+    assert 1e5 < min(ext[:2]) and 5e6 < min(ext[2:]) < 7e6          # UTM 31N metres
+    assert sorted(round(v) for v in ext) == sorted(round(v) for v in mv._dem._extent)
+
+
 def test_fetch_into_layer_with_injected_opener(qapp, tmp_path):
     state, mv = _map_with_section(qapp)
     src = _fixture_4326(tmp_path / "src.tif")

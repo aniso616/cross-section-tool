@@ -226,6 +226,87 @@ def test_warp_flags_constant_surface(tmp_path, caplog):
     assert "constant surface" in caplog.text
 
 
+# ---------------------------------------------------------------------------
+# Download hardening: a flaky short read must be retried/validated, never passed
+# half-decoded into the warp (the real GEBCO blank — transient read timeouts).
+# ---------------------------------------------------------------------------
+
+def _valid_tiff_bytes():
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+    with MemoryFile() as mf:
+        with mf.open(driver="GTiff", height=8, width=8, count=1, dtype="int16",
+                     crs="EPSG:4326", transform=from_bounds(4, 54, 5, 55, 8, 8),
+                     compress="lzw", nodata=-32767) as ds:
+            ds.write(np.full((8, 8), -40, "int16"), 1)
+        return mf.read()
+
+
+class _Resp:
+    def __init__(self, body, clen="__match__"):
+        self._body = body
+        self.headers = {} if clen is None else {
+            "Content-Length": str(len(body) if clen == "__match__" else clen)}
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _opener_from(sequence):
+    """A fake urlopen yielding each item in turn (Exception → raised, else _Resp)."""
+    state = {"n": 0}
+
+    def opener(url, timeout=None):
+        item = sequence[min(state["n"], len(sequence) - 1)]
+        state["n"] += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    opener.state = state
+    return opener
+
+
+def test_download_retries_transient_then_succeeds():
+    good = _valid_tiff_bytes()
+    op = _opener_from([TimeoutError("read timed out"), _Resp(good)])
+    out = D.download_validated_tiff("http://x", opener=op, sleep=lambda *_: None)
+    assert out == good and op.state["n"] == 2          # retried once, then OK
+
+
+def test_download_rejects_error_body_with_message():
+    op = _opener_from([_Resp(b"<html>API rate limit exceeded</html>", clen=None)])
+    with pytest.raises(RuntimeError, match="non-GeoTIFF"):
+        D.download_validated_tiff("http://x", opener=op, sleep=lambda *_: None)
+    assert op.state["n"] == 1                          # no retry on a permanent error
+
+
+def test_download_retries_truncated_body_then_fails():
+    good = _valid_tiff_bytes()
+    truncated = good[:len(good) // 2]                  # valid magic, short body
+    op = _opener_from([_Resp(truncated, clen=len(good))])   # declared > delivered
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        D.download_validated_tiff("http://x", opener=op, retries=3, sleep=lambda *_: None)
+    assert op.state["n"] == 3                          # all three attempts made
+
+
+def test_download_corrupt_tiff_caught_by_trial_decode():
+    # TIFF magic present and Content-Length matches, so only the trial decode can
+    # reject it — exactly the "header parses, tiles won't" failure that otherwise
+    # blew up in the warp.
+    body = b"II*\x00" + b"\x00" * 60                   # magic, but not a real TIFF
+    op = _opener_from([_Resp(body, clen="__match__")])
+    with pytest.raises(RuntimeError, match="failed after"):
+        D.download_validated_tiff("http://x", opener=op, retries=2, sleep=lambda *_: None)
+    assert op.state["n"] == 2
+
+
 def test_source_registry():
     assert D.DEM_SOURCE_ORDER == ("copernicus", "gebco", "eudtm")
     assert D.DEM_SOURCES["copernicus"].needs_key is False

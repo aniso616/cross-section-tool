@@ -14,6 +14,9 @@ import datetime
 import json
 import logging
 import os
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -353,6 +356,74 @@ def fetch_dem(source_key: str, bounds_proj, project_epsg: int, dest_path: str, *
                      ocean_filled=dem.ocean_filled)
 
 
+_FETCH_RETRIES = 3
+_FETCH_TIMEOUT = 60
+
+
+def _looks_like_tiff(body: bytes) -> bool:
+    return body[:4] in (b"II*\x00", b"MM\x00*")
+
+
+def download_validated_tiff(url: str, *, opener=None, retries: int = _FETCH_RETRIES,
+                            timeout: int = _FETCH_TIMEOUT, sleep=time.sleep) -> bytes:
+    """Download *url*, returning GeoTIFF bytes that are guaranteed to decode.
+
+    The OpenTopography body is tiny (a few KB), so a dropped or short read yields
+    a TIFF whose header parses but whose LZW tiles will not decode — which then
+    explodes deep in the warp ("code not yet in table") with no retry: the silent
+    blank DEM. Here the whole body is read, API error pages are rejected with
+    their message (no retry — a bad key/bbox won't fix itself), and the body is
+    trial-decoded before it is handed on; transient failures (timeout, truncated
+    body, bad decode) are retried with a short backoff.
+    """
+    opener = opener or urllib.request.urlopen
+    last = None
+    for attempt in range(1, retries + 1):
+        try:
+            with opener(url, timeout=timeout) as resp:
+                body = resp.read()
+                headers = getattr(resp, "headers", None)
+                clen = headers.get("Content-Length") if headers else None
+        except urllib.error.HTTPError as exc:           # 4xx = client error, no retry
+            detail = ""
+            try:
+                detail = exc.read()[:200].decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+            if 400 <= exc.code < 500:
+                raise RuntimeError(
+                    f"DEM source error {exc.code}: {detail or exc.reason}") from exc
+            last = exc
+            log.warning("DEM download attempt %d/%d HTTP %s", attempt, retries, exc.code)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last = exc
+            log.warning("DEM download attempt %d/%d failed: %s", attempt, retries, exc)
+        else:
+            # A non-TIFF body is an API error page (bad key, rate limit, bad
+            # bbox) — surface its message; retrying will not help.
+            if not _looks_like_tiff(body):
+                snippet = body[:200].decode("utf-8", "replace").strip()
+                raise RuntimeError(
+                    f"DEM source returned a non-GeoTIFF response: {snippet!r}")
+            if clen is not None and str(clen).isdigit() and int(clen) != len(body):
+                last = RuntimeError(f"short read: {len(body)}/{clen} bytes")
+                log.warning("DEM download attempt %d/%d truncated (%d/%s)",
+                            attempt, retries, len(body), clen)
+            else:
+                try:
+                    with MemoryFile(body).open() as ds:
+                        ds.read(1)
+                    log.info("DEM download OK: %d bytes (attempt %d)", len(body), attempt)
+                    return body
+                except Exception as exc:                # truncated/corrupt tiles
+                    last = exc
+                    log.warning("DEM download attempt %d/%d would not decode: %s",
+                                attempt, retries, exc)
+        if attempt < retries:
+            sleep(min(2 ** (attempt - 1), 5))
+    raise RuntimeError(f"DEM download failed after {retries} attempts: {last}")
+
+
 def _default_opener(source_key: str, bounds_ll, api_key):   # pragma: no cover - network
     """Open the real source as a rasterio dataset. Network — not run in tests.
 
@@ -369,9 +440,8 @@ def _default_opener(source_key: str, bounds_ll, api_key):   # pragma: no cover -
         url = ("https://portal.opentopography.org/API/globaldem"
                f"?demtype={src.dataset}&south={s}&north={n}&west={w}&east={e}"
                f"&outputFormat=GTiff&API_Key={api_key}")
-        import urllib.request
-        with urllib.request.urlopen(url, timeout=60) as resp:
-            payload = resp.read()
+        # Retry + validate: a flaky short read must not reach the warp half-decoded.
+        payload = download_validated_tiff(url)
         return MemoryFile(payload).open()
     # Copernicus GLO-30 mosaic COG on AWS Open Data (no key); /vsicurl/ windowed.
     cog = ("/vsicurl/https://copernicus-dem-30m.s3.amazonaws.com/"
