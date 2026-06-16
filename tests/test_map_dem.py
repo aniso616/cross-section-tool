@@ -265,6 +265,28 @@ def test_apply_drape_composites_over_relief_and_clears(qapp, tmp_path):
     assert [im for im in mv._ax.get_images() if -10 < im.get_zorder() < 0]   # tint back
 
 
+def test_imported_drape_missing_file_falls_back_to_tint_with_message(
+        qapp, tmp_path, monkeypatch):
+    """On reopen, a persisted imported drape whose file is gone must flash a clear
+    'not found' message and fall back to the tint — never silently render flat."""
+    state, mv = _map_with_section(qapp)
+    assert mv._dem.load_geotiff(_store_dem(tmp_path))
+    mv._dem._drape_source = "imported"                   # as restored from meta
+    missing = str(tmp_path / "gone" / "imagery.tif")
+    monkeypatch.setattr(state, "get_meta",
+                        lambda k, d="": missing if k == "dem_drape_path" else d)
+    msgs = []
+    mv.status_message.connect(msgs.append)
+
+    mv._reapply_drape_after_load()                       # what runs after a DEM load
+
+    assert any("not found" in m and "imagery.tif" in m for m in msgs)
+    assert not mv._dem.has_drape()                       # tint fallback, not flat/blank
+    assert mv._dem.drape_source == "none"
+    mv.render()                                          # must not crash
+    assert [im for im in mv._ax.get_images() if -10 < im.get_zorder() < 0]   # tint drawn
+
+
 def test_dem_artist_on_axes_after_fetch(qapp, tmp_path):
     """Render-path regression: once a fetch completes, the tinted DEM artist must
     actually be on the map axes — visible, non-zero alpha, correct project-CRS

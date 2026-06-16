@@ -353,6 +353,21 @@ def test_drape_over_planar_terrain_preserves_imagery():
     assert np.corrcoef(out[..., 0].ravel(), rgb[..., 0].ravel())[0, 1] > 0.9
 
 
+def test_drape_relief_is_near_uniform_over_constant_gradient_any_vert_exag():
+    """A constant-gradient surface has ONE shading value, so draping uniform
+    imagery over it stays near-uniform at ANY vert_exag. This documents why the
+    F3 seabed drape looks flat and blocks a future 'fix' that inflates vert_exag
+    to fake relief that isn't there (the lesson from the tint fix)."""
+    h, w = 50, 50
+    _yy, xx = np.mgrid[0:h, 0:w]
+    elev = (-50.0 + xx * 0.2).astype("float32")          # a tilted plane
+    rgb = np.full((h, w, 3), 0.6, dtype="float32")       # uniform imagery
+    for ve in (1.0, 40.0):
+        out = D.drape_rgb(rgb, elev, dx=100.0, dy=100.0, vert_exag=ve)
+        # relief adds no structure — exaggeration cannot manufacture it on a plane
+        assert float(out[..., :3].std()) < 1e-3
+
+
 def test_resample_rgb_lands_on_dem_grid():
     from rasterio.transform import from_bounds
     sh = 100

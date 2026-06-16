@@ -357,11 +357,19 @@ class MapView(QWidget):
         elif src == "imported":
             import os
             path = self._state.get_meta("dem_drape_path", "")
-            if path and os.path.exists(path):
-                try:
-                    self.apply_imported_drape(path)
-                except Exception as exc:
-                    self.status_message.emit(f"Drape: {exc}")
+            if not path or not os.path.exists(path):
+                # Imagery gone — never render flat silently. Tell the user and
+                # fall back to the colormap tint.
+                self._dem.clear_drape()
+                self.status_message.emit(f"Drape: draped image not found: {path}")
+                self.render()
+                return
+            try:
+                self.apply_imported_drape(path)
+            except Exception as exc:
+                self._dem.clear_drape()
+                self.status_message.emit(f"Drape: {exc}")
+                self.render()
 
     def _render_vector_layers(self) -> None:
         """Render imported vector layers (shapefiles, geopackages, GeoJSON)."""
