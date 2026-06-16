@@ -888,6 +888,7 @@ class MainWindow(QMainWindow):
         s.project_changed.connect(self._update_tool_availability)
         # Reflect the project's restored basemap source in the menu checkmarks.
         s.project_changed.connect(self._sync_basemap_menu)
+        s.project_changed.connect(self._sync_dem_colormap_menu)
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
@@ -3067,6 +3068,7 @@ class MainWindow(QMainWindow):
         self._hillshade_action.setChecked(True)
         self._hillshade_action.toggled.connect(self._map_view.set_hillshade_visible)
         menu.addAction(self._hillshade_action)
+        self._build_dem_colormap_menu(menu)
         view_menu.addMenu(menu)
         # Status feedback when an off-thread fetch lands — success and the
         # stage-specific failure both flash so a blank map is never silent.
@@ -3074,6 +3076,40 @@ class MainWindow(QMainWindow):
             lambda: self._flash_status("DEM loaded — hillshade on"))
         self._map_view._dem.failed.connect(
             lambda m: self._flash_status(f"DEM failed — {m}"))
+
+    def _build_dem_colormap_menu(self, elevation_menu) -> None:
+        """View ▸ Elevation ▸ Colormap — curated elevation tints, persisted."""
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu as _QMenu
+        from section_tool.core.dem import DEM_CMAPS, DEM_CMAP_ORDER
+        sub = _QMenu("&Colormap", self)
+        self._dem_cmap_actions = {}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        current = self._map_view.dem_cmap()
+        for key in DEM_CMAP_ORDER:
+            act = QAction(DEM_CMAPS[key], self)
+            act.setCheckable(True)
+            act.setChecked(key == current)
+            act.triggered.connect(lambda _c=False, k=key: self._on_dem_cmap_selected(k))
+            group.addAction(act)
+            self._dem_cmap_actions[key] = act
+            sub.addAction(act)
+        elevation_menu.addMenu(sub)
+
+    def _on_dem_cmap_selected(self, key: str) -> None:
+        from section_tool.core.dem import DEM_CMAPS
+        self._map_view.set_dem_cmap(key)
+        self._flash_status(f"DEM colormap: {DEM_CMAPS.get(key, key)}")
+
+    def _sync_dem_colormap_menu(self) -> None:
+        """Reflect the project's restored DEM colormap in the menu checkmarks."""
+        actions = getattr(self, "_dem_cmap_actions", None)
+        if not actions:
+            return
+        current = self._map_view.dem_cmap()
+        for key, act in actions.items():
+            act.setChecked(key == current)
 
     def _on_fetch_dem(self) -> None:
         """Explicit, confirmed DEM fetch for the current map extent."""

@@ -33,9 +33,12 @@ class MapDemLayer(QObject):
         self._visible = True
         self._hs = None                # 2D greyscale hillshade in [0, 1] (diagnostic)
         self._rgb = None               # RGBA elevation-tinted relief (what renders)
+        self._elev = None              # warped project-CRS elevation (re-tint cache)
+        self._dx = self._dy = None     # metric pixel size of the warped grid
         self._extent = None            # (left, right, bottom, top) project CRS
         self._provenance = {}
         self._vert_exag = None         # vertical exaggeration used for the shading
+        self._cmap = _dem.DEFAULT_DEM_CMAP
         self._last_thread = None       # test hook
 
     # ---- visibility ------------------------------------------------------
@@ -53,6 +56,35 @@ class MapDemLayer(QObject):
     @property
     def provenance(self) -> dict:
         return dict(self._provenance)
+
+    # ---- colormap (tint only — never re-fetches) -------------------------
+
+    @property
+    def cmap(self) -> str:
+        return self._cmap
+
+    def set_cmap(self, name: str) -> bool:
+        """Select the elevation colormap. Returns True if it changed.
+
+        The warped DEM is cached in memory, so a colormap change only re-runs the
+        tint step — no disk read, no network. Sets the name even with no DEM yet
+        loaded, so a later fetch tints with it.
+        """
+        if not _dem.is_dem_cmap(name) or name == self._cmap:
+            return False
+        self._cmap = name
+        self._recompute_tint()
+        return True
+
+    def _recompute_tint(self) -> None:
+        """Re-run shaded_relief on the cached elevation with the current cmap."""
+        if self._elev is None:
+            return
+        try:
+            self._rgb = _dem.shaded_relief(self._elev, dx=self._dx, dy=self._dy,
+                                           vert_exag=self._vert_exag, cmap=self._cmap)
+        except Exception:
+            log.exception("DEM re-tint failed for cmap %s", self._cmap)
 
     # ---- loading ---------------------------------------------------------
 
@@ -91,13 +123,16 @@ class MapDemLayer(QObject):
         vert_exag = _dem.auto_vert_exag(data, dx=dx, dy=dy)
         try:
             hs = _dem.hillshade(data, dx=dx, dy=dy, vert_exag=vert_exag)
-            rgb = _dem.shaded_relief(data, dx=dx, dy=dy, vert_exag=vert_exag)
+            rgb = _dem.shaded_relief(data, dx=dx, dy=dy, vert_exag=vert_exag,
+                                     cmap=self._cmap)
         except Exception as exc:
             log.exception("DEM shading failed")
             return False, f"shading computation failed: {exc}"
 
         self._hs = hs                      # greyscale relief — kept for diagnostics
         self._rgb = rgb                    # elevation-tinted relief — what renders
+        self._elev = data                  # cached so a cmap change re-tints offline
+        self._dx, self._dy = dx, dy
         self._extent = extent
         self._provenance = prov or {}
         self._vert_exag = vert_exag        # recorded: the exaggeration actually used
@@ -125,6 +160,8 @@ class MapDemLayer(QObject):
     def clear(self) -> None:
         self._hs = None
         self._rgb = None
+        self._elev = None
+        self._dx = self._dy = None
         self._extent = None
         self._provenance = {}
 

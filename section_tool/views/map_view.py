@@ -277,9 +277,22 @@ class MapView(QWidget):
     def has_dem(self) -> bool:
         return self._dem.has_hillshade()
 
+    def set_dem_cmap(self, name: str) -> None:
+        """Select the DEM elevation colormap, persist it, re-tint (no re-fetch)."""
+        if self._dem.set_cmap(name):
+            self._state.set_meta("dem_cmap", name)
+            self.render()
+
+    def dem_cmap(self) -> str:
+        return self._dem.cmap
+
     def load_dem_from_project(self) -> None:
-        """Load this project's previously-stored DEM, if any (no fetch)."""
+        """Restore the persisted DEM colormap, then this project's stored DEM (no fetch)."""
         import os
+        from section_tool.core.dem import DEFAULT_DEM_CMAP
+        # Restore the cmap BEFORE loading so the tint is computed with it.
+        self._dem.set_cmap(self._state.get_meta("dem_cmap", DEFAULT_DEM_CMAP)
+                           or DEFAULT_DEM_CMAP)
         p = self.dem_path()
         if os.path.exists(p) and self._dem.load_geotiff(p):
             self.request_render()

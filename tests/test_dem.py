@@ -316,6 +316,16 @@ def test_download_corrupt_tiff_caught_by_real_file_decode(tmp_path):
     assert op.state["n"] == 2
 
 
+def test_dem_cmap_registry():
+    assert D.DEM_CMAP_ORDER[0] == "terrain"             # bathy default leads
+    assert {"gray", "viridis", "gist_earth", "ocean"} <= set(D.DEM_CMAP_ORDER)
+    assert all(D.is_dem_cmap(k) for k in D.DEM_CMAP_ORDER)
+    assert not D.is_dem_cmap("not-a-cmap")
+    # Grayscale is honestly an elevation ramp, never mislabelled a slope hillshade.
+    assert "ramp" in D.DEM_CMAPS["gray"].lower()
+    assert "hillshade" not in D.DEM_CMAPS["gray"].lower()
+
+
 def test_source_registry():
     assert D.DEM_SOURCE_ORDER == ("copernicus", "gebco", "eudtm")
     assert D.DEM_SOURCES["copernicus"].needs_key is False

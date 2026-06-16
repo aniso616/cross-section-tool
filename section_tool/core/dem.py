@@ -248,6 +248,23 @@ def auto_vert_exag(dem2d: np.ndarray, *, dx: float, dy: float,
 
 DEFAULT_DEM_CMAP = "terrain"   # topo+bathy ramp: depth reads as colour, not relief
 
+# Curated elevation colormaps for the tint. Keys are matplotlib cmap names so
+# shaded_relief takes them directly. NOTE the grayscale entry is an *elevation
+# ramp* (light→dark by depth) — NOT a grey slope hillshade, which washes out flat
+# over near-planar seabed (proven on F3). It is honestly labelled as a ramp.
+DEM_CMAPS = {
+    "terrain":    "Terrain (topo + bathy)",
+    "gist_earth": "Earth",
+    "ocean":      "Ocean (bathy ramp)",
+    "viridis":    "Viridis",
+    "gray":       "Grayscale (elevation ramp)",
+}
+DEM_CMAP_ORDER = ("terrain", "gist_earth", "ocean", "viridis", "gray")
+
+
+def is_dem_cmap(name: str) -> bool:
+    return name in DEM_CMAPS
+
 
 def _get_cmap(name: str):
     try:

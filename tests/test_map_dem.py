@@ -214,6 +214,29 @@ def test_fetch_stage_a_failure_emits_specific_message(qapp, tmp_path):
     assert any("HTTP 500" in m for m in got)
 
 
+def test_dem_cmap_default_is_terrain(qapp):
+    _state, mv = _map_with_section(qapp)
+    assert mv.dem_cmap() == "terrain"
+
+
+def test_set_cmap_retints_cached_elevation_without_reload(qapp, tmp_path, monkeypatch):
+    """Changing colormap re-tints the cached warped DEM — no disk read, no fetch."""
+    state, mv = _map_with_section(qapp)
+    assert mv._dem.load_geotiff(_store_dem(tmp_path))   # loads + tints (terrain)
+    rgb_terrain = mv._dem._rgb.copy()
+
+    # Break the loader: a re-tint must not touch disk (proves the elevation cache).
+    monkeypatch.setattr(D, "load_dem_geotiff",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("reloaded")))
+    assert mv._dem.set_cmap("gray") is True
+    rgb_gray = mv._dem._rgb
+    assert rgb_gray.shape == rgb_terrain.shape
+    assert not np.allclose(rgb_gray[..., :3], rgb_terrain[..., :3])   # tint changed
+    assert float(rgb_gray[..., 3].min()) >= 0.99                      # still opaque
+    assert mv._dem.set_cmap("gray") is False            # no-op when unchanged
+    assert mv._dem.set_cmap("not-a-cmap") is False      # rejects unknown
+
+
 def test_dem_artist_on_axes_after_fetch(qapp, tmp_path):
     """Render-path regression: once a fetch completes, the tinted DEM artist must
     actually be on the map axes — visible, non-zero alpha, correct project-CRS

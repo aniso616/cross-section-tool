@@ -673,6 +673,56 @@ class TestDemFetchEndToEnd:
         assert win._map_view._ax.get_images() == []
         assert win._map_view.hillshade_visible() is False
 
+    def _load_dem_into(self, win, state, tmp_path):
+        import numpy as np
+        rasterio = pytest.importorskip("rasterio")
+        from rasterio.transform import from_bounds as _affine
+        from section_tool.core.crs import transform_points
+        lon0, lon1, lat0, lat1 = 4.0, 5.0, 54.0, 55.0
+        src = tmp_path / "src.tif"
+        h = w = 32
+        elev = np.tile((np.linspace(lon0, lon1, w) - lon0) * 1000.0,
+                       (h, 1)).astype("float32")
+        with rasterio.open(src, "w", driver="GTiff", height=h, width=w, count=1,
+                           dtype="float32", crs="EPSG:4326",
+                           transform=_affine(lon0, lat0, lon1, lat1, w, h),
+                           nodata=-9999.0) as ds:
+            ds.write(elev, 1)
+        state.project.crs_epsg = 32631
+        ex, ny = transform_points([lon0, lon1], [lat0, lat1], 4326, 32631)
+        state.add_section(Section([(ex[0], ny[0]), (ex[1], ny[1])],
+                                  name="L1", crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+
+        class _Ctx:
+            def __enter__(self): self._ds = rasterio.open(src); return self._ds
+            def __exit__(self, *a): self._ds.close()
+
+        win._map_view._dem.fetch("copernicus", win._map_view._basemap_extent(),
+                                 32631, str(tmp_path / "dem" / "elevation.tif"),
+                                 opener=lambda *a, **k: _Ctx())
+        win._map_view._dem._last_thread.join(timeout=10)
+        QApplication.processEvents()
+        assert win._map_view.has_dem()
+
+    def test_colormap_menu_re_tints_and_persists(self, win, state, tmp_path, monkeypatch):
+        """Real-window: the Colormap menu re-tints the DEM and persists, no refetch."""
+        import numpy as np
+        self._load_dem_into(win, state, tmp_path)
+        rgb_before = win._map_view._dem._rgb.copy()
+        fetch_thread = win._map_view._dem._last_thread
+
+        writes = []
+        monkeypatch.setattr(state, "set_meta", lambda k, v: writes.append((k, v)))
+        assert win._map_view.dem_cmap() == "terrain"
+
+        win._dem_cmap_actions["gray"].trigger()          # drive the real menu action
+        assert win._map_view.dem_cmap() == "gray"
+        assert ("dem_cmap", "gray") in writes            # persisted per project
+        assert win._dem_cmap_actions["gray"].isChecked()
+        assert not np.allclose(win._map_view._dem._rgb[..., :3], rgb_before[..., :3])
+        assert win._map_view._dem._last_thread is fetch_thread   # no new fetch
+
     def test_fetch_dem_failure_flashes_specific_stage(self, win, state,
                                                       tmp_path, monkeypatch):
         """A failed fetch must reach _flash_status with a specific stage message —
