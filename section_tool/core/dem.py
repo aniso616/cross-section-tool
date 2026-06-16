@@ -364,19 +364,24 @@ def _looks_like_tiff(body: bytes) -> bool:
     return body[:4] in (b"II*\x00", b"MM\x00*")
 
 
-def download_validated_tiff(url: str, *, opener=None, retries: int = _FETCH_RETRIES,
-                            timeout: int = _FETCH_TIMEOUT, sleep=time.sleep) -> bytes:
-    """Download *url*, returning GeoTIFF bytes that are guaranteed to decode.
+def download_validated_tiff(url: str, dest: str, *, opener=None,
+                            retries: int = _FETCH_RETRIES,
+                            timeout: int = _FETCH_TIMEOUT, sleep=time.sleep) -> str:
+    """Download *url* to the real file *dest*, validated to decode. Returns *dest*.
 
-    The OpenTopography body is tiny (a few KB), so a dropped or short read yields
-    a TIFF whose header parses but whose LZW tiles will not decode — which then
-    explodes deep in the warp ("code not yet in table") with no retry: the silent
-    blank DEM. Here the whole body is read, API error pages are rejected with
-    their message (no retry — a bad key/bbox won't fix itself), and the body is
-    trial-decoded before it is handed on; transient failures (timeout, truncated
-    body, bad decode) are retried with a short backoff.
+    Two things made the DEM blank intermittently. (1) The OpenTopography body is
+    tiny (a few KB), so a dropped/short read yields a TIFF whose header parses but
+    whose LZW tiles won't decode. (2) Reading those bytes through an in-memory
+    ``MemoryFile`` (``/vsimem``) is unreliable for these tiled-LZW tiffs — two
+    separate opens of the *same* bytes can disagree, so a trial decode passes and
+    the warp then throws ("scanline size zero"). Writing to a real file (what a
+    plain ``curl`` does) and validating *that* file — the very file the warp will
+    open — removes both. API error pages are rejected with their message (no
+    retry); transient failures (timeout, truncation, bad decode) retry with
+    backoff.
     """
     opener = opener or urllib.request.urlopen
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
     last = None
     for attempt in range(1, retries + 1):
         try:
@@ -410,11 +415,14 @@ def download_validated_tiff(url: str, *, opener=None, retries: int = _FETCH_RETR
                 log.warning("DEM download attempt %d/%d truncated (%d/%s)",
                             attempt, retries, len(body), clen)
             else:
+                with open(dest, "wb") as fh:
+                    fh.write(body)
                 try:
-                    with MemoryFile(body).open() as ds:
+                    with rasterio.open(dest) as ds:     # validate the REAL file
                         ds.read(1)
-                    log.info("DEM download OK: %d bytes (attempt %d)", len(body), attempt)
-                    return body
+                    log.info("DEM download OK: %d bytes -> %s (attempt %d)",
+                             len(body), dest, attempt)
+                    return dest
                 except Exception as exc:                # truncated/corrupt tiles
                     last = exc
                     log.warning("DEM download attempt %d/%d would not decode: %s",
@@ -431,6 +439,7 @@ def _default_opener(source_key: str, bounds_ll, api_key):   # pragma: no cover -
     the OpenTopography global-DEM API (key required). The key is passed in by the
     caller (entered in settings, stored locally, never committed).
     """
+    import tempfile
     w, s, e, n = bounds_ll
     src = DEM_SOURCES[source_key]
     if src.needs_key:
@@ -440,9 +449,11 @@ def _default_opener(source_key: str, bounds_ll, api_key):   # pragma: no cover -
         url = ("https://portal.opentopography.org/API/globaldem"
                f"?demtype={src.dataset}&south={s}&north={n}&west={w}&east={e}"
                f"&outputFormat=GTiff&API_Key={api_key}")
-        # Retry + validate: a flaky short read must not reach the warp half-decoded.
-        payload = download_validated_tiff(url)
-        return MemoryFile(payload).open()
+        # Download to a real file and open THAT for the warp — never /vsimem — so a
+        # flaky short read can't slip a half-decodable tiff into the reproject.
+        tmp = os.path.join(tempfile.mkdtemp(prefix="section_dem_"), "source.tif")
+        download_validated_tiff(url, tmp)
+        return rasterio.open(tmp)
     # Copernicus GLO-30 mosaic COG on AWS Open Data (no key); /vsicurl/ windowed.
     cog = ("/vsicurl/https://copernicus-dem-30m.s3.amazonaws.com/"
            "Copernicus_DSM_COG_10_mosaic.vrt")

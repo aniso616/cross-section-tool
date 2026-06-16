@@ -214,6 +214,9 @@ def test_planar_bathymetry_tint_carries_depth_when_relief_flat():
     assert rgb.shape[:2] == plane.shape and rgb.shape[2] == 4
     assert float(rgb[..., :3].std()) > 0.05                # tint varies = depth
     assert not np.allclose(rgb[:, 0, :3], rgb[:, -1, :3], atol=0.05)
+    # Alpha must be fully opaque — a zero-alpha RGBA would draw as background
+    # with no error (the invisible-DEM suspect).
+    assert float(rgb[..., 3].min()) >= 0.99
 
 
 def test_warp_flags_constant_surface(tmp_path, caplog):
@@ -273,37 +276,43 @@ def _opener_from(sequence):
     return opener
 
 
-def test_download_retries_transient_then_succeeds():
+def test_download_retries_transient_then_writes_real_file(tmp_path):
     good = _valid_tiff_bytes()
     op = _opener_from([TimeoutError("read timed out"), _Resp(good)])
-    out = D.download_validated_tiff("http://x", opener=op, sleep=lambda *_: None)
-    assert out == good and op.state["n"] == 2          # retried once, then OK
+    dest = str(tmp_path / "dem" / "source.tif")
+    out = D.download_validated_tiff("http://x", dest, opener=op, sleep=lambda *_: None)
+    assert out == dest and op.state["n"] == 2          # retried once, then OK
+    with rasterio.open(out) as ds:                     # the warp will open this same file
+        assert ds.read(1).shape == (8, 8)
 
 
-def test_download_rejects_error_body_with_message():
+def test_download_rejects_error_body_with_message(tmp_path):
     op = _opener_from([_Resp(b"<html>API rate limit exceeded</html>", clen=None)])
     with pytest.raises(RuntimeError, match="non-GeoTIFF"):
-        D.download_validated_tiff("http://x", opener=op, sleep=lambda *_: None)
+        D.download_validated_tiff("http://x", str(tmp_path / "s.tif"),
+                                  opener=op, sleep=lambda *_: None)
     assert op.state["n"] == 1                          # no retry on a permanent error
 
 
-def test_download_retries_truncated_body_then_fails():
+def test_download_retries_truncated_body_then_fails(tmp_path):
     good = _valid_tiff_bytes()
     truncated = good[:len(good) // 2]                  # valid magic, short body
     op = _opener_from([_Resp(truncated, clen=len(good))])   # declared > delivered
     with pytest.raises(RuntimeError, match="failed after 3 attempts"):
-        D.download_validated_tiff("http://x", opener=op, retries=3, sleep=lambda *_: None)
+        D.download_validated_tiff("http://x", str(tmp_path / "s.tif"),
+                                  opener=op, retries=3, sleep=lambda *_: None)
     assert op.state["n"] == 3                          # all three attempts made
 
 
-def test_download_corrupt_tiff_caught_by_trial_decode():
-    # TIFF magic present and Content-Length matches, so only the trial decode can
-    # reject it — exactly the "header parses, tiles won't" failure that otherwise
+def test_download_corrupt_tiff_caught_by_real_file_decode(tmp_path):
+    # TIFF magic present and Content-Length matches, so only decoding the written
+    # file can reject it — the "header parses, tiles won't" failure that otherwise
     # blew up in the warp.
     body = b"II*\x00" + b"\x00" * 60                   # magic, but not a real TIFF
     op = _opener_from([_Resp(body, clen="__match__")])
     with pytest.raises(RuntimeError, match="failed after"):
-        D.download_validated_tiff("http://x", opener=op, retries=2, sleep=lambda *_: None)
+        D.download_validated_tiff("http://x", str(tmp_path / "s.tif"),
+                                  opener=op, retries=2, sleep=lambda *_: None)
     assert op.state["n"] == 2
 
 
