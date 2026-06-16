@@ -122,7 +122,11 @@ class MapView(QWidget):
         from section_tool.views.map_dem_layer import MapDemLayer
         self._dem = MapDemLayer(parent=self)
         self._dem.loaded.connect(self.request_render)
+        self._dem.loaded.connect(self._reapply_drape_after_load)
         self._dem.failed.connect(lambda m: self.status_message.emit(f"DEM: {m}"))
+        self._dem.draped.connect(self.request_render)
+        self._dem.drape_failed.connect(lambda m: self.status_message.emit(f"Drape: {m}"))
+        self._drape_fetch_fn = None         # test hook: inject tile fetch (no network)
 
         self._setup_ui()
         self._connect_signals()
@@ -287,15 +291,77 @@ class MapView(QWidget):
         return self._dem.cmap
 
     def load_dem_from_project(self) -> None:
-        """Restore the persisted DEM colormap, then this project's stored DEM (no fetch)."""
+        """Restore the persisted DEM colormap + drape, then this project's stored DEM."""
         import os
         from section_tool.core.dem import DEFAULT_DEM_CMAP
         # Restore the cmap BEFORE loading so the tint is computed with it.
         self._dem.set_cmap(self._state.get_meta("dem_cmap", DEFAULT_DEM_CMAP)
                            or DEFAULT_DEM_CMAP)
+        self._dem._drape_source = self._state.get_meta("dem_drape", "none") or "none"
         p = self.dem_path()
         if os.path.exists(p) and self._dem.load_geotiff(p):
+            self._reapply_drape_after_load()   # re-fetch/re-apply the drape for this grid
             self.request_render()
+
+    # ------------------------------------------------------------------
+    # Imagery drape (View ▸ Elevation ▸ Drape)
+    # ------------------------------------------------------------------
+
+    def drape_source(self) -> str:
+        return self._dem.drape_source
+
+    def set_drape_source(self, key: str) -> None:
+        """Select the drape: 'none' | 'satellite' | 'imported', persisted per project."""
+        self._state.set_meta("dem_drape", key)
+        if key == "none":
+            self._dem.clear_drape()
+            self.render()
+        elif key == "satellite":
+            self.fetch_satellite_drape()
+        # 'imported' is installed via apply_imported_drape() from the file dialog.
+
+    def fetch_satellite_drape(self, *, fetch_fn=None) -> None:
+        """Drape Esri satellite imagery over the DEM (off-thread tile fetch)."""
+        from section_tool.views.map_basemap_layer import BASEMAP_SOURCES, _fetch_warped
+        if not self.has_dem():
+            self.status_message.emit("Drape: fetch a DEM first.")
+            return
+        src = BASEMAP_SOURCES.get("satellite")
+        epsg = int(getattr(self._state.project, "crs_epsg", 0) or 0)
+        self._dem.fetch_satellite_drape(
+            src.provider if src else None, epsg,
+            fetch_fn=fetch_fn or self._drape_fetch_fn or _fetch_warped,
+            provenance={"drape": "satellite",
+                        "attribution": src.attribution if src else ""})
+
+    def apply_imported_drape(self, path: str) -> bool:
+        """Drape a user-supplied georeferenced raster. Raises on ungeoreferenced."""
+        from section_tool.core import dem as _dem
+        if not self.has_dem():
+            self.status_message.emit("Drape: fetch a DEM first.")
+            return False
+        rgb, transform, crs = _dem.load_user_raster_rgb(path)   # raises if no CRS
+        ok = self._dem.apply_drape(rgb, transform, crs, source="imported",
+                                   provenance={"drape": "imported", "path": path})
+        if ok:
+            self._state.set_meta("dem_drape", "imported")
+            self._state.set_meta("dem_drape_path", path)
+            self.render()
+        return ok
+
+    def _reapply_drape_after_load(self) -> None:
+        """After a DEM (re)loads, re-establish the active drape for the new grid."""
+        src = self._dem.drape_source
+        if src == "satellite":
+            self.fetch_satellite_drape()
+        elif src == "imported":
+            import os
+            path = self._state.get_meta("dem_drape_path", "")
+            if path and os.path.exists(path):
+                try:
+                    self.apply_imported_drape(path)
+                except Exception as exc:
+                    self.status_message.emit(f"Drape: {exc}")
 
     def _render_vector_layers(self) -> None:
         """Render imported vector layers (shapefiles, geopackages, GeoJSON)."""

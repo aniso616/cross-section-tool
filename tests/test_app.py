@@ -723,6 +723,41 @@ class TestDemFetchEndToEnd:
         assert not np.allclose(win._map_view._dem._rgb[..., :3], rgb_before[..., :3])
         assert win._map_view._dem._last_thread is fetch_thread   # no new fetch
 
+    def test_drape_satellite_toggle_renders_and_persists(self, win, state,
+                                                         tmp_path, monkeypatch):
+        """Real-window: Drape ▸ Satellite composites imagery on the DEM (injected
+        tiles, no network), renders under the data, persists; None returns the tint."""
+        import numpy as np
+        self._load_dem_into(win, state, tmp_path)
+        ext = win._map_view._dem._extent
+
+        def fake_fetch(provider, epsg, extent, zoom="auto"):
+            img = np.zeros((48, 48, 3), dtype="uint8")
+            img[:, 24:, 2] = 255                          # right half blue
+            return img, tuple(float(v) for v in ext)
+
+        win._map_view._drape_fetch_fn = fake_fetch
+        writes = []
+        monkeypatch.setattr(state, "set_meta", lambda k, v: writes.append((k, v)))
+
+        win._dem_drape_actions["satellite"].trigger()     # drive the real menu action
+        win._map_view._dem._last_drape_thread.join(timeout=10)
+        QApplication.processEvents()
+
+        assert win._map_view.drape_source() == "satellite"
+        assert win._map_view._dem.has_drape()
+        assert ("dem_drape", "satellite") in writes       # persisted per project
+        assert win._map_view._dem.drape_provenance.get("drape") == "satellite"
+
+        win._map_view.render()
+        imgs = [im for im in win._map_view._ax.get_images()
+                if -10 < im.get_zorder() < 0]
+        assert imgs and imgs[0].get_visible() and imgs[0].get_alpha()
+
+        win._dem_drape_actions["none"].trigger()          # back to the tint
+        QApplication.processEvents()
+        assert not win._map_view._dem.has_drape()
+
     def test_fetch_dem_failure_flashes_specific_stage(self, win, state,
                                                       tmp_path, monkeypatch):
         """A failed fetch must reach _flash_status with a specific stage message —

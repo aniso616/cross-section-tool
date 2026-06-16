@@ -27,19 +27,28 @@ class MapDemLayer(QObject):
 
     loaded = Signal()                  # a fetch completed → map should re-render
     failed = Signal(str)               # fetch error message for status feedback
+    draped = Signal()                  # an imagery drape completed → re-render
+    drape_failed = Signal(str)         # drape fetch/composite error
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._visible = True
         self._hs = None                # 2D greyscale hillshade in [0, 1] (diagnostic)
-        self._rgb = None               # RGBA elevation-tinted relief (what renders)
+        self._rgb = None               # RGBA elevation-tinted relief (the tint)
         self._elev = None              # warped project-CRS elevation (re-tint cache)
         self._dx = self._dy = None     # metric pixel size of the warped grid
+        self._epsg = None              # project CRS of the warped DEM grid
         self._extent = None            # (left, right, bottom, top) project CRS
         self._provenance = {}
         self._vert_exag = None         # vertical exaggeration used for the shading
         self._cmap = _dem.DEFAULT_DEM_CMAP
+        # Imagery drape (imagery × hillshade) — occupies this layer's slot when on.
+        self._drape_source = "none"
+        self._drape_grid_rgb = None    # imagery resampled onto the DEM grid
+        self._composite = None         # RGBA draped composite (what renders when on)
+        self._drape_provenance = {}
         self._last_thread = None       # test hook
+        self._last_drape_thread = None # test hook
 
     # ---- visibility ------------------------------------------------------
 
@@ -133,9 +142,14 @@ class MapDemLayer(QObject):
         self._rgb = rgb                    # elevation-tinted relief — what renders
         self._elev = data                  # cached so a cmap change re-tints offline
         self._dx, self._dy = dx, dy
+        self._epsg = int(epsg) if epsg else self._epsg
         self._extent = extent
         self._provenance = prov or {}
         self._vert_exag = vert_exag        # recorded: the exaggeration actually used
+        # A new DEM grid invalidates any existing drape composite (stale extent);
+        # the source choice is kept so the map can re-apply it for the new grid.
+        self._composite = None
+        self._drape_grid_rgb = None
 
         elev_min, elev_max = float(np.nanmin(data)), float(np.nanmax(data))
         hs_min, hs_max = float(hs.min()), float(hs.max())
@@ -162,18 +176,102 @@ class MapDemLayer(QObject):
         self._rgb = None
         self._elev = None
         self._dx = self._dy = None
+        self._epsg = None
         self._extent = None
         self._provenance = {}
+        self._drape_source = "none"
+        self._drape_grid_rgb = None
+        self._composite = None
+        self._drape_provenance = {}
+
+    # ---- imagery drape (imagery × hillshade on the DEM grid) -------------
+
+    @property
+    def drape_source(self) -> str:
+        return self._drape_source
+
+    def has_drape(self) -> bool:
+        return self._composite is not None
+
+    @property
+    def drape_provenance(self) -> dict:
+        return dict(self._drape_provenance)
+
+    def clear_drape(self) -> None:
+        self._drape_source = "none"
+        self._drape_grid_rgb = None
+        self._composite = None
+        self._drape_provenance = {}
+
+    def apply_drape(self, src_rgb, src_transform, src_crs, *,
+                    source: str = "imported", provenance=None) -> bool:
+        """Resample *src_rgb* onto the DEM grid and composite it over the relief.
+
+        *src_transform*/*src_crs* describe the imagery; it is warped + resampled to
+        this DEM's grid (elevation authoritative), then draped. Returns success.
+        """
+        if self._elev is None or self._extent is None:
+            return False
+        from rasterio.transform import from_bounds
+        h, w = self._elev.shape
+        left, right, bottom, top = self._extent
+        dst_transform = from_bounds(left, bottom, right, top, w, h)
+        grid = _dem.resample_rgb_to_grid(
+            src_rgb, src_transform, src_crs,
+            dst_transform=dst_transform, dst_crs=f"EPSG:{self._epsg}",
+            dst_shape=(h, w))
+        self._drape_grid_rgb = grid
+        self._composite = _dem.drape_rgb(grid, self._elev, dx=self._dx,
+                                         dy=self._dy, vert_exag=self._vert_exag)
+        self._drape_source = source
+        self._drape_provenance = dict(provenance or {"drape": source})
+        return True
+
+    def fetch_satellite_drape(self, provider, epsg: int, *, fetch_fn,
+                              provenance=None) -> None:
+        """Fetch satellite tiles for the DEM extent off-thread, then drape them."""
+        if self._elev is None or self._extent is None:
+            self.drape_failed.emit("fetch a DEM before draping imagery onto it")
+            return
+        extent = self._extent
+        self._drape_source = "satellite"
+
+        def _work():
+            try:
+                img, ext = fetch_fn(provider, int(epsg), extent)
+            except Exception as exc:
+                log.exception("drape tile fetch failed")
+                self.drape_failed.emit(f"drape fetch failed: {exc}")
+                return
+            try:
+                from rasterio.transform import from_bounds
+                left, right, bottom, top = ext
+                tr = from_bounds(left, bottom, right, top, img.shape[1], img.shape[0])
+                ok = self.apply_drape(img, tr, f"EPSG:{int(epsg)}",
+                                      source="satellite",
+                                      provenance=provenance or {"drape": "satellite"})
+            except Exception as exc:
+                log.exception("drape composite failed")
+                self.drape_failed.emit(f"drape composite failed: {exc}")
+                return
+            if ok:
+                self.draped.emit()
+
+        t = threading.Thread(target=_work, daemon=True)
+        self._last_drape_thread = t
+        t.start()
 
     # ---- render (re-blit each map render) --------------------------------
 
     def render(self, ax) -> None:
-        if not self._visible or self._rgb is None or self._extent is None:
+        # When a drape is active, render the imagery×hillshade composite in this
+        # layer's slot; otherwise the elevation tint. Both at z −9 (over basemap,
+        # under data), so an active drape supersedes a redundant satellite basemap.
+        img = self._composite if self._composite is not None else self._rgb
+        if not self._visible or img is None or self._extent is None:
             return
         left, right, bottom, top = self._extent
-        # Tinted relief (elevation colour + hillshade): depth stays legible on
-        # near-planar bathymetry where pure grey shading washes out.
-        ax.imshow(self._rgb, extent=(left, right, bottom, top), origin="upper",
+        ax.imshow(img, extent=(left, right, bottom, top), origin="upper",
                   zorder=_DEM_ZORDER, interpolation="bilinear",
                   aspect="auto", alpha=0.9)
 

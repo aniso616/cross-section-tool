@@ -889,6 +889,7 @@ class MainWindow(QMainWindow):
         # Reflect the project's restored basemap source in the menu checkmarks.
         s.project_changed.connect(self._sync_basemap_menu)
         s.project_changed.connect(self._sync_dem_colormap_menu)
+        s.project_changed.connect(self._sync_dem_drape_menu)
         # Phase 7: undo/redo status flashes
         s.undo_performed.connect(lambda d: self._flash_status(f"Undo: {d}"))
         s.redo_performed.connect(lambda d: self._flash_status(f"Redo: {d}"))
@@ -3069,6 +3070,7 @@ class MainWindow(QMainWindow):
         self._hillshade_action.toggled.connect(self._map_view.set_hillshade_visible)
         menu.addAction(self._hillshade_action)
         self._build_dem_colormap_menu(menu)
+        self._build_dem_drape_menu(menu)
         view_menu.addMenu(menu)
         # Status feedback when an off-thread fetch lands — success and the
         # stage-specific failure both flash so a blank map is never silent.
@@ -3108,6 +3110,59 @@ class MainWindow(QMainWindow):
         if not actions:
             return
         current = self._map_view.dem_cmap()
+        for key, act in actions.items():
+            act.setChecked(key == current)
+
+    def _build_dem_drape_menu(self, elevation_menu) -> None:
+        """View ▸ Elevation ▸ Drape — None / Satellite / Imported image, persisted."""
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu as _QMenu
+        sub = _QMenu("&Drape", self)
+        self._dem_drape_actions = {}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        current = self._map_view.drape_source()
+        for key, label in (("none", "None"),
+                           ("satellite", "Satellite (Esri)"),
+                           ("imported", "Imported image…")):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(key == current)
+            act.triggered.connect(lambda _c=False, k=key: self._on_dem_drape_selected(k))
+            group.addAction(act)
+            self._dem_drape_actions[key] = act
+            sub.addAction(act)
+        elevation_menu.addMenu(sub)
+
+    def _on_dem_drape_selected(self, key: str) -> None:
+        if key == "imported":
+            from PySide6.QtWidgets import QFileDialog, QMessageBox
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Import imagery to drape", "",
+                "Raster images (*.tif *.tiff *.png *.jpg *.jpeg);;All files (*)")
+            if not path:
+                self._sync_dem_drape_menu()        # revert the checkmark
+                return
+            try:
+                ok = self._map_view.apply_imported_drape(path)
+            except Exception as exc:               # ungeoreferenced etc. — clear message
+                QMessageBox.warning(self, "Drape imagery", str(exc))
+                self._sync_dem_drape_menu()
+                return
+            self._flash_status("Drape: imported image" if ok else "Drape: not applied")
+            if not ok:
+                self._sync_dem_drape_menu()
+            return
+        self._map_view.set_drape_source(key)
+        msg = {"none": "Drape off", "satellite": "Drape: satellite — fetching…"}
+        self._flash_status(msg.get(key, f"Drape: {key}"))
+
+    def _sync_dem_drape_menu(self) -> None:
+        """Reflect the project's restored drape source in the menu checkmarks."""
+        actions = getattr(self, "_dem_drape_actions", None)
+        if not actions:
+            return
+        current = self._map_view.drape_source()
         for key, act in actions.items():
             act.setChecked(key == current)
 

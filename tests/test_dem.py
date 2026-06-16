@@ -326,6 +326,68 @@ def test_dem_cmap_registry():
     assert "hillshade" not in D.DEM_CMAPS["gray"].lower()
 
 
+# ---------------------------------------------------------------------------
+# Imagery drape: compositor, resample-to-DEM-grid, user-raster import.
+# ---------------------------------------------------------------------------
+
+def test_drape_rgb_composites_imagery_over_relief():
+    h, w = 60, 80
+    yy, xx = np.mgrid[0:h, 0:w]
+    # Textured relief (varying gradient) — a plane has one shading value, so the
+    # composite would be uniform; texture is what shade_rgb modulates.
+    elev = (40.0 * np.sin(xx / 5.0) + 30.0 * np.cos(yy / 6.0)).astype("float32")
+    rgb = np.full((h, w, 3), 0.5, dtype="float32")       # flat grey imagery
+    out = D.drape_rgb(rgb, elev, dx=30.0, dy=30.0, vert_exag=1.0)
+    assert out.shape == (h, w, 4)
+    assert out[..., :3].min() >= 0.0 and out[..., :3].max() <= 1.0
+    assert float(out[..., 3].min()) >= 0.99              # opaque
+    assert float(out[..., :3].std()) > 0.02              # relief modulated the imagery
+
+
+def test_drape_over_planar_terrain_preserves_imagery():
+    """Over flat terrain the drape ≈ the plain imagery — subtle, not broken (F3)."""
+    h, w = 50, 50
+    elev = np.full((h, w), -40.0, dtype="float32")       # planar seabed
+    rgb = np.random.RandomState(0).rand(h, w, 3).astype("float32")
+    out = D.drape_rgb(rgb, elev, dx=100.0, dy=100.0, vert_exag=20.0)
+    assert np.corrcoef(out[..., 0].ravel(), rgb[..., 0].ravel())[0, 1] > 0.9
+
+
+def test_resample_rgb_lands_on_dem_grid():
+    from rasterio.transform import from_bounds
+    sh = 100
+    src = np.zeros((sh, sh, 3), dtype="uint8")
+    src[:, sh // 2:, 0] = 255                             # right half red
+    src_tr = from_bounds(600000, 6080000, 610000, 6090000, sh, sh)
+    dh, dw = 40, 60                                       # coarser DEM grid, same box
+    dst_tr = from_bounds(600000, 6080000, 610000, 6090000, dw, dh)
+    out = D.resample_rgb_to_grid(src, src_tr, "EPSG:32631",
+                                 dst_transform=dst_tr, dst_crs="EPSG:32631",
+                                 dst_shape=(dh, dw))
+    assert out.shape == (dh, dw, 3)
+    assert 0.0 <= float(out.min()) and float(out.max()) <= 1.0
+    assert float(out[:, -1, 0].mean()) > 0.5 and float(out[:, 0, 0].mean()) < 0.5
+
+
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
+def test_load_user_raster_rejects_ungeoreferenced(tmp_path):
+    from rasterio.transform import from_bounds
+    plain = tmp_path / "plain.tif"
+    with rasterio.open(plain, "w", driver="GTiff", height=8, width=8, count=3,
+                       dtype="uint8") as ds:                       # no CRS
+        ds.write(np.zeros((3, 8, 8), "uint8"))
+    with pytest.raises(ValueError, match="georeferenced"):
+        D.load_user_raster_rgb(str(plain))
+
+    geo = tmp_path / "geo.tif"
+    with rasterio.open(geo, "w", driver="GTiff", height=8, width=8, count=3,
+                       dtype="uint8", crs="EPSG:32631",
+                       transform=from_bounds(600000, 6080000, 610000, 6090000, 8, 8)) as ds:
+        ds.write(np.full((3, 8, 8), 100, "uint8"))
+    rgb, tr, crs = D.load_user_raster_rgb(str(geo))
+    assert rgb.shape == (8, 8, 3) and crs is not None and tr is not None
+
+
 def test_source_registry():
     assert D.DEM_SOURCE_ORDER == ("copernicus", "gebco", "eudtm")
     assert D.DEM_SOURCES["copernicus"].needs_key is False

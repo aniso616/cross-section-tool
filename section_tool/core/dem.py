@@ -294,6 +294,81 @@ def shaded_relief(data: np.ndarray, *, dx: float, dy: float, vert_exag: float,
                     vert_exag=vert_exag, dx=dx, dy=dy)
 
 
+# ---------------------------------------------------------------------------
+# Imagery drape: RGB imagery × hillshade brightness, composited on the DEM grid.
+# ---------------------------------------------------------------------------
+
+def drape_rgb(rgb: np.ndarray, elevation: np.ndarray, *, dx: float, dy: float,
+              vert_exag: float, blend_mode: str = "overlay",
+              azimuth: float = DEFAULT_AZIMUTH,
+              altitude: float = DEFAULT_ALTITUDE) -> np.ndarray:
+    """Drape an RGB image over the terrain — imagery lit by the hillshade.
+
+    *rgb* is ``(H, W, 3|4)`` in [0, 1], already on the *elevation* grid; the
+    standard cartographic composite (``LightSource.shade_rgb``) multiplies the
+    imagery by the relief brightness. Returns an ``(H, W, 4)`` RGBA in [0, 1].
+
+    Honesty: ``shade_rgb`` only adds visible shading where there is slope. Over
+    the near-planar F3 seabed the result looks like the plain imagery — that is
+    correct, not a bug; the payoff is real topography. We do NOT inflate
+    *vert_exag* to fake relief that isn't there (the lesson from the tint fix).
+    """
+    ls = LightSource(azdeg=azimuth, altdeg=altitude)
+    rgb3 = np.clip(np.asarray(rgb, dtype=float)[..., :3], 0.0, 1.0)
+    shaded = ls.shade_rgb(rgb3, np.asarray(elevation, dtype=float),
+                          vert_exag=vert_exag, dx=dx, dy=dy, blend_mode=blend_mode)
+    out = np.empty(shaded.shape[:2] + (4,), dtype=float)
+    out[..., :3] = np.clip(shaded[..., :3], 0.0, 1.0)
+    out[..., 3] = 1.0
+    return out
+
+
+def resample_rgb_to_grid(rgb: np.ndarray, src_transform, src_crs, *,
+                         dst_transform, dst_crs, dst_shape) -> np.ndarray:
+    """Reproject/resample an RGB(A) image onto the DEM grid, returning ``(H,W,3)``.
+
+    Imagery is resampled DOWN onto the (authoritative, usually coarser) DEM grid
+    — keeping the elevation authoritative and the composite cheap (GEBCO ~450 m
+    vs satellite ~metres). Output is float in [0, 1] regardless of input dtype.
+    """
+    from rasterio.transform import from_bounds  # noqa: F401  (kept import-local)
+    arr = np.asarray(rgb)
+    if arr.ndim == 2:
+        arr = arr[..., None]
+    bands = arr.shape[2]
+    scale = 255.0 if (arr.dtype == np.uint8 or float(np.nanmax(arr)) > 1.5) else 1.0
+    out = np.zeros((int(dst_shape[0]), int(dst_shape[1]), 3), dtype=np.float32)
+    for b in range(3):
+        src_band = arr[..., min(b, bands - 1)].astype(np.float32) / scale
+        dst_band = np.zeros((int(dst_shape[0]), int(dst_shape[1])), dtype=np.float32)
+        reproject(source=src_band, destination=dst_band,
+                  src_transform=src_transform, src_crs=src_crs,
+                  dst_transform=dst_transform, dst_crs=dst_crs,
+                  resampling=Resampling.bilinear)
+        out[..., b] = dst_band
+    return np.clip(out, 0.0, 1.0)
+
+
+def load_user_raster_rgb(path: str):
+    """Open a georeferenced raster → ``(rgb (H,W,3), transform, crs)``.
+
+    Rejects an ungeoreferenced image (no CRS) with a clear message — we never
+    guess placement. Warp + resample to the DEM grid happen later via
+    :func:`resample_rgb_to_grid`.
+    """
+    if not _HAVE_RIO:
+        raise RuntimeError(unavailable_reason())
+    with rasterio.open(path) as ds:
+        if ds.crs is None:
+            raise ValueError(
+                "image is not georeferenced (no CRS) — cannot place it; import a "
+                "GeoTIFF or world-file referenced raster.")
+        n = min(ds.count, 3)
+        arr = ds.read(list(range(1, n + 1)))            # (bands, H, W)
+        rgb = np.transpose(arr, (1, 2, 0))
+        return rgb, ds.transform, ds.crs
+
+
 def pixel_size(dem: DEMArray) -> "tuple[float, float]":
     """(dx, dy) ground sample distance in project-CRS units."""
     return abs(dem.transform.a), abs(dem.transform.e)

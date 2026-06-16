@@ -237,6 +237,34 @@ def test_set_cmap_retints_cached_elevation_without_reload(qapp, tmp_path, monkey
     assert mv._dem.set_cmap("not-a-cmap") is False      # rejects unknown
 
 
+def test_apply_drape_composites_over_relief_and_clears(qapp, tmp_path):
+    """A drape resamples imagery onto the DEM grid, composites it, and renders in
+    the DEM slot; clearing returns to the elevation tint. Provenance recorded."""
+    from rasterio.transform import from_bounds
+    state, mv = _map_with_section(qapp)
+    assert mv._dem.load_geotiff(_store_dem(tmp_path))
+    left, right, bottom, top = mv._dem._extent
+    sh = 64
+    src = np.zeros((sh, sh, 3), dtype="uint8")
+    src[:, sh // 2:, 1] = 255                              # right half green
+    tr = from_bounds(left, bottom, right, top, sh, sh)
+
+    ok = mv._dem.apply_drape(src, tr, f"EPSG:{_PROJ}", source="imported",
+                             provenance={"drape": "imported", "path": "x.tif"})
+    assert ok and mv._dem.has_drape()
+    assert mv._dem.drape_provenance["drape"] == "imported"   # source recorded
+    assert mv._dem._composite.shape[:2] == mv._dem._elev.shape   # on the DEM grid
+
+    mv.render()
+    imgs = [im for im in mv._ax.get_images() if -10 < im.get_zorder() < 0]
+    assert imgs, "draped composite must render under the data"
+
+    mv._dem.clear_drape()
+    assert not mv._dem.has_drape()
+    mv.render()
+    assert [im for im in mv._ax.get_images() if -10 < im.get_zorder() < 0]   # tint back
+
+
 def test_dem_artist_on_axes_after_fetch(qapp, tmp_path):
     """Render-path regression: once a fetch completes, the tinted DEM artist must
     actually be on the map axes — visible, non-zero alpha, correct project-CRS
