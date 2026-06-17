@@ -221,7 +221,8 @@ CREATE TABLE IF NOT EXISTS polygons (
     fill_opacity           REAL    DEFAULT 0.6,
     outline_width          REAL    DEFAULT 1.0,
     construction_rule_json TEXT,
-    bounds_json            TEXT
+    bounds_json            TEXT,
+    uuid                   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reference_lines (
@@ -484,6 +485,7 @@ class ProjectDatabase:
             # constraint on fresh DBs).
             ("horizons",  "uuid", "TEXT"),
             ("faults",    "uuid", "TEXT"),
+            ("polygons",  "uuid", "TEXT"),
             # Slice generalization: observations carry an explicit slice kind +
             # ref. DEFAULT 'section' makes every existing row a section
             # observation automatically (fully backward compatible).
@@ -1165,31 +1167,34 @@ class ProjectDatabase:
             (name, section_name)
         ).fetchone()
         verts_json = _dumps(poly.vertices.tolist())
+        poly_uuid = getattr(poly, "uuid", None)
         if row:
             pid = row["id"]
             self.conn.execute(
                 """UPDATE polygons SET vertices_json=?, fill_color=?,
                    fill_opacity=?, formation_name=?,
-                   construction_rule_json=?, bounds_json=? WHERE id=?""",
+                   construction_rule_json=?, bounds_json=?, uuid=? WHERE id=?""",
                 (verts_json, getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
                  getattr(poly, "formation", ""),
                  rule_json,
                  bounds_json,
+                 poly_uuid,
                  pid)
             )
         else:
             cur = self.conn.execute(
                 """INSERT INTO polygons
                    (name, section_name, vertices_json, fill_color, fill_opacity,
-                    formation_name, construction_rule_json, bounds_json)
-                   VALUES(?,?,?,?,?,?,?,?)""",
+                    formation_name, construction_rule_json, bounds_json, uuid)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
                 (name, section_name, verts_json,
                  getattr(poly, "fill_color", "#9467bd"),
                  getattr(poly, "fill_alpha", 0.6),
                  getattr(poly, "formation", ""),
                  rule_json,
-                 bounds_json)
+                 bounds_json,
+                 poly_uuid)
             )
             pid = cur.lastrowid
         self.conn.commit()

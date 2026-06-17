@@ -36,6 +36,7 @@ def _make_pick(name: str):
         pass
     s = _Stub()
     s.name = name
+    s.uuid = name          # use the name as a stable id for these stubs
     s.construction_rule = None
     return s
 
@@ -172,7 +173,7 @@ def test_restoration_event_round_trip():
         name="Remove Oligocene",
         age_ma=34.0,
         description="Erase post-Eocene package",
-        remove_elements=["TopOligocene", "BaseOligocene"],
+        remove_element_ids=["uuid-top", "uuid-base"],
         decompact_params={"Shale": {"phi0": 0.63, "c": 0.00051}},
     )
     d = ev.to_dict()
@@ -180,7 +181,7 @@ def test_restoration_event_round_trip():
     assert ev2.event_id == 1
     assert ev2.name == "Remove Oligocene"
     assert ev2.age_ma == pytest.approx(34.0)
-    assert ev2.remove_elements == ["TopOligocene", "BaseOligocene"]
+    assert ev2.remove_element_ids == ["uuid-top", "uuid-base"]
     assert ev2.decompact_params["Shale"]["phi0"] == pytest.approx(0.63)
 
 
@@ -271,26 +272,26 @@ def test_sequence_empty_json_round_trip():
 
 def test_elements_visible_step_0():
     seq = _make_seq()
-    seq.events[0].remove_elements = ["TopA"]
-    seq.events[1].remove_elements = ["TopB"]
-    visible = seq.elements_visible_at_step(0)
+    seq.events[0].remove_element_ids = ["TopA"]
+    seq.events[1].remove_element_ids = ["TopB"]
+    visible = seq.removed_ids_at_step(0)
     assert visible == set()
 
 
 def test_elements_visible_step_1():
     seq = _make_seq()
-    seq.events[0].remove_elements = ["TopA"]
-    seq.events[1].remove_elements = ["TopB"]
-    removed = seq.elements_visible_at_step(1)
+    seq.events[0].remove_element_ids = ["TopA"]
+    seq.events[1].remove_element_ids = ["TopB"]
+    removed = seq.removed_ids_at_step(1)
     assert "TopA" in removed
     assert "TopB" not in removed
 
 
 def test_elements_visible_step_2():
     seq = _make_seq()
-    seq.events[0].remove_elements = ["TopA"]
-    seq.events[1].remove_elements = ["TopB"]
-    removed = seq.elements_visible_at_step(2)
+    seq.events[0].remove_element_ids = ["TopA"]
+    seq.events[1].remove_element_ids = ["TopB"]
+    removed = seq.removed_ids_at_step(2)
     assert "TopA" in removed
     assert "TopB" in removed
 
@@ -312,7 +313,7 @@ def test_restore_step_0_unchanged():
 
 def test_restore_step_1_removes_element():
     seq = _make_seq()
-    seq.events[0].remove_elements = ["H2"]
+    seq.events[0].remove_element_ids = ["H2"]
     h = [_make_pick("H1"), _make_pick("H2")]
     f = [_make_pick("F1")]
     p = []
@@ -324,7 +325,7 @@ def test_restore_step_1_removes_element():
 
 def test_restore_step_removes_fault():
     seq = _make_seq()
-    seq.events[0].remove_elements = ["F1"]
+    seq.events[0].remove_element_ids = ["F1"]
     h = [_make_pick("H1")]
     f = [_make_pick("F1"), _make_pick("F2")]
     p = []

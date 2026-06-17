@@ -2026,26 +2026,26 @@ class SectionView(QWidget):
 
         # else: conformable / strike_slip / marker_bed — rendered by main plot above
 
-    def _get_removed_names(self) -> set[str]:
-        """Return element names hidden at the current restoration step (empty set = present day)."""
+    def _get_removed_ids(self) -> set[str]:
+        """UUIDs hidden at the current restoration step (empty set = present day)."""
         seq = self._state.restoration_sequence
         if not seq.events or seq.current_step == 0:
             return set()
-        return seq.elements_visible_at_step(seq.current_step)
+        return seq.removed_ids_at_step(seq.current_step)
 
     def _render_horizons(self, section: Section) -> None:
-        removed = self._get_removed_names()
+        removed = self._get_removed_ids()
         for obj_idx, hp in enumerate(self._state.project.horizon_picks):
-            if removed and hp.name and hp.name in removed:
+            if removed and hp.uuid in removed:
                 continue
             if not getattr(hp, "visible", True):
                 continue
             self._render_pick_object("Horizons", obj_idx, hp, section, "o", "solid")
 
     def _render_faults(self, section: Section) -> None:
-        removed = self._get_removed_names()
+        removed = self._get_removed_ids()
         for obj_idx, fp in enumerate(self._state.project.fault_picks):
-            if removed and fp.name and fp.name in removed:
+            if removed and fp.uuid in removed:
                 continue
             if not getattr(fp, "visible", True):
                 continue
@@ -2065,13 +2065,13 @@ class SectionView(QWidget):
         from section_tool.core.geometry import slice_crossing
 
         proj = self._state.project
-        removed = self._get_removed_names()
+        removed = self._get_removed_ids()
         t = get_theme()
 
         # Visible, non-removed picks — filtered once, used for every slice.
         picks = [hp for hp in proj.horizon_picks
                  if getattr(hp, "visible", True)
-                 and not (removed and hp.name and hp.name in removed)]
+                 and not (removed and hp.uuid in removed)]
 
         def _ghost_dot(u: float, v: float, color: str) -> None:
             mkw = marker_kwargs(t.cross_section_ghost, entity_color=color)
@@ -2617,9 +2617,9 @@ class SectionView(QWidget):
 
     def _render_polygons(self, section: Section) -> None:
         from matplotlib.patches import Polygon as MplPolygon
-        removed = self._get_removed_names()
+        removed = self._get_removed_ids()
         for poly in self._state.project.polygons:
-            if removed and poly.name and poly.name in removed:
+            if removed and getattr(poly, "uuid", None) in removed:
                 continue
             if not getattr(poly, "visible", True):
                 continue

@@ -41,15 +41,15 @@ class RestorationStackDialog(QDialog):
         proj = app_state._project
 
         all_names: set[str] = set()
-        for hp in proj.horizon_picks:
-            if hp.name:
-                all_names.add(hp.name)
-        for fp in proj.fault_picks:
-            if fp.name:
-                all_names.add(fp.name)
-        for poly in proj.polygons:
-            if poly.name:
-                all_names.add(poly.name)
+        id_to_name: dict[str, str] = {}        # UUID → display name, for removals
+        for coll in (proj.horizon_picks, proj.fault_picks, proj.polygons):
+            for obj in coll:
+                nm = getattr(obj, "name", "")
+                if nm:
+                    all_names.add(nm)
+                uid = getattr(obj, "uuid", None)
+                if uid:
+                    id_to_name[uid] = nm or uid
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -94,7 +94,10 @@ class RestorationStackDialog(QDialog):
                 _highlight_row(table, 0)
 
             for row_i, ev in enumerate(seq.events, start=1):
-                removed_here = [n for n in ev.remove_elements if n]
+                # Resolved UUIDs → names, plus any unresolved legacy names (shown
+                # with a marker so a broken reference is visible, not hidden).
+                removed_here = [id_to_name.get(uid, uid) for uid in ev.remove_element_ids]
+                removed_here += [f"{nm} (?)" for nm in ev.remove_element_names]
                 cumulative.update(removed_here)
                 age_str = f"{ev.age_ma:.1f}" if ev.age_ma is not None else "—"
                 removed_str = ", ".join(removed_here) if removed_here else "(none)"

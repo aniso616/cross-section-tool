@@ -578,6 +578,40 @@ class TestImportTdrEndToEnd:
 # real-window integration the stub-window gap kept missing.
 # ---------------------------------------------------------------------------
 
+class TestRestorationRemoval:
+    """Real-MainWindow: a UUID-keyed removal event hides the right element at a
+    restoration step, and survives a rename (the Step-1 point)."""
+
+    def test_step_hides_element_by_uuid_rename_invariant(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.restoration import RestorationEvent
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [100.0, 200.0], name="Top Chalk",
+                         section_names=["L1", "L1"])
+        state.project.horizon_picks.append(hp)
+
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "Remove Top Chalk",
+                                       remove_element_ids=[hp.uuid]))
+
+        sv = win._section_view
+        seq.current_step = 0
+        state.set_restoration_sequence(seq)
+        assert sv._get_removed_ids() == set()            # present day: nothing hidden
+
+        seq.current_step = 1
+        state.set_restoration_sequence(seq)
+        assert hp.uuid in sv._get_removed_ids()          # hidden by UUID at step 1
+
+        hp.name = "Renamed Chalk"                        # rename must not matter
+        assert hp.uuid in sv._get_removed_ids()
+        sv.render()                                      # full render must not crash
+
+
 class TestBasemapMenuEndToEnd:
     def test_select_basemap_fetches_and_persists(self, win, state, monkeypatch):
         import numpy as np

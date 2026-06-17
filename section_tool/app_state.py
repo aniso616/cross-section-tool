@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 
 from PySide6.QtCore import QObject, Signal
@@ -16,6 +17,8 @@ from section_tool.core.wells import LogCurve, Well
 from section_tool.io.project import Project, SeismicRef
 import numpy as np
 
+
+log = logging.getLogger(__name__)
 
 _DOMAIN_MIGRATION = {"md": "depth", "twt": "time"}
 
@@ -681,6 +684,7 @@ class AppState(QObject):
                 formation=prow.get("formation_name", ""),
                 section_name=prow.get("section_name", ""),
                 bounds=bounds,
+                uuid=prow.get("uuid"),
             )
             _restore_construction_rule(poly, prow.get("construction_rule_json"))
             proj.polygons.append(poly)
@@ -739,8 +743,17 @@ class AppState(QObject):
             except Exception:
                 pass
 
-        # Restoration sequence
+        # Restoration sequence. Old projects keyed removal by element NAME; migrate
+        # those to stable UUIDs now that all entities are loaded, so the next save
+        # is UUID-based. Names that no longer resolve are kept (not dropped) + logged.
         proj.restoration_sequence = db.get_restoration_sequence()
+        from section_tool.core.restoration import migrate_names_to_ids
+        unresolved = migrate_names_to_ids(proj.restoration_sequence, proj)
+        if unresolved:
+            log.warning(
+                "Restoration: %d removed-element name(s) no longer resolve and were "
+                "kept un-migrated: %s",
+                len(unresolved), ", ".join(sorted(unresolved)))
 
         # Velocity model (JSON blob in the velocity_model KV table; empty dict
         # → a fresh unconverted model. from_dict migrates the v1 schema.)

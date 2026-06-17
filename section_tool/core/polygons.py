@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import uuid as _uuid
 from typing import Literal
 
 import numpy as np
@@ -67,7 +68,11 @@ class SectionPolygon:
         formation: str = "",
         section_name: str = "",
         bounds: list[PolygonBoundary] | None = None,
+        uuid: str | None = None,
     ) -> None:
+        # Stable identity (UUID4) — rename-safe link for restoration / construction
+        # references, mirroring HorizonPick. Generated if not restored from disk.
+        self.uuid: str = uuid if uuid else str(_uuid.uuid4())
         verts = np.asarray(vertices, dtype=float)
         if verts.ndim != 2 or verts.shape[1] != 2:
             raise ValueError("vertices must be an (N, 2) array of (distance, depth)")
