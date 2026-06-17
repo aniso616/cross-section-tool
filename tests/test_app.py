@@ -611,6 +611,38 @@ class TestRestorationRemoval:
         assert hp.uuid in sv._get_removed_ids()
         sv.render()                                      # full render must not crash
 
+    def test_panel_event_content_drives_section_hide_live(self, win, state,
+                                                           monkeypatch):
+        """Real-window: defining an event's removed elements in the panel makes the
+        section view hide them at that step — through the existing consume path."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialog
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.views.restoration_panel import _EventEditDialog
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [100.0, 200.0], name="Top Chalk",
+                         section_names=["L1", "L1"])
+        state.project.horizon_picks.append(hp)
+
+        def fake_exec(self):
+            self._name.setText("Remove Chalk")
+            self._elem_list.item(0).setCheckState(Qt.Checked)
+            return QDialog.Accepted
+        monkeypatch.setattr(_EventEditDialog, "exec", fake_exec)
+
+        win._restoration_widget._add_event()             # define content via the panel
+        seq = state.restoration_sequence
+        assert seq.events[0].remove_element_ids == [hp.uuid]
+
+        seq.current_step = 1                             # apply the removal step
+        state.set_restoration_sequence(seq)
+        assert hp.uuid in win._section_view._get_removed_ids()
+        win._section_view.render()
+
 
 class TestBasemapMenuEndToEnd:
     def test_select_basemap_fetches_and_persists(self, win, state, monkeypatch):
