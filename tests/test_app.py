@@ -644,6 +644,38 @@ class TestRestorationRemoval:
         win._section_view.render()
 
 
+class TestInterpretationSnapshot:
+    """Real-MainWindow: snapshot a loaded section's interpretation, restore it,
+    and render — no crash, the live interpretation untouched."""
+
+    def test_snapshot_restore_render_non_destructive(self, win, state):
+        import numpy as np
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.restoration_snapshot import (
+            snapshot_interpretation, restore_from_snapshot)
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [100.0, 200.0], name="Top Chalk",
+                         section_names=["L1", "L1"])
+        state.project.horizon_picks.append(hp)
+        orig_depths = hp.depths.copy()
+
+        win._section_view.render()                       # baseline render OK
+        snap = snapshot_interpretation(state.active_section, state.project)
+        out = restore_from_snapshot(snap)
+
+        # restored copy is faithful but independent
+        assert out["horizons"][0].uuid == hp.uuid
+        out["horizons"][0]._depths[:] = 999.0            # deform the copy
+        assert np.allclose(hp.depths, orig_depths)       # live interpretation untouched
+
+        win._section_view.render()                       # still renders after snapshot
+        assert hp in state.project.horizon_picks         # live state intact
+
+
 class TestBasemapMenuEndToEnd:
     def test_select_basemap_fetches_and_persists(self, win, state, monkeypatch):
         import numpy as np
