@@ -622,6 +622,13 @@ class AppState(QObject):
                         _json.loads(trow["data_json"])))
                 except Exception:
                     pass
+            # Observed thermal/thermochron measurements (Thermal Step 1)
+            for mrow in wrow.get("measurements", []):
+                try:
+                    from section_tool.core.measurements import Measurement
+                    well.add_measurement(Measurement.from_db_row(mrow, well.uuid))
+                except Exception:
+                    pass
             # Restore log curves from stored data
             for lg in wrow.get("logs", []):
                 try:

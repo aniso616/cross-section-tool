@@ -135,6 +135,13 @@ class ThermalModelingDialog(QDialog):
         ctrl_layout.addWidget(self._inv_box)
         self._inv_box.setVisible(False)
 
+        # Observed data
+        self._meas_btn = QPushButton("Measurements…")
+        self._meas_btn.setToolTip("Enter or import observed thermal / thermochronometric "
+                                  "data (Ro, AFT/AHe/ZHe ages, BHT) on a well.")
+        self._meas_btn.clicked.connect(self._open_measurements)
+        ctrl_layout.addWidget(self._meas_btn)
+
         # Run button
         self._run_btn = QPushButton("Run Model")
         self._run_btn.clicked.connect(self._run_model)
@@ -167,6 +174,11 @@ class ThermalModelingDialog(QDialog):
 
     def _on_mode_changed(self, idx: int) -> None:
         self._inv_box.setVisible(idx == 2)
+
+    def _open_measurements(self) -> None:
+        """Open the per-well measurements editor (observed data)."""
+        from section_tool.views.measurements_dialog import MeasurementsDialog
+        MeasurementsDialog(self._state, parent=self).exec()
 
     def _run_model(self) -> None:
         mode = self._mode_combo.currentIndex()

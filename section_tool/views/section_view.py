@@ -2878,6 +2878,21 @@ class SectionView(QWidget):
                               color=well_color, linewidth=2.0,
                               solid_capstyle="butt", zorder=8))
 
+            # 1b. Observed measurements — small depth markers with a per-TYPE glyph
+            # (shape distinguishes the kind; hollow + the well colour, not a colour hack).
+            _GLYPH = {"vitrinite_ro": "s", "aft_age": "^", "aft_length": "|",
+                      "ahe_age": "v", "zhe_age": "D", "bht": "o", "dst_temp": "o"}
+            for m in getattr(well, "measurements", []):
+                try:
+                    tvd = float(well.deviation.tvd_at_md(float(m.depth_m)))
+                except Exception:
+                    tvd = float(m.depth_m)
+                self._overlay_artists.extend(self._ax.plot(
+                    [collar_dist], [tvd],
+                    marker=_GLYPH.get(m.measurement_type, "o"), markersize=5,
+                    markerfacecolor="none", markeredgecolor=well_color,
+                    markeredgewidth=1.2, linestyle="none", zorder=11))
+
             # 2. Deviated trajectory overlay (only adds value for non-vertical wells)
             distances, tvds = well.section_track(section)
             if len(distances) > 2 or (len(distances) == 2 and

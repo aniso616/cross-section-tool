@@ -747,6 +747,46 @@ class TestRestorationCapture:
         assert ghost
 
 
+class TestMeasurements:
+    """Real-MainWindow: observed measurements render as well markers, and the
+    Measurements editor adds them (validated) onto the well."""
+
+    def test_section_renders_measurement_markers(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.core.wells import Well
+        from section_tool.core.measurements import Measurement
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        well = Well("W1", 500.0, 0.0, td=2000.0)
+        well.add_measurement(Measurement(depth_m=1500.0, measurement_type="aft_age",
+                                         value=80.0, units="Ma"))
+        state.add_well(well)
+        win._section_view.render()                       # must not crash
+        markers = {ln.get_marker() for ln in win._section_view._ax.get_lines()}
+        assert "^" in markers                            # the aft_age glyph
+
+    def test_measurements_dialog_add_validates_and_persists(self, win, state, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        from section_tool.core.wells import Well
+        from section_tool.views import measurements_dialog as md
+        state.add_well(Well("W1", 0.0, 0.0, td=2000.0))
+        dlg = md.MeasurementsDialog(state)
+
+        def fake_exec(self):
+            self._type.setCurrentIndex(self._type.findData("vitrinite_ro"))
+            self._depth.setValue(1200.0)
+            self._value.setValue(0.7)
+            return QDialog.Accepted
+        monkeypatch.setattr(md._MeasurementEditDialog, "exec", fake_exec)
+
+        dlg._add()
+        ms = state.project.wells[0].measurements
+        assert len(ms) == 1
+        assert ms[0].measurement_type == "vitrinite_ro" and ms[0].value == 0.7
+        assert ms[0].depth_m == 1200.0 and ms[0].well_uuid == state.project.wells[0].uuid
+
+
 class TestRestorationWorkflowEndToEnd:
     """Real-MainWindow: interpretation → pin/datum → event(algorithm) → capture →
     step → ghost overlay → Balance Check measures deformed-vs-RESTORED."""

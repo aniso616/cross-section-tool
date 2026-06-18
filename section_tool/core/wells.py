@@ -236,6 +236,7 @@ class Well:
         self._logs: dict[str, LogCurve] = {}
         self._formation_tops: dict[str, float] = {}  # name → MD
         self._tdrs: list = []  # list[TimeDepthRelation] — time-depth control
+        self._measurements: list = []  # list[Measurement] — observed thermal data
 
     # ------------------------------------------------------------------
     # Log management
@@ -298,6 +299,28 @@ class Well:
         """The most recently added checkshot TDR, or None."""
         cs = self.tdrs_of_kind("checkshot")
         return cs[-1] if cs else None
+
+    # ------------------------------------------------------------------
+    # Measurements (observed thermochronometric / thermal data)
+    # ------------------------------------------------------------------
+
+    def add_measurement(self, measurement) -> None:
+        """Register a Measurement, stamping it with this well's identity."""
+        measurement.well_uuid = self.uuid
+        self._measurements.append(measurement)
+
+    def remove_measurement(self, sample_uuid: str) -> bool:
+        before = len(self._measurements)
+        self._measurements = [m for m in self._measurements if m.uuid != sample_uuid]
+        return len(self._measurements) < before
+
+    @property
+    def measurements(self) -> list:
+        """Copy of the well's Measurement list."""
+        return list(self._measurements)
+
+    def measurements_of_type(self, mtype: str) -> list:
+        return [m for m in self._measurements if m.measurement_type == mtype]
 
     # ------------------------------------------------------------------
     # Section projection

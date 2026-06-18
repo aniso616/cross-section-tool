@@ -322,7 +322,8 @@ CREATE TABLE IF NOT EXISTS measurements (
     sample_id   TEXT,
     lab         TEXT,
     method      TEXT,
-    note        TEXT
+    note        TEXT,
+    uuid        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS well_sections (
@@ -491,6 +492,8 @@ class ProjectDatabase:
             # Reference-line restoration role (Step 5): stable identity + pin/datum.
             ("reference_lines", "uuid", "TEXT"),
             ("reference_lines", "restoration_role", "TEXT"),
+            # Measurement sample identity (Thermal Step 1).
+            ("measurements", "uuid", "TEXT"),
             # Slice generalization: observations carry an explicit slice kind +
             # ref. DEFAULT 'section' makes every existing row a section
             # observation automatically (fully backward compatible).
@@ -1072,6 +1075,21 @@ class ProjectDatabase:
             except Exception:
                 pass
 
+        # Observed thermal/thermochron measurements (Thermal Step 1).
+        self.conn.execute("DELETE FROM measurements WHERE well_id=?", (wid,))
+        for m in getattr(well, "measurements", []):
+            try:
+                self.conn.execute(
+                    """INSERT INTO measurements
+                       (well_id, kind, depth_md, value, uncertainty, units,
+                        sample_id, lab, note, uuid)
+                       VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (wid, m.measurement_type, m.depth_m, m.value, m.uncertainty,
+                     m.units, m.sample_id, m.source, m.notes, m.uuid)
+                )
+            except Exception:
+                pass
+
         self.conn.commit()
         return wid
 
@@ -1092,6 +1110,10 @@ class ProjectDatabase:
                           self.conn.execute(
                               "SELECT * FROM time_depth_relations WHERE well_id=?",
                               (w["id"],)).fetchall()]
+            wd["measurements"] = [dict(r) for r in
+                                  self.conn.execute(
+                                      "SELECT * FROM measurements WHERE well_id=?",
+                                      (w["id"],)).fetchall()]
             result.append(wd)
         return result
 
