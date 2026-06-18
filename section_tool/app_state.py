@@ -190,6 +190,10 @@ class AppState(QObject):
         self._active_well: Well | None = None
         self._is_modified: bool = False
         self._active_tool: str = "select"
+        # In-memory pre-deformation snapshot for balance comparison (Step 4). Set
+        # externally (Step 3 capture / the future restoration engine); None until
+        # then, so the balance dialog degrades to its single-section report.
+        self.restoration_snapshot = None
         # Phase 7: command stack
         self._cmd_stack: CommandStack = CommandStack()
         self._active_pick_category: str | None = None

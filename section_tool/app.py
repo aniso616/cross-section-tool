@@ -1491,7 +1491,10 @@ class MainWindow(QMainWindow):
                 "Select a section before running the balance check.",
             )
             return
-        dlg = BalanceCheckDialog(self._state, section, parent=self)
+        # Compare against a captured pre-deformation snapshot when one exists
+        # (Step 3 / future restoration engine); else the single-section report.
+        dlg = BalanceCheckDialog(self._state, section, parent=self,
+                                 snapshot=getattr(self._state, "restoration_snapshot", None))
         dlg.exec()
 
     def _on_restoration_stack(self) -> None:

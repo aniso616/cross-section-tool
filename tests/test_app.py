@@ -676,6 +676,44 @@ class TestInterpretationSnapshot:
         assert hp in state.project.horizon_picks         # live state intact
 
 
+class TestBalanceCheckHandler:
+    """Real-MainWindow: the Model ▸ Check Section Balance handler passes the
+    in-memory snapshot through to the dialog (comparison when present)."""
+
+    def test_balance_check_runs_with_and_without_snapshot(self, win, state,
+                                                          monkeypatch):
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.polygons import SectionPolygon
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+        from section_tool.views import balance_check_dialog as bcd
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        state.project.horizon_picks.append(
+            HorizonPick([0.0, 1000.0], [100.0, 100.0], name="Top",
+                        section_names=["L1", "L1"]))
+        state.project.polygons.append(
+            SectionPolygon([(0, 0), (100, 0), (100, 10), (0, 10)], name="Block",
+                           section_name="L1"))
+
+        captured = {}
+
+        def fake_exec(self):
+            captured["has_cmp"] = getattr(self, "_cmp_table", None) is not None
+            return 0
+        monkeypatch.setattr(bcd.BalanceCheckDialog, "exec", fake_exec)
+
+        win._on_balance_check()                  # no snapshot → single-section report
+        assert captured["has_cmp"] is False
+
+        state.restoration_snapshot = snapshot_interpretation(
+            state.active_section, state.project)
+        win._on_balance_check()                  # snapshot present → comparison built
+        assert captured["has_cmp"] is True
+
+
 class TestBasemapMenuEndToEnd:
     def test_select_basemap_fetches_and_persists(self, win, state, monkeypatch):
         import numpy as np
