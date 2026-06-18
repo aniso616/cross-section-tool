@@ -110,6 +110,71 @@ def fault_parallel_flow(points, fault_trace, slip: float) -> np.ndarray:
     return p + float(slip) * u
 
 
+from dataclasses import dataclass
+
+
+@dataclass
+class AlgorithmProposal:
+    """A restoration-algorithm proposal derived from an element's construction rule.
+
+    Display-only defaults — the user always confirms (never silent/forced).
+    """
+    algorithm: str
+    params: dict
+    confidence: str          # "certain" (rule encodes the kinematic) | "suggested"
+    source_kind: str         # the construction-rule kind it came from
+    reason: str              # human-readable justification
+
+
+# construction kind → (algorithm, confidence, reason). algorithm None = no inverse.
+# Only listric_fault is "certain" — its rule explicitly records the fault geometry
+# (the kinematic); the rest are the natural inverse with default params.
+_RULE_INVERSE = {
+    "parallel_to_bed":    ("flexural_slip", "suggested",
+                           "a bed parallel to a reference bed restores by "
+                           "layer-parallel (flexural) slip"),
+    "kink_band":          ("flexural_slip", "suggested",
+                           "kink folds are equal-area / constant bed length → "
+                           "flexural slip unfold"),
+    "dip_constrained":    ("simple_shear", "suggested",
+                           "a constant-dip planar bed restores to the datum by "
+                           "simple shear"),
+    "listric_fault":      ("fault_parallel_flow", "certain",
+                           "the listric fault geometry is recorded — the hangingwall "
+                           "restores by fault-parallel flow along it"),
+    "freehand":           (None, "none", "freehand geometry has no constraint to reverse"),
+    "mirror_axial_trace": (None, "none", "mirror construction has no kinematic inverse here"),
+}
+
+
+def restore_by_construction_rule(entity, event=None) -> "AlgorithmProposal | None":
+    """Propose a restoration algorithm for *entity* from its construction rule.
+
+    The payoff of the construction-metadata architecture: the restoration rule
+    reverses the construction rule. Reads ``entity.construction_rule.kind`` and
+    returns an :class:`AlgorithmProposal` (algorithm + seeded params + confidence)
+    or ``None`` when there is no applicable inverse (freehand / mirror / no rule).
+    *event* carries the pin/datum context (sourced separately in the editor); it is
+    accepted for symmetry and future seeding. Proposals are DEFAULTS — the caller
+    presents them for the user to confirm or override.
+    """
+    rule = getattr(entity, "construction_rule", None)
+    if rule is None:
+        return None
+    kind = getattr(rule, "kind", None)
+    mapping = _RULE_INVERSE.get(kind)
+    if mapping is None or mapping[0] is None:
+        return None
+    algorithm, confidence, reason = mapping
+    params: dict = {}
+    if algorithm == "simple_shear":
+        params = {"shear_angle": 0.0}                    # vertical shear default
+    elif algorithm == "fault_parallel_flow":
+        params = {"fault_uuid": getattr(entity, "uuid", None)}   # this fault is the trace
+    return AlgorithmProposal(algorithm=algorithm, params=params,
+                             confidence=confidence, source_kind=kind, reason=reason)
+
+
 def apply_algorithm(algorithm: str, points, params: dict, *,
                     fault_trace=None) -> np.ndarray:
     """Dispatch *algorithm* over *points* with *params* (and *fault_trace* when

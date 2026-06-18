@@ -158,6 +158,52 @@ def test_dialog_prefills_algorithm_and_params_on_edit(qapp):
     assert dlg.values["params"] == {"shear_angle": 30.0, "datum_y": 0.0}
 
 
+def test_dialog_prepopulates_algorithm_from_proposal(qapp):
+    from section_tool.core.kinematics import AlgorithmProposal
+    prop = AlgorithmProposal("flexural_slip", {}, "suggested", "parallel_to_bed", "why")
+    ev = RestorationEvent(1, "e", remove_element_ids=["u1"])
+    dlg = _EventEditDialog(event=ev, removable=[("u1", "H1", "Horizon")],
+                           propose_fn=lambda ids: [("H1", prop)] if "u1" in ids else [])
+    assert dlg._algo.currentData() == "flexural_slip"           # pre-selected default
+    assert "Suggested from construction rule" in dlg._proposal_label.text()
+    assert "suggested" in dlg._proposal_label.text()
+
+
+def test_dialog_user_override_beats_proposal(qapp):
+    from section_tool.core.kinematics import AlgorithmProposal
+    prop = AlgorithmProposal("flexural_slip", {}, "suggested", "parallel_to_bed", "why")
+    ev = RestorationEvent(1, "e", remove_element_ids=["u1"])
+    dlg = _EventEditDialog(event=ev, removable=[("u1", "H1", "Horizon")],
+                           propose_fn=lambda ids: [("H1", prop)])
+    dlg._algo_touched = True                                    # user picked manually
+    dlg._algo.setCurrentIndex(dlg._algo.findData("rigid_translation"))
+    dlg._refresh_proposals()                                    # must NOT override
+    assert dlg._algo.currentData() == "rigid_translation"
+    assert dlg.values["algorithm"] == "rigid_translation"
+
+
+def test_dialog_conflicting_proposals_not_auto_selected(qapp):
+    from section_tool.core.kinematics import AlgorithmProposal
+    p1 = AlgorithmProposal("flexural_slip", {}, "suggested", "parallel_to_bed", "a")
+    p2 = AlgorithmProposal("simple_shear", {"shear_angle": 0.0}, "suggested",
+                           "dip_constrained", "b")
+    ev = RestorationEvent(1, "e", remove_element_ids=["u1", "u2"])
+    dlg = _EventEditDialog(
+        event=ev, removable=[("u1", "H1", "Horizon"), ("u2", "H2", "Horizon")],
+        propose_fn=lambda ids: [("H1", p1), ("H2", p2)])
+    assert dlg._algo.currentData() == "none"                   # neither auto-picked
+    assert "Conflicting" in dlg._proposal_label.text()
+
+
+def test_dialog_does_not_override_event_with_prior_algorithm(qapp):
+    from section_tool.core.kinematics import AlgorithmProposal
+    prop = AlgorithmProposal("flexural_slip", {}, "suggested", "parallel_to_bed", "why")
+    ev = RestorationEvent(1, "e", remove_element_ids=["u1"], algorithm="simple_shear")
+    dlg = _EventEditDialog(event=ev, removable=[("u1", "H1", "Horizon")],
+                           propose_fn=lambda ids: [("H1", prop)])
+    assert dlg._algo.currentData() == "simple_shear"           # prior choice respected
+
+
 def test_panel_already_removed_reflects_earlier_event(qapp):
     state, hp = _state_with_horizon()
     seq = state.restoration_sequence

@@ -74,7 +74,7 @@ class _EventEditDialog(QDialog):
 
     def __init__(self, parent=None, event=None, *, removable=None,
                  already_removed=None, faults=None, pin_lines=None,
-                 datum_lines=None) -> None:
+                 datum_lines=None, propose_fn=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Restoration Event")
         self.setMinimumWidth(360)
@@ -124,8 +124,18 @@ class _EventEditDialog(QDialog):
             self._elem_list.addItem(item)
 
         # ── Restoration algorithm + parameters (deformation) ──────────────
+        self._propose_fn = propose_fn
+        self._initial_algorithm = getattr(event, "algorithm", "none") if event else "none"
+        self._algo_touched = False        # the user has chosen the algorithm manually
         algo_grp = QGroupBox("Restoration algorithm (deformation)")
-        self._algo_form = QFormLayout(algo_grp)
+        algo_outer = QVBoxLayout(algo_grp)
+        self._proposal_label = QLabel("")
+        self._proposal_label.setWordWrap(True)
+        self._proposal_label.setStyleSheet("color:#888;")
+        algo_outer.addWidget(self._proposal_label)
+        algo_form_host = QWidget()
+        self._algo_form = QFormLayout(algo_form_host)
+        algo_outer.addWidget(algo_form_host)
         self._algo = QComboBox()
         for key in ("none",) + _kin.KINEMATIC_ALGORITHMS:
             self._algo.addItem(_kin.ALGORITHM_LABELS[key], key)
@@ -175,6 +185,10 @@ class _EventEditDialog(QDialog):
         self._algo_form.addRow("Datum line:", self._datum_line)
 
         self._algo.currentIndexChanged.connect(self._update_param_visibility)
+        # `activated` fires only on USER interaction (not programmatic setCurrentIndex),
+        # so a manual choice locks out further auto-proposals.
+        self._algo.activated.connect(lambda *_: setattr(self, "_algo_touched", True))
+        self._elem_list.itemChanged.connect(lambda *_: self._refresh_proposals())
         layout.addWidget(algo_grp)
 
         btns = QDialogButtonBox(
@@ -211,6 +225,57 @@ class _EventEditDialog(QDialog):
                     if li >= 0:
                         combo.setCurrentIndex(li)
         self._update_param_visibility()
+        self._refresh_proposals()
+
+    def _checked_ids(self) -> "list[str]":
+        out = []
+        for i in range(self._elem_list.count()):
+            item = self._elem_list.item(i)
+            uid = item.data(Qt.UserRole)
+            if uid and item.checkState() == Qt.Checked:
+                out.append(uid)
+        return out
+
+    def _refresh_proposals(self) -> None:
+        """Recompute construction-rule proposals for the checked elements.
+
+        Updates the advisory label always; pre-populates the algorithm + params
+        ONLY when the user hasn't manually chosen one, the event had no prior
+        algorithm, and the proposals agree (a conflict is shown, never resolved
+        silently).
+        """
+        if self._propose_fn is None:
+            return
+        proposals = self._propose_fn(self._checked_ids())   # [(name, AlgorithmProposal)]
+        if not proposals:
+            self._proposal_label.setText("")
+            return
+        algos = {p.algorithm for _n, p in proposals}
+        if len(algos) > 1:
+            lines = "; ".join(f"{n}: {p.algorithm} ({p.confidence})"
+                              for n, p in proposals)
+            self._proposal_label.setText(
+                f"Conflicting suggestions from construction rules — choose one: {lines}")
+            return
+        name, prop = proposals[0]
+        self._proposal_label.setText(
+            f"Suggested from construction rule ({prop.confidence}): "
+            f"{_kin.ALGORITHM_LABELS.get(prop.algorithm, prop.algorithm)} — {prop.reason}")
+        # Pre-populate (defaults) unless the user owns the choice already.
+        if self._algo_touched or self._initial_algorithm not in ("none", None):
+            return
+        ai = self._algo.findData(prop.algorithm)
+        if ai >= 0:
+            self._algo.setCurrentIndex(ai)               # programmatic → not "touched"
+        for key, val in (prop.params or {}).items():
+            if key in self._param_fields:
+                w = self._param_fields[key]
+                if key == "fault_uuid":
+                    fi = w.findData(val)
+                    if fi >= 0:
+                        w.setCurrentIndex(fi)
+                elif val is not None:
+                    w.setValue(float(val))
 
     def _update_param_visibility(self) -> None:
         """Show only the params the selected algorithm uses (incl. pin/datum line combos)."""
@@ -438,6 +503,27 @@ class RestorationPanel(QWidget):
     def _fault_choices(self, removable) -> "list[tuple[str, str]]":
         return [(uid, name) for uid, name, typ in removable if typ == "Fault"]
 
+    def _proposals_for_ids(self, ids) -> "list[tuple[str, object]]":
+        """(name, AlgorithmProposal) for the checked elements that carry a
+        construction rule with a restoration inverse. Empty for elements without."""
+        from section_tool.core.kinematics import restore_by_construction_rule
+        proj = self._state.project
+        by_id = {}
+        for coll in (proj.horizon_picks, proj.fault_picks, proj.polygons):
+            for obj in coll:
+                uid = getattr(obj, "uuid", None)
+                if uid:
+                    by_id[uid] = obj
+        out = []
+        for uid in ids:
+            ent = by_id.get(uid)
+            if ent is None:
+                continue
+            prop = restore_by_construction_rule(ent, None)
+            if prop is not None:
+                out.append((getattr(ent, "name", "") or "(unnamed)", prop))
+        return out
+
     def _pin_datum_lines(self) -> "tuple[list, list]":
         """(pin_lines, datum_lines) as (uuid, name) from the project's reference lines."""
         pins, datums = [], []
@@ -458,7 +544,8 @@ class RestorationPanel(QWidget):
         dlg = _EventEditDialog(self, removable=removable,
                                already_removed=self._already_removed_before(len(seq.events)),
                                faults=self._fault_choices(removable),
-                               pin_lines=pins, datum_lines=datums)
+                               pin_lines=pins, datum_lines=datums,
+                               propose_fn=self._proposals_for_ids)
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values
@@ -529,7 +616,8 @@ class RestorationPanel(QWidget):
         dlg = _EventEditDialog(self, event=ev, removable=removable,
                                already_removed=self._already_removed_before(idx),
                                faults=self._fault_choices(removable),
-                               pin_lines=pins, datum_lines=datums)
+                               pin_lines=pins, datum_lines=datums,
+                               propose_fn=self._proposals_for_ids)
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values

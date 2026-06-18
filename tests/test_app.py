@@ -747,6 +747,51 @@ class TestRestorationCapture:
         assert ghost
 
 
+class TestConstructionRuleProposals:
+    """Real-MainWindow: editing an event whose element carries a construction rule
+    pre-populates the restoration algorithm from restore_by_construction_rule."""
+
+    def test_editor_prepopulates_and_user_can_override(self, win, state, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.construction import KinkBandRule
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.views.restoration_panel import _EventEditDialog
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [100.0, 200.0], name="Fold",
+                         section_names=["L1", "L1"])
+        hp.construction_rule = KinkBandRule(axial_surface_dip_deg=30.0)   # → flexural_slip
+        state.project.horizon_picks.append(hp)
+
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "e", remove_element_ids=[hp.uuid]))
+        panel = win._restoration_widget
+        panel.rebuild()
+        panel._table.selectRow(0)
+
+        seen = {}
+
+        def fake_exec(self):
+            seen["proposed"] = self._algo.currentData()              # pre-populated
+            seen["label"] = self._proposal_label.text()
+            self._algo_touched = True                               # user overrides
+            self._algo.setCurrentIndex(self._algo.findData("rigid_translation"))
+            self._p_dx.setValue(50.0)
+            return QDialog.Accepted
+        monkeypatch.setattr(_EventEditDialog, "exec", fake_exec)
+
+        panel._edit_event()
+        assert seen["proposed"] == "flexural_slip"                 # from the kink-band rule
+        assert "construction rule" in seen["label"]
+        ev = state.restoration_sequence.events[0]
+        assert ev.algorithm == "rigid_translation"                 # override persisted
+        assert ev.params == {"dx": 50.0, "dy": 0.0}
+
+
 class TestPinDatumReferenceLines:
     """Real-MainWindow: pin/datum reference lines render with a distinct role label,
     and the panel offers them when editing a pin/datum algorithm."""
