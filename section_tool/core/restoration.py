@@ -57,6 +57,11 @@ class RestorationEvent:
     remove_element_ids: list[str] = field(default_factory=list)
     remove_element_names: list[str] = field(default_factory=list)
     decompact_params: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Kinematic restoration (Step 6): which geometric algorithm undeforms this
+    # step, and its parameters (pin_x / datum_y / dx / dy / shear_angle / slip /
+    # fault_uuid). "none" = a remove-only event (no deformation).
+    algorithm: str = "none"
+    params: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
 
@@ -69,6 +74,8 @@ class RestorationEvent:
             "remove_element_ids":   list(self.remove_element_ids),
             "remove_element_names": list(self.remove_element_names),
             "decompact_params": {k: dict(v) for k, v in self.decompact_params.items()},
+            "algorithm":            self.algorithm,
+            "params":               dict(self.params),
         }
 
     @classmethod
@@ -86,6 +93,8 @@ class RestorationEvent:
             decompact_params={
                 k: dict(v) for k, v in d.get("decompact_params", {}).items()
             },
+            algorithm=str(d.get("algorithm", "none")),
+            params=dict(d.get("params", {})),
         )
 
 

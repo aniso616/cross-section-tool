@@ -1,0 +1,208 @@
+"""Kinematic restoration engine — pure 2D geometric algorithms.
+
+The functions here deform geometry: they receive ``(x, y)`` arrays (x =
+along-section metres, y = depth metres, positive DOWN) plus scalar parameters and
+return deformed ``(x, y)`` arrays.  No Section/Project/HorizonPick objects appear
+inside the pure algorithms — just math — for maximum testability.
+
+Algorithms (manual selection; automatic selection from construction metadata is a
+later step):
+
+* rigid_translation     — rigid-body translation (the plumbing baseline).
+* flexural_slip_unfold  — layer-parallel slip; unfold to a datum, arc length
+                          preserved (Dahlstrom 1969 / Suppe 1983).
+* simple_shear          — inclined/vertical simple shear to a datum (extensional).
+* fault_parallel_flow   — hangingwall translated parallel to the fault (thrusts).
+
+A higher-level :func:`restore_snapshot` applies a chosen algorithm to a Step-3
+interpretation snapshot, returning a NEW deformed snapshot (the original is never
+touched) with the anchors-under-restoration rule applied.  SI internal.
+"""
+from __future__ import annotations
+
+import copy
+
+import numpy as np
+
+KINEMATIC_ALGORITHMS = (
+    "rigid_translation", "flexural_slip", "simple_shear", "fault_parallel_flow")
+
+ALGORITHM_LABELS = {
+    "none":                "None",
+    "rigid_translation":   "Rigid translation",
+    "flexural_slip":       "Flexural slip unfold",
+    "simple_shear":        "Simple shear",
+    "fault_parallel_flow": "Fault-parallel flow",
+}
+
+
+# ---------------------------------------------------------------------------
+# Pure algorithms — (x, y) arrays in, (x, y) arrays out
+# ---------------------------------------------------------------------------
+
+def _as_xy(points) -> np.ndarray:
+    p = np.asarray(points, dtype=float)
+    if p.ndim != 2 or p.shape[1] != 2:
+        raise ValueError("points must be an (N, 2) array of (x, y)")
+    return p
+
+
+def rigid_translation(points, dx: float, dy: float) -> np.ndarray:
+    """Translate every point by ``(dx, dy)`` — rigid body, no rotation.
+
+    The simplest case and the end-to-end plumbing check: trivial to hand-verify.
+    """
+    p = _as_xy(points)
+    return p + np.array([float(dx), float(dy)])
+
+
+def flexural_slip_unfold(points, pin_x: float, datum_y: float = 0.0) -> np.ndarray:
+    """Unfold a folded layer to a horizontal *datum*, pinned at *pin_x*.
+
+    Flexural (layer-parallel) slip preserves bed length, so the layer is laid out
+    flat at ``y = datum_y`` with each node placed at its signed ARC-LENGTH distance
+    from the pin: the pin node stays at ``x = pin_x`` and total length is conserved
+    (Dahlstrom line-length balance).  *points* must be ordered by x.
+    """
+    p = _as_xy(points)
+    if len(p) < 2:
+        return np.column_stack([p[:, 0], np.full(len(p), float(datum_y))]) if len(p) else p
+    seg = np.hypot(np.diff(p[:, 0]), np.diff(p[:, 1]))
+    s = np.concatenate([[0.0], np.cumsum(seg)])          # arc length from node 0
+    s_pin = float(np.interp(pin_x, p[:, 0], s))          # arc length at the pin
+    x_out = float(pin_x) + (s - s_pin)
+    y_out = np.full(len(p), float(datum_y))
+    return np.column_stack([x_out, y_out])
+
+
+def simple_shear(points, shear_angle_deg: float, datum_y: float = 0.0) -> np.ndarray:
+    """Restore points to a *datum* by inclined simple shear.
+
+    Each point slides along the shear direction (``shear_angle_deg`` measured from
+    VERTICAL; 0 = vertical shear) until it reaches ``y = datum_y``.  Vertical shear
+    leaves x unchanged; an inclined shear shifts x by ``(datum_y − y)·tan(angle)``.
+    The classic listric-fault hangingwall restoration to a regional datum.
+    """
+    p = _as_xy(points)
+    theta = np.radians(float(shear_angle_deg))
+    x_out = p[:, 0] + (float(datum_y) - p[:, 1]) * np.tan(theta)
+    y_out = np.full(len(p), float(datum_y))
+    return np.column_stack([x_out, y_out])
+
+
+def fault_parallel_flow(points, fault_trace, slip: float) -> np.ndarray:
+    """Translate the hangingwall *points* parallel to the fault by *slip* metres.
+
+    *fault_trace* is the fault's ``(x, y)`` polyline; the slip direction is the
+    fault's overall unit vector (first→last node).  For a planar fault this is the
+    exact fault-parallel-flow result; for a curved fault it is the first-order
+    (rigid-along-fault) approximation.  ``slip`` may be signed to choose direction.
+    """
+    p = _as_xy(points)
+    ft = _as_xy(fault_trace)
+    if len(ft) < 2:
+        raise ValueError("fault_trace needs at least 2 nodes")
+    d = ft[-1] - ft[0]
+    norm = float(np.hypot(d[0], d[1]))
+    if norm < 1e-12:
+        raise ValueError("degenerate fault_trace (zero length)")
+    u = d / norm
+    return p + float(slip) * u
+
+
+def apply_algorithm(algorithm: str, points, params: dict, *,
+                    fault_trace=None) -> np.ndarray:
+    """Dispatch *algorithm* over *points* with *params* (and *fault_trace* when
+    the algorithm needs one).  Returns deformed ``(x, y)``."""
+    params = params or {}
+    if algorithm == "rigid_translation":
+        return rigid_translation(points, params.get("dx", 0.0), params.get("dy", 0.0))
+    if algorithm == "flexural_slip":
+        return flexural_slip_unfold(points, float(params.get("pin_x", 0.0)),
+                                    float(params.get("datum_y", 0.0)))
+    if algorithm == "simple_shear":
+        return simple_shear(points, float(params.get("shear_angle", 0.0)),
+                            float(params.get("datum_y", 0.0)))
+    if algorithm == "fault_parallel_flow":
+        if fault_trace is None:
+            raise ValueError("fault_parallel_flow needs a fault_trace")
+        return fault_parallel_flow(points, fault_trace, float(params.get("slip", 0.0)))
+    raise ValueError(f"unknown kinematic algorithm: {algorithm!r}")
+
+
+# ---------------------------------------------------------------------------
+# Snapshot-level restoration (anchors-under-restoration applied here)
+# ---------------------------------------------------------------------------
+
+def _section_xy(pick, section_name):
+    """(indices, (N,2) points) for *pick*'s nodes on *section_name*."""
+    idxs = pick.section_indices(section_name)
+    pts = np.column_stack([pick._distances[idxs], pick._depths[idxs]])
+    return idxs, pts
+
+
+def _reorder_point_arrays(pick) -> None:
+    """Re-sort every per-point array by distance (deformation may reorder x)."""
+    order = np.argsort(pick._distances, kind="stable")
+    for arr in pick._POINT_ARRAYS:
+        setattr(pick, arr, getattr(pick, arr)[order].copy())
+
+
+def _deform_pick_inplace(pick, algorithm, params, section_name, fault_trace) -> None:
+    """Deform *pick*'s nodes on *section_name* and apply anchors-under-restoration.
+
+    The restored copy is in a NEW pre-deformation frame — it is no longer tied to
+    the present seismic — so its TWT anchors are cleared and ``seismic_tied`` is
+    dropped (``tie_kind`` then reads ``depth_native``).  *pick* is a snapshot copy;
+    the original is untouched.
+    """
+    idxs, pts = _section_xy(pick, section_name)
+    if len(pts):
+        deformed = apply_algorithm(algorithm, pts, params, fault_trace=fault_trace)
+        pick._distances[idxs] = deformed[:, 0]
+        pick._depths[idxs] = deformed[:, 1]
+    # anchors-under-restoration: the restored frame is depth-native, not seismic-tied
+    if len(pick._twt_anchor):
+        pick._twt_anchor[:] = np.nan
+    pick.seismic_tied = False
+    _reorder_point_arrays(pick)
+
+
+def _fault_trace(snapshot, fault_uuid, section_name):
+    for fp in snapshot.faults:
+        if getattr(fp, "uuid", None) == fault_uuid:
+            _idxs, pts = _section_xy(fp, section_name)
+            return pts
+    return None
+
+
+def restore_snapshot(snapshot, event, *, section_name: str):
+    """Apply *event*'s algorithm to *snapshot*, returning a NEW deformed snapshot.
+
+    The input snapshot (and therefore the original interpretation) is never
+    mutated.  Every horizon / fault / polygon node on *section_name* is deformed by
+    ``event.algorithm`` + ``event.params``; the result carries ``restoration_frame
+    = True`` and depth-native (anchor-cleared) picks — see
+    :func:`_deform_pick_inplace`.  Pin/datum come from ``event.params``
+    (``pin_x`` / ``datum_y``); fault-parallel flow reads ``params['fault_uuid']``.
+    """
+    algorithm = getattr(event, "algorithm", "none")
+    params = dict(getattr(event, "params", {}) or {})
+    out = copy.deepcopy(snapshot)
+    if algorithm in ("none", None):
+        out.restoration_frame = True
+        return out
+
+    fault_trace = None
+    if algorithm == "fault_parallel_flow":
+        fault_trace = _fault_trace(out, params.get("fault_uuid"), section_name)
+
+    for pick in list(out.horizons) + list(out.faults):
+        _deform_pick_inplace(pick, algorithm, params, section_name, fault_trace)
+    for poly in out.polygons:
+        verts = apply_algorithm(algorithm, poly._vertices, params,
+                                fault_trace=fault_trace)
+        poly._vertices[:] = verts
+        poly.free_points = poly._vertices
+    out.restoration_frame = True
+    return out

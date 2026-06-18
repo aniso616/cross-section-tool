@@ -45,6 +45,10 @@ class InterpretationSnapshot:
     velocity_model_id: str | None = None                   # reference, not the object
     seismic_ref_names: list = field(default_factory=list)  # references, not the data
     schema_version: int = SNAPSHOT_SCHEMA_VERSION
+    # True once a kinematic algorithm has deformed this bundle (Step 6): the
+    # entities are in a pre-deformation frame, depth-native (anchors cleared), and
+    # must never be mistaken for the live seismic-tied interpretation.
+    restoration_frame: bool = False
 
 
 def _on_section(pick, section_name: str) -> bool:

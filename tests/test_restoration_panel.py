@@ -123,6 +123,41 @@ def test_panel_picker_resolves_by_uuid_after_rename(qapp):
     assert item.checkState() == Qt.Checked                  # still checked
 
 
+def test_dialog_param_visibility_follows_algorithm(qapp):
+    dlg = _EventEditDialog(removable=[])
+    dlg._algo.setCurrentIndex(dlg._algo.findData("flexural_slip"))
+    dlg._update_param_visibility()
+    assert dlg._p_pin_x.isVisibleTo(dlg) and dlg._p_datum_y.isVisibleTo(dlg)
+    assert not dlg._p_dx.isVisibleTo(dlg) and not dlg._p_slip.isVisibleTo(dlg)
+
+
+def test_panel_add_event_writes_algorithm_and_params(qapp, monkeypatch):
+    state, hp = _state_with_horizon()
+    panel = RestorationPanel(state)
+
+    def fake_exec(self):
+        self._name.setText("Unfold")
+        self._algo.setCurrentIndex(self._algo.findData("rigid_translation"))
+        self._p_dx.setValue(250.0)
+        self._p_dy.setValue(-10.0)
+        return QDialog.Accepted
+    monkeypatch.setattr(_EventEditDialog, "exec", fake_exec)
+
+    panel._add_event()
+    ev = state.restoration_sequence.events[0]
+    assert ev.algorithm == "rigid_translation"
+    assert ev.params == {"dx": 250.0, "dy": -10.0}
+
+
+def test_dialog_prefills_algorithm_and_params_on_edit(qapp):
+    ev = RestorationEvent(1, "e", algorithm="simple_shear",
+                          params={"shear_angle": 30.0, "datum_y": 0.0})
+    dlg = _EventEditDialog(event=ev, removable=[])
+    assert dlg._algo.currentData() == "simple_shear"
+    assert dlg._p_shear.value() == pytest.approx(30.0)
+    assert dlg.values["params"] == {"shear_angle": 30.0, "datum_y": 0.0}
+
+
 def test_panel_already_removed_reflects_earlier_event(qapp):
     state, hp = _state_with_horizon()
     seq = state.restoration_sequence

@@ -1392,6 +1392,7 @@ class SectionView(QWidget):
         self._render_surfaces(section)
         self._render_faults(section)
         self._render_horizons(section)
+        self._render_restoration_ghost(section)
         if self._state.show_cross_section_ghosts:
             self._render_cross_section_ghost_picks(section)
         self._render_wells(section)
@@ -2025,6 +2026,47 @@ class SectionView(QWidget):
                 self._ax.plot(d_sec, z_sec, color=hp.color, lw=base_lw * 2, zorder=3))
 
         # else: conformable / strike_slip / marker_bed — rendered by main plot above
+
+    def _render_restoration_ghost(self, section) -> None:
+        """Ghost overlay of the current restoration step's DEFORMED geometry.
+
+        View-only and non-destructive: deforms the captured snapshot (never the
+        live section) by the current step's kinematic algorithm and draws the
+        result over the unmodified interpretation in a dashed, lighter style (the
+        line-style grammar, not a colour hack). No-op unless a snapshot exists and
+        the current step's event carries an algorithm.
+        """
+        snap = getattr(self._state, "restoration_snapshot", None)
+        if snap is None:
+            return
+        seq = self._state.restoration_sequence
+        step = seq.current_step
+        if not seq.events or step < 1 or step > len(seq.events):
+            return
+        event = seq.events[step - 1]
+        if getattr(event, "algorithm", "none") in ("none", None):
+            return
+        from section_tool.core import kinematics as K
+        try:
+            out = K.restore_snapshot(snap, event, section_name=section.name)
+        except Exception:
+            return
+        for pick in list(out.horizons) + list(out.faults):
+            d, z = pick.picks_for_section(section.name)
+            if len(d) < 2:
+                continue
+            self._overlay_artists.extend(self._ax.plot(
+                d, z, color=getattr(pick, "color", "#888888"), lw=1.2,
+                linestyle=(0, (4, 3)), alpha=0.55, zorder=6))
+        for poly in out.polygons:
+            v = poly.vertices
+            if len(v) < 3:
+                continue
+            vx = np.append(v[:, 0], v[0, 0])
+            vy = np.append(v[:, 1], v[0, 1])
+            self._overlay_artists.extend(self._ax.plot(
+                vx, vy, color=getattr(poly, "edge_color", "#888888"), lw=1.0,
+                linestyle=(0, (2, 2)), alpha=0.5, zorder=6))
 
     def _get_removed_ids(self) -> set[str]:
         """UUIDs hidden at the current restoration step (empty set = present day)."""

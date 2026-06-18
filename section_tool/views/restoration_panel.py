@@ -22,6 +22,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -40,6 +41,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from section_tool.core import kinematics as _kin
 
 
 class _EventEditDialog(QDialog):
@@ -60,8 +63,17 @@ class _EventEditDialog(QDialog):
         picker can flag (not forbid) a redundant re-removal.
     """
 
+    # Which params each algorithm exposes (drives the editor's show/hide).
+    _ALGO_PARAMS = {
+        "none":                (),
+        "rigid_translation":   ("dx", "dy"),
+        "flexural_slip":       ("pin_x", "datum_y"),
+        "simple_shear":        ("shear_angle", "datum_y"),
+        "fault_parallel_flow": ("slip", "fault_uuid"),
+    }
+
     def __init__(self, parent=None, event=None, *, removable=None,
-                 already_removed=None) -> None:
+                 already_removed=None, faults=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Restoration Event")
         self.setMinimumWidth(360)
@@ -110,6 +122,44 @@ class _EventEditDialog(QDialog):
             item.setForeground(QColor("#cc6666"))
             self._elem_list.addItem(item)
 
+        # ── Restoration algorithm + parameters (deformation) ──────────────
+        algo_grp = QGroupBox("Restoration algorithm (deformation)")
+        self._algo_form = QFormLayout(algo_grp)
+        self._algo = QComboBox()
+        for key in ("none",) + _kin.KINEMATIC_ALGORITHMS:
+            self._algo.addItem(_kin.ALGORITHM_LABELS[key], key)
+        self._algo_form.addRow("Algorithm:", self._algo)
+
+        def _spin(lo, hi, suffix):
+            s = QDoubleSpinBox()
+            s.setRange(lo, hi)
+            s.setDecimals(1)
+            s.setSuffix(suffix)
+            return s
+
+        self._p_dx = _spin(-1e6, 1e6, " m")
+        self._p_dy = _spin(-1e6, 1e6, " m")
+        self._p_pin_x = _spin(-1e6, 1e6, " m")
+        self._p_datum_y = _spin(-1e6, 1e6, " m")
+        self._p_shear = _spin(-89.0, 89.0, " °")
+        self._p_slip = _spin(-1e6, 1e6, " m")
+        self._p_fault = QComboBox()
+        for uid, name in (faults or []):
+            self._p_fault.addItem(name or "(unnamed)", uid)
+
+        self._param_fields = {
+            "dx": self._p_dx, "dy": self._p_dy, "pin_x": self._p_pin_x,
+            "datum_y": self._p_datum_y, "shear_angle": self._p_shear,
+            "slip": self._p_slip, "fault_uuid": self._p_fault,
+        }
+        for label, key in (("dx:", "dx"), ("dy:", "dy"), ("Pin x:", "pin_x"),
+                           ("Datum depth:", "datum_y"),
+                           ("Shear angle (from vertical):", "shear_angle"),
+                           ("Slip:", "slip"), ("Fault:", "fault_uuid")):
+            self._algo_form.addRow(label, self._param_fields[key])
+        self._algo.currentIndexChanged.connect(self._update_param_visibility)
+        layout.addWidget(algo_grp)
+
         btns = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
             parent=self,
@@ -122,6 +172,32 @@ class _EventEditDialog(QDialog):
             self._name.setText(event.name)
             self._age.setValue(event.age_ma if event.age_ma is not None else 0.0)
             self._desc.setText(event.description)
+            idx = self._algo.findData(getattr(event, "algorithm", "none"))
+            if idx >= 0:
+                self._algo.setCurrentIndex(idx)
+            p = getattr(event, "params", {}) or {}
+            self._p_dx.setValue(float(p.get("dx", 0.0)))
+            self._p_dy.setValue(float(p.get("dy", 0.0)))
+            self._p_pin_x.setValue(float(p.get("pin_x", 0.0)))
+            self._p_datum_y.setValue(float(p.get("datum_y", 0.0)))
+            self._p_shear.setValue(float(p.get("shear_angle", 0.0)))
+            self._p_slip.setValue(float(p.get("slip", 0.0)))
+            fu = p.get("fault_uuid")
+            if fu is not None:
+                fi = self._p_fault.findData(fu)
+                if fi >= 0:
+                    self._p_fault.setCurrentIndex(fi)
+        self._update_param_visibility()
+
+    def _update_param_visibility(self) -> None:
+        """Show only the params the selected algorithm uses."""
+        active = set(self._ALGO_PARAMS.get(self._algo.currentData(), ()))
+        for key, widget in self._param_fields.items():
+            vis = key in active
+            widget.setVisible(vis)
+            lbl = self._algo_form.labelForField(widget)
+            if lbl is not None:
+                lbl.setVisible(vis)
 
     @property
     def values(self) -> dict:
@@ -132,11 +208,21 @@ class _EventEditDialog(QDialog):
             uid = item.data(Qt.UserRole)
             if uid and item.checkState() == Qt.Checked:
                 ids.append(uid)
+        algo = self._algo.currentData()
+        getters = {
+            "dx": self._p_dx.value, "dy": self._p_dy.value,
+            "pin_x": self._p_pin_x.value, "datum_y": self._p_datum_y.value,
+            "shear_angle": self._p_shear.value, "slip": self._p_slip.value,
+            "fault_uuid": self._p_fault.currentData,
+        }
+        params = {k: getters[k]() for k in self._ALGO_PARAMS.get(algo, ())}
         return {
             "name": self._name.text().strip() or "Event",
             "age_ma": age if age > 0.0 else None,
             "description": self._desc.text().strip(),
             "remove_element_ids": ids,
+            "algorithm": algo,
+            "params": params,
         }
 
 
@@ -314,12 +400,17 @@ class RestorationPanel(QWidget):
                 out.setdefault(uid, step_i)
         return out
 
+    def _fault_choices(self, removable) -> "list[tuple[str, str]]":
+        return [(uid, name) for uid, name, typ in removable if typ == "Fault"]
+
     def _add_event(self) -> None:
         from section_tool.core.restoration import RestorationEvent
         seq = self._sequence
+        removable = self._removable_elements()
         # A new event is appended last, so every existing event is "earlier".
-        dlg = _EventEditDialog(self, removable=self._removable_elements(),
-                               already_removed=self._already_removed_before(len(seq.events)))
+        dlg = _EventEditDialog(self, removable=removable,
+                               already_removed=self._already_removed_before(len(seq.events)),
+                               faults=self._fault_choices(removable))
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values
@@ -330,6 +421,8 @@ class RestorationPanel(QWidget):
             age_ma=vals["age_ma"],
             description=vals["description"],
             remove_element_ids=vals["remove_element_ids"],
+            algorithm=vals["algorithm"],
+            params=vals["params"],
         )
         seq.add_event(ev)
         self._state.set_restoration_sequence(seq)
@@ -381,8 +474,10 @@ class RestorationPanel(QWidget):
             return
         seq = self._sequence
         ev = seq.events[idx]
-        dlg = _EventEditDialog(self, event=ev, removable=self._removable_elements(),
-                               already_removed=self._already_removed_before(idx))
+        removable = self._removable_elements()
+        dlg = _EventEditDialog(self, event=ev, removable=removable,
+                               already_removed=self._already_removed_before(idx),
+                               faults=self._fault_choices(removable))
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values
@@ -390,6 +485,8 @@ class RestorationPanel(QWidget):
         ev.age_ma = vals["age_ma"]
         ev.description = vals["description"]
         ev.remove_element_ids = vals["remove_element_ids"]
+        ev.algorithm = vals["algorithm"]
+        ev.params = vals["params"]
         self._state.set_restoration_sequence(seq)
         self.rebuild()
         self._table.selectRow(idx)

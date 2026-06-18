@@ -676,6 +676,51 @@ class TestInterpretationSnapshot:
         assert hp in state.project.horizon_picks         # live state intact
 
 
+class TestRestorationGhostOverlay:
+    """Real-MainWindow: stepping an event with a kinematic algorithm draws the
+    deformed geometry as a ghost overlay, the live interpretation untouched."""
+
+    def test_stepped_algorithm_renders_ghost(self, win, state):
+        import numpy as np
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [200.0, 300.0], name="Top",
+                         section_names=["L1", "L1"])
+        state.project.horizon_picks.append(hp)
+        state.restoration_snapshot = snapshot_interpretation(
+            state.active_section, state.project)
+
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "Translate", algorithm="rigid_translation",
+                                       params={"dx": 300.0, "dy": 0.0}))
+
+        def _ghost_present():
+            # the ghost is the horizon translated by dx=300 → xdata [300, 1300]
+            for ln in win._section_view._ax.get_lines():
+                xd = np.asarray(ln.get_xdata(), dtype=float)
+                if (len(xd) >= 2 and abs(xd.min() - 300.0) < 1.0
+                        and abs(xd.max() - 1300.0) < 1.0):
+                    return True
+            return False
+
+        seq.current_step = 1                              # apply the translation
+        state.set_restoration_sequence(seq)
+        win._section_view.render()
+        assert _ghost_present()                           # dashed restored geometry drawn
+        assert np.allclose(hp.depths, [200.0, 300.0])     # live interpretation untouched
+
+        seq.current_step = 0                              # present day → no ghost
+        state.set_restoration_sequence(seq)
+        win._section_view.render()
+        assert not _ghost_present()
+
+
 class TestBalanceCheckHandler:
     """Real-MainWindow: the Model ▸ Check Section Balance handler passes the
     in-memory snapshot through to the dialog (comparison when present)."""
