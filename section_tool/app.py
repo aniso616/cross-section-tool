@@ -736,6 +736,10 @@ class MainWindow(QMainWindow):
         self._topology_audit_action.triggered.connect(self._on_topology_audit)
         model_menu.addAction(self._topology_audit_action)
         model_menu.addSeparator()
+        self._capture_baseline_action = QAction("&Capture Restoration Baseline", self)
+        self._capture_baseline_action.triggered.connect(
+            self._on_capture_restoration_baseline)
+        model_menu.addAction(self._capture_baseline_action)
         self._restoration_stack_action = QAction("Restoration &Stack…", self)
         self._restoration_stack_action.triggered.connect(self._on_restoration_stack)
         model_menu.addAction(self._restoration_stack_action)
@@ -911,6 +915,8 @@ class MainWindow(QMainWindow):
         s.annotation_modified.connect(lambda *_: self._section_view.request_render())
         # Restoration panel: step_changed → rebuild panel and request render
         self._restoration_widget.step_changed.connect(self._on_restoration_step_changed)
+        self._restoration_widget.capture_requested.connect(
+            self._on_capture_restoration_baseline)
         # Rebuild restoration panel when project changes
         s.project_changed.connect(self._restoration_widget.rebuild)
         # FPS display from section view
@@ -1502,6 +1508,26 @@ class MainWindow(QMainWindow):
         from section_tool.views.restoration_stack_dialog import RestorationStackDialog
         dlg = RestorationStackDialog(self._state, parent=self)
         dlg.exec()
+
+    def _on_capture_restoration_baseline(self) -> None:
+        """Model ▸ Capture Restoration Baseline — snapshot the current interpretation
+        as the pre-deformation state the ghost overlay and Balance Check compare to.
+
+        A deliberate action, never automatic on section-load or pick-add — the same
+        explicit-action principle as DEM fetch and depth-stretch Apply."""
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+        section = self._state.active_section
+        if section is None:
+            QMessageBox.information(
+                self, "Capture baseline",
+                "Select a section before capturing a restoration baseline.")
+            return
+        snap = snapshot_interpretation(section, self._state.project)
+        self._state.restoration_snapshot = snap          # replaces any prior baseline
+        self._flash_status(
+            f"Restoration baseline captured — {len(snap.horizons)} horizons, "
+            f"{len(snap.polygons)} polygons.")
+        self._section_view.render()
 
     def _on_attribute_table(self) -> None:
         """Tools → Attribute Table: tabular view of all geological element attributes."""

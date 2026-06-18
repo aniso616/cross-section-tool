@@ -676,6 +676,77 @@ class TestInterpretationSnapshot:
         assert hp in state.project.horizon_picks         # live state intact
 
 
+class TestRestorationCapture:
+    """Real-MainWindow: the deliberate Capture Restoration Baseline action sets the
+    session snapshot the ghost overlay + Balance comparison consume."""
+
+    def _section_with(self, state, n_horizons=1, n_polys=1):
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.polygons import SectionPolygon
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        for i in range(n_horizons):
+            state.project.horizon_picks.append(
+                HorizonPick([0.0, 1000.0], [100.0 + i, 200.0 + i], name=f"H{i}",
+                            section_names=["L1", "L1"]))
+        for i in range(n_polys):
+            state.project.polygons.append(
+                SectionPolygon([(0, 0), (100, 0), (100, 50)], name=f"P{i}",
+                               section_name="L1"))
+
+    def test_capture_sets_snapshot_with_counts(self, win, state):
+        self._section_with(state, n_horizons=2, n_polys=1)
+        assert state.restoration_snapshot is None
+        win._on_capture_restoration_baseline()
+        snap = state.restoration_snapshot
+        assert snap is not None
+        assert len(snap.horizons) == 2 and len(snap.polygons) == 1
+
+    def test_recapture_replaces_not_appends(self, win, state):
+        from section_tool.core.surfaces import HorizonPick
+        self._section_with(state, n_horizons=1, n_polys=0)
+        win._on_capture_restoration_baseline()
+        first = state.restoration_snapshot
+        state.project.horizon_picks.append(
+            HorizonPick([0.0, 1000.0], [5.0, 6.0], name="H2", section_names=["L1", "L1"]))
+        win._on_capture_restoration_baseline()
+        assert state.restoration_snapshot is not first       # replaced
+        assert len(state.restoration_snapshot.horizons) == 2  # reflects new state
+
+    def test_capture_empty_section_is_valid(self, win, state):
+        from section_tool.core.section import Section
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        win._on_capture_restoration_baseline()
+        snap = state.restoration_snapshot
+        assert snap is not None and snap.horizons == [] and snap.polygons == []
+
+    def test_panel_button_triggers_capture(self, win, state):
+        self._section_with(state, n_horizons=1, n_polys=0)
+        win._restoration_widget.capture_requested.emit()     # the toolbar button's signal
+        assert state.restoration_snapshot is not None
+
+    def test_capture_then_step_renders_ghost(self, win, state):
+        import numpy as np
+        from section_tool.core.restoration import RestorationEvent
+        self._section_with(state, n_horizons=1, n_polys=0)
+        win._on_capture_restoration_baseline()
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "T", algorithm="rigid_translation",
+                                       params={"dx": 400.0, "dy": 0.0}))
+        seq.current_step = 1
+        state.set_restoration_sequence(seq)
+        win._section_view.render()
+        ghost = any(
+            len(xd := np.asarray(ln.get_xdata(), float)) >= 2
+            and abs(xd.min() - 400.0) < 1.0 and abs(xd.max() - 1400.0) < 1.0
+            for ln in win._section_view._ax.get_lines())
+        assert ghost
+
+
 class TestRestorationGhostOverlay:
     """Real-MainWindow: stepping an event with a kinematic algorithm draws the
     deformed geometry as a ghost overlay, the live interpretation untouched."""

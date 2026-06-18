@@ -241,7 +241,8 @@ class RestorationPanel(QWidget):
         Qt parent widget.
     """
 
-    step_changed = Signal(int)  # emitted with the new step index
+    step_changed = Signal(int)       # emitted with the new step index
+    capture_requested = Signal()     # user asked to capture the restoration baseline
 
     def __init__(self, app_state, parent=None) -> None:
         super().__init__(parent)
@@ -275,6 +276,13 @@ class RestorationPanel(QWidget):
             btn.setFixedSize(28, 24)
             toolbar.addWidget(btn)
         toolbar.addStretch()
+        # Deliberate baseline capture (never automatic) — feeds the ghost overlay
+        # and Balance Check comparison.
+        self._btn_capture = QPushButton("Capture baseline")
+        self._btn_capture.setToolTip(
+            "Snapshot the current interpretation as the pre-deformation baseline "
+            "for restoration (ghost overlay + Balance Check comparison).")
+        toolbar.addWidget(self._btn_capture)
         layout.addLayout(toolbar)
 
         # Event table
@@ -296,6 +304,7 @@ class RestorationPanel(QWidget):
         self._btn_remove.clicked.connect(self._remove_event)
         self._btn_up.clicked.connect(self._move_up)
         self._btn_down.clicked.connect(self._move_down)
+        self._btn_capture.clicked.connect(self.capture_requested)
         self._table.doubleClicked.connect(self._edit_event)
 
         self.rebuild()
