@@ -235,7 +235,9 @@ CREATE TABLE IF NOT EXISTS reference_lines (
     visible      INTEGER DEFAULT 1,
     -- map-space source of truth for vertical lines (recompute value on section change)
     map_x        REAL,
-    map_y        REAL
+    map_y        REAL,
+    uuid         TEXT,
+    restoration_role TEXT
 );
 
 CREATE TABLE IF NOT EXISTS aoi (
@@ -483,9 +485,12 @@ class ProjectDatabase:
             # constraint, so existing DBs get a plain TEXT column; uniqueness is
             # guaranteed in practice by UUID4 generation (and by the CREATE TABLE
             # constraint on fresh DBs).
-            ("horizons",  "uuid", "TEXT"),
-            ("faults",    "uuid", "TEXT"),
-            ("polygons",  "uuid", "TEXT"),
+            ("horizons",       "uuid", "TEXT"),
+            ("faults",         "uuid", "TEXT"),
+            ("polygons",       "uuid", "TEXT"),
+            # Reference-line restoration role (Step 5): stable identity + pin/datum.
+            ("reference_lines", "uuid", "TEXT"),
+            ("reference_lines", "restoration_role", "TEXT"),
             # Slice generalization: observations carry an explicit slice kind +
             # ref. DEFAULT 'section' makes every existing row a section
             # observation automatically (fully backward compatible).
@@ -1248,15 +1253,18 @@ class ProjectDatabase:
         self.conn.execute("DELETE FROM reference_lines")
         for rl in reference_lines:
             self.conn.execute(
-                """INSERT INTO reference_lines(name, line_type, value, color, visible, map_x, map_y)
-                   VALUES(?,?,?,?,?,?,?)""",
+                """INSERT INTO reference_lines(name, line_type, value, color, visible,
+                   map_x, map_y, uuid, restoration_role)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
                 (getattr(rl, "name", ""),
                  getattr(rl, "kind", "horizontal"),
                  getattr(rl, "value", 0.0),
                  getattr(rl, "color", "#999999"),
                  int(getattr(rl, "visible", True)),
                  getattr(rl, "map_x", None),
-                 getattr(rl, "map_y", None))
+                 getattr(rl, "map_y", None),
+                 getattr(rl, "uuid", None),
+                 getattr(rl, "restoration_role", None))
             )
         self.conn.commit()
 

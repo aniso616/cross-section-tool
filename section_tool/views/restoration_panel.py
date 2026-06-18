@@ -73,7 +73,8 @@ class _EventEditDialog(QDialog):
     }
 
     def __init__(self, parent=None, event=None, *, removable=None,
-                 already_removed=None, faults=None) -> None:
+                 already_removed=None, faults=None, pin_lines=None,
+                 datum_lines=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Edit Restoration Event")
         self.setMinimumWidth(360)
@@ -157,6 +158,22 @@ class _EventEditDialog(QDialog):
                            ("Shear angle (from vertical):", "shear_angle"),
                            ("Slip:", "slip"), ("Fault:", "fault_uuid")):
             self._algo_form.addRow(label, self._param_fields[key])
+
+        # Pick pin/datum from a named reference line (rename-safe by UUID); the
+        # raw number above stays the fallback when "(numeric)" is selected.
+        self._pin_line = QComboBox()
+        self._pin_line.addItem("(numeric)", None)
+        for uid, name in (pin_lines or []):
+            self._pin_line.addItem(name or "(unnamed)", uid)
+        self._datum_line = QComboBox()
+        self._datum_line.addItem("(numeric)", None)
+        for uid, name in (datum_lines or []):
+            self._datum_line.addItem(name or "(unnamed)", uid)
+        # keyed by the numeric param they override, for show/hide
+        self._line_fields = {"pin_x": self._pin_line, "datum_y": self._datum_line}
+        self._algo_form.addRow("Pin line:", self._pin_line)
+        self._algo_form.addRow("Datum line:", self._datum_line)
+
         self._algo.currentIndexChanged.connect(self._update_param_visibility)
         layout.addWidget(algo_grp)
 
@@ -187,12 +204,18 @@ class _EventEditDialog(QDialog):
                 fi = self._p_fault.findData(fu)
                 if fi >= 0:
                     self._p_fault.setCurrentIndex(fi)
+            for combo, line_id in ((self._pin_line, getattr(event, "pin_line_id", None)),
+                                   (self._datum_line, getattr(event, "datum_line_id", None))):
+                if line_id is not None:
+                    li = combo.findData(line_id)
+                    if li >= 0:
+                        combo.setCurrentIndex(li)
         self._update_param_visibility()
 
     def _update_param_visibility(self) -> None:
-        """Show only the params the selected algorithm uses."""
+        """Show only the params the selected algorithm uses (incl. pin/datum line combos)."""
         active = set(self._ALGO_PARAMS.get(self._algo.currentData(), ()))
-        for key, widget in self._param_fields.items():
+        for key, widget in list(self._param_fields.items()) + list(self._line_fields.items()):
             vis = key in active
             widget.setVisible(vis)
             lbl = self._algo_form.labelForField(widget)
@@ -216,6 +239,7 @@ class _EventEditDialog(QDialog):
             "fault_uuid": self._p_fault.currentData,
         }
         params = {k: getters[k]() for k in self._ALGO_PARAMS.get(algo, ())}
+        active = self._ALGO_PARAMS.get(algo, ())
         return {
             "name": self._name.text().strip() or "Event",
             "age_ma": age if age > 0.0 else None,
@@ -223,6 +247,8 @@ class _EventEditDialog(QDialog):
             "remove_element_ids": ids,
             "algorithm": algo,
             "params": params,
+            "pin_line_id": self._pin_line.currentData() if "pin_x" in active else None,
+            "datum_line_id": self._datum_line.currentData() if "datum_y" in active else None,
         }
 
 
@@ -412,14 +438,27 @@ class RestorationPanel(QWidget):
     def _fault_choices(self, removable) -> "list[tuple[str, str]]":
         return [(uid, name) for uid, name, typ in removable if typ == "Fault"]
 
+    def _pin_datum_lines(self) -> "tuple[list, list]":
+        """(pin_lines, datum_lines) as (uuid, name) from the project's reference lines."""
+        pins, datums = [], []
+        for rl in getattr(self._state.project, "reference_lines", []):
+            role = getattr(rl, "restoration_role", None)
+            if role == "pin":
+                pins.append((rl.uuid, rl.name))
+            elif role == "datum":
+                datums.append((rl.uuid, rl.name))
+        return pins, datums
+
     def _add_event(self) -> None:
         from section_tool.core.restoration import RestorationEvent
         seq = self._sequence
         removable = self._removable_elements()
+        pins, datums = self._pin_datum_lines()
         # A new event is appended last, so every existing event is "earlier".
         dlg = _EventEditDialog(self, removable=removable,
                                already_removed=self._already_removed_before(len(seq.events)),
-                               faults=self._fault_choices(removable))
+                               faults=self._fault_choices(removable),
+                               pin_lines=pins, datum_lines=datums)
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values
@@ -432,6 +471,8 @@ class RestorationPanel(QWidget):
             remove_element_ids=vals["remove_element_ids"],
             algorithm=vals["algorithm"],
             params=vals["params"],
+            pin_line_id=vals["pin_line_id"],
+            datum_line_id=vals["datum_line_id"],
         )
         seq.add_event(ev)
         self._state.set_restoration_sequence(seq)
@@ -484,9 +525,11 @@ class RestorationPanel(QWidget):
         seq = self._sequence
         ev = seq.events[idx]
         removable = self._removable_elements()
+        pins, datums = self._pin_datum_lines()
         dlg = _EventEditDialog(self, event=ev, removable=removable,
                                already_removed=self._already_removed_before(idx),
-                               faults=self._fault_choices(removable))
+                               faults=self._fault_choices(removable),
+                               pin_lines=pins, datum_lines=datums)
         if dlg.exec() != QDialog.Accepted:
             return
         vals = dlg.values
@@ -496,6 +539,8 @@ class RestorationPanel(QWidget):
         ev.remove_element_ids = vals["remove_element_ids"]
         ev.algorithm = vals["algorithm"]
         ev.params = vals["params"]
+        ev.pin_line_id = vals["pin_line_id"]
+        ev.datum_line_id = vals["datum_line_id"]
         self._state.set_restoration_sequence(seq)
         self.rebuild()
         self._table.selectRow(idx)

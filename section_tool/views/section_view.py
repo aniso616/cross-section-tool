@@ -1673,13 +1673,25 @@ class SectionView(QWidget):
         t = get_theme()
         rl_s = t.reference_line
         _ls = (0, list(rl_s.dash)) if rl_s.dash else "-"
-        kw = dict(color=rl_s.color, linewidth=rl_s.width, linestyle=_ls,
-                  alpha=rl_s.alpha, zorder=1)
+        base_kw = dict(color=rl_s.color, linewidth=rl_s.width, linestyle=_ls,
+                       alpha=rl_s.alpha, zorder=1)
         for rl in self._state.project.reference_lines:
             if not rl.visible:
                 continue
             label = rl.name or ""
             lc = t.axis_tick
+            # Restoration pin/datum: distinct weight + dash and a role prefix on the
+            # label (line-style grammar, not a colour hack).
+            role = getattr(rl, "restoration_role", None)
+            if role in ("pin", "datum"):
+                kw = dict(base_kw)
+                kw["linewidth"] = rl_s.width * 2.0
+                kw["linestyle"] = (0, (6, 2)) if role == "pin" else (0, (1, 2))
+                kw["alpha"] = min(1.0, rl_s.alpha + 0.25)
+                prefix = "Pin" if role == "pin" else "Datum"
+                label = f"{prefix}: {label}" if label else prefix
+            else:
+                kw = base_kw
             if rl.kind == "horizontal":
                 self._overlay_artists.append(self._ax.axhline(rl.value, **kw))
                 if label:
@@ -2048,7 +2060,11 @@ class SectionView(QWidget):
             return
         from section_tool.core import kinematics as K
         try:
-            out = K.restore_snapshot(snap, event, section_name=section.name)
+            # Resolve pin/datum from the LIVE reference lines, so moving a pin
+            # line updates the ghost immediately.
+            out = K.restore_snapshot(
+                snap, event, section_name=section.name,
+                reference_lines=self._state.project.reference_lines)
         except Exception:
             return
         for pick in list(out.horizons) + list(out.faults):

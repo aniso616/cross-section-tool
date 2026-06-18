@@ -62,6 +62,12 @@ class RestorationEvent:
     # fault_uuid). "none" = a remove-only event (no deformation).
     algorithm: str = "none"
     params: dict = field(default_factory=dict)
+    # Optional pin / datum sourced from a named ReferenceLine (by UUID, rename-safe).
+    # When set, the engine resolves pin_x / datum_y from the line at deform time, so
+    # moving the line updates every event that references it. ``None`` → use the
+    # numeric ``params`` (pin_x / datum_y) fallback.
+    pin_line_id: str | None = None
+    datum_line_id: str | None = None
 
     # ------------------------------------------------------------------
 
@@ -76,6 +82,8 @@ class RestorationEvent:
             "decompact_params": {k: dict(v) for k, v in self.decompact_params.items()},
             "algorithm":            self.algorithm,
             "params":               dict(self.params),
+            "pin_line_id":          self.pin_line_id,
+            "datum_line_id":        self.datum_line_id,
         }
 
     @classmethod
@@ -95,6 +103,8 @@ class RestorationEvent:
             },
             algorithm=str(d.get("algorithm", "none")),
             params=dict(d.get("params", {})),
+            pin_line_id=d.get("pin_line_id"),
+            datum_line_id=d.get("datum_line_id"),
         )
 
 

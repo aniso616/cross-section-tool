@@ -747,6 +747,51 @@ class TestRestorationCapture:
         assert ghost
 
 
+class TestPinDatumReferenceLines:
+    """Real-MainWindow: pin/datum reference lines render with a distinct role label,
+    and the panel offers them when editing a pin/datum algorithm."""
+
+    def test_pin_line_renders_with_role_label(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.core.reference_line import ReferenceLine
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        state.project.reference_lines.append(
+            ReferenceLine("vertical", value=400.0, name="P1", restoration_role="pin",
+                          map_x=400.0, map_y=0.0))
+        win._section_view.render()
+        texts = [t.get_text() for t in win._section_view._ax.texts]
+        assert any("Pin" in t for t in texts)            # role-labelled, not just the name
+
+    def test_panel_edit_offers_pin_line_and_writes_id(self, win, state, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        from section_tool.core.section import Section
+        from section_tool.core.reference_line import ReferenceLine
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.views.restoration_panel import _EventEditDialog
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        pin = ReferenceLine("vertical", value=300.0, name="Pin", restoration_role="pin")
+        state.project.reference_lines.append(pin)
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "e", algorithm="flexural_slip"))
+
+        panel = win._restoration_widget
+        panel.rebuild()                                  # reflect the just-added event
+        panel._table.selectRow(0)
+
+        def fake_exec(self):
+            self._algo.setCurrentIndex(self._algo.findData("flexural_slip"))
+            self._pin_line.setCurrentIndex(self._pin_line.findData(pin.uuid))
+            return QDialog.Accepted
+        monkeypatch.setattr(_EventEditDialog, "exec", fake_exec)
+
+        panel._edit_event()
+        assert state.restoration_sequence.events[0].pin_line_id == pin.uuid
+
+
 class TestRestorationGhostOverlay:
     """Real-MainWindow: stepping an event with a kinematic algorithm draws the
     deformed geometry as a ghost overlay, the live interpretation untouched."""

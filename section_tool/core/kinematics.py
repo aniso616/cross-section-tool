@@ -168,6 +168,35 @@ def _deform_pick_inplace(pick, algorithm, params, section_name, fault_trace) -> 
     _reorder_point_arrays(pick)
 
 
+def _ref_line_value(reference_lines, line_id):
+    for rl in reference_lines or []:
+        if getattr(rl, "uuid", None) == line_id:
+            return float(getattr(rl, "value", 0.0))
+    return None
+
+
+def resolve_event_params(event, reference_lines) -> dict:
+    """Effective params for *event*, resolving pin/datum from referenced lines.
+
+    ``pin_line_id`` / ``datum_line_id`` (UUIDs) override the numeric ``pin_x`` /
+    ``datum_y`` fallback when the line is found in *reference_lines* — so moving a
+    pin/datum line updates every event that references it.  Numeric params stay the
+    fallback for events without a line reference.
+    """
+    params = dict(getattr(event, "params", {}) or {})
+    pid = getattr(event, "pin_line_id", None)
+    if pid:
+        v = _ref_line_value(reference_lines, pid)
+        if v is not None:
+            params["pin_x"] = v
+    did = getattr(event, "datum_line_id", None)
+    if did:
+        v = _ref_line_value(reference_lines, did)
+        if v is not None:
+            params["datum_y"] = v
+    return params
+
+
 def _fault_trace(snapshot, fault_uuid, section_name):
     for fp in snapshot.faults:
         if getattr(fp, "uuid", None) == fault_uuid:
@@ -176,19 +205,23 @@ def _fault_trace(snapshot, fault_uuid, section_name):
     return None
 
 
-def restore_snapshot(snapshot, event, *, section_name: str):
+def restore_snapshot(snapshot, event, *, section_name: str, reference_lines=None):
     """Apply *event*'s algorithm to *snapshot*, returning a NEW deformed snapshot.
 
     The input snapshot (and therefore the original interpretation) is never
     mutated.  Every horizon / fault / polygon node on *section_name* is deformed by
-    ``event.algorithm`` + ``event.params``; the result carries ``restoration_frame
-    = True`` and depth-native (anchor-cleared) picks — see
-    :func:`_deform_pick_inplace`.  Pin/datum come from ``event.params``
-    (``pin_x`` / ``datum_y``); fault-parallel flow reads ``params['fault_uuid']``.
+    ``event.algorithm`` + its (resolved) params; the result carries
+    ``restoration_frame = True`` and depth-native (anchor-cleared) picks — see
+    :func:`_deform_pick_inplace`.  Pin/datum come from the referenced ReferenceLine
+    (``pin_line_id`` / ``datum_line_id``) when set, else the numeric ``params``
+    fallback; *reference_lines* defaults to the snapshot's captured lines but a
+    caller can pass the LIVE lines so a moved pin updates the result immediately.
+    Fault-parallel flow reads ``params['fault_uuid']``.
     """
     algorithm = getattr(event, "algorithm", "none")
-    params = dict(getattr(event, "params", {}) or {})
     out = copy.deepcopy(snapshot)
+    ref_lines = reference_lines if reference_lines is not None else out.reference_lines
+    params = resolve_event_params(event, ref_lines)
     if algorithm in ("none", None):
         out.restoration_frame = True
         return out

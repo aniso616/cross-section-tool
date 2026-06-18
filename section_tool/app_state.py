@@ -703,6 +703,8 @@ class AppState(QObject):
                 visible=bool(rrow.get("visible", 1)),
                 map_x=rrow.get("map_x"),
                 map_y=rrow.get("map_y"),
+                uuid=rrow.get("uuid"),
+                restoration_role=rrow.get("restoration_role"),
             )
             proj.reference_lines.append(rl)
 

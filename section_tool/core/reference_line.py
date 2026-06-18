@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid as _uuid
 from typing import Literal
 
 
@@ -24,12 +25,21 @@ class ReferenceLine:
         anchor_y: float = 0.0,
         map_x: float | None = None,
         map_y: float | None = None,
+        uuid: str | None = None,
+        restoration_role: str | None = None,
     ) -> None:
         self.kind: Literal["horizontal", "vertical", "angled"] = kind
         self.value: float = float(value)
         self.name = name
         self.visible = bool(visible)
         self.color = color
+        # Stable identity (UUID4) — rename-safe link for the restoration role,
+        # mirroring HorizonPick / SectionPolygon. Generated if not restored.
+        self.uuid: str = uuid if uuid else str(_uuid.uuid4())
+        # Restoration role: None (plain construction line) | "pin" | "datum".
+        # A 'pin' (vertical line) fixes an x; a 'datum' (horizontal line) fixes a
+        # depth — events reference them by UUID so a rename can't break the link.
+        self.restoration_role: str | None = restoration_role
         # angled-only fields
         self.angle_deg: float = float(angle_deg)
         self.anchor_x: float = float(anchor_x)
