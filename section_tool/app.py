@@ -1435,7 +1435,7 @@ class MainWindow(QMainWindow):
         self._section_view.render()
 
     def _on_topology_audit(self) -> None:
-        """Tools → Topology Audit: check interpretation hygiene for the active section."""
+        """Model ▸ Topology Audit: check interpretation hygiene for the active section."""
         from section_tool.views.topology_audit_dialog import TopologyAuditDialog
         dlg = TopologyAuditDialog(self._state, parent=self)
         dlg.exec()
@@ -1488,7 +1488,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_balance_check(self) -> None:
-        """Tools → Check Section Balance: open the balance check dialog."""
+        """Model ▸ Check Section Balance: open the balance check dialog."""
         from section_tool.views.balance_check_dialog import BalanceCheckDialog
         section = self._state.active_section
         if section is None:
@@ -1504,7 +1504,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_restoration_stack(self) -> None:
-        """Tools → Restoration Stack: show the full restoration sequence timeline."""
+        """Model ▸ Restoration Stack: show the full restoration sequence timeline."""
         from section_tool.views.restoration_stack_dialog import RestorationStackDialog
         dlg = RestorationStackDialog(self._state, parent=self)
         dlg.exec()

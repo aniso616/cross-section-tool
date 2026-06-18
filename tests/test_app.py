@@ -747,6 +747,68 @@ class TestRestorationCapture:
         assert ghost
 
 
+class TestRestorationWorkflowEndToEnd:
+    """Real-MainWindow: interpretation → pin/datum → event(algorithm) → capture →
+    step → ghost overlay → Balance Check measures deformed-vs-RESTORED."""
+
+    def test_full_workflow(self, win, state, monkeypatch):
+        import numpy as np
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.reference_line import ReferenceLine
+        from section_tool.core.construction import KinkBandRule
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.views import balance_check_dialog as bcd
+
+        state.add_section(Section([(0.0, 0.0), (1000.0, 0.0)], name="L1",
+                                  crs_epsg=32631))
+        state.set_active_section(state.project.sections[0])
+        hp = HorizonPick([0.0, 1000.0], [100.0, 200.0], name="Top",
+                         section_names=["L1", "L1"])
+        hp.construction_rule = KinkBandRule(axial_surface_dip_deg=30.0)
+        state.project.horizon_picks.append(hp)
+        pin = ReferenceLine("vertical", value=0.0, name="Pin", restoration_role="pin")
+        datum = ReferenceLine("horizontal", value=0.0, name="Datum",
+                              restoration_role="datum")
+        state.project.reference_lines.extend([pin, datum])
+
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "Unfold", algorithm="flexural_slip",
+                                       pin_line_id=pin.uuid, datum_line_id=datum.uuid))
+
+        win._on_capture_restoration_baseline()            # deliberate baseline
+        assert state.restoration_snapshot is not None
+        seq.current_step = 1
+        state.set_restoration_sequence(seq)
+
+        # ghost overlay: the horizon unfolds flat to the datum (y≈0), arc length
+        # carrying x past the section end (~1005 m) — distinct from sea level.
+        win._section_view.render()
+        ghost = any(
+            len(yd := np.asarray(ln.get_ydata(), float)) >= 2
+            and np.allclose(yd, 0.0, atol=1.0)
+            and float(np.asarray(ln.get_xdata(), float).max()) > 1001.0
+            for ln in win._section_view._ax.get_lines())
+        assert ghost
+
+        # Balance Check compares deformed vs RESTORED; flexural slip conserves bed
+        # length → the line-length discrepancy is ~0 (a balanced restoration).
+        captured = {}
+
+        def fake_exec(self):
+            captured["rows"] = list(self._cmp_rows)
+            return 0
+        monkeypatch.setattr(bcd.BalanceCheckDialog, "exec", fake_exec)
+        win._on_balance_check()
+        lines = [r for r, _ in captured["rows"] if hasattr(r, "restored_length")]
+        assert lines and lines[0].discrepancy < 0.01     # length conserved
+
+        # save/reopen fidelity at the data layer (sequence is persisted JSON)
+        from section_tool.core.restoration import RestorationSequence
+        ev2 = RestorationSequence.from_json(seq.to_json()).events[0]
+        assert ev2.algorithm == "flexural_slip" and ev2.pin_line_id == pin.uuid
+
+
 class TestConstructionRuleProposals:
     """Real-MainWindow: editing an event whose element carries a construction rule
     pre-populates the restoration algorithm from restore_by_construction_rule."""

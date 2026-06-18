@@ -151,6 +151,23 @@ def test_balanced_section_restores_within_tolerance():
     assert bal[0].discrepancy < 1e-6                           # length conserved
 
 
+def test_restored_geometry_carries_provenance():
+    state, hp, poly = _anchored_state()
+    snap = snapshot_interpretation(state.active_section, state.project)
+    ev = RestorationEvent(7, "Base Cretaceous", algorithm="rigid_translation",
+                          params={"dx": 100.0, "dy": 0.0})
+    out = K.restore_snapshot(snap, ev, section_name="L1")
+    prov = out.horizons[0].restoration_provenance
+    assert prov["kind"] == "restored"
+    assert prov["source_uuid"] == hp.uuid                  # traces to the original
+    assert prov["algorithm"] == "rigid_translation"
+    assert prov["params"] == {"dx": 100.0, "dy": 0.0}
+    assert prov["event_id"] == 7 and prov["event_name"] == "Base Cretaceous"
+    assert out.polygons[0].restoration_provenance["algorithm"] == "rigid_translation"
+    # the original is never stamped (no restoration_provenance leaks onto it)
+    assert not hasattr(hp, "restoration_provenance")
+
+
 def test_event_algorithm_params_round_trip():
     from section_tool.core.restoration import RestorationSequence
     seq = RestorationSequence(events=[_event("simple_shear", shear_angle=30.0,

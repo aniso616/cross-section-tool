@@ -10,6 +10,39 @@ Evidence is cited as `path:line`. Verified by reading the repo at the current
 
 ---
 
+## BUILD STATUS — restoration arc COMPLETE (Steps 1–8)
+
+The original inventory below described restoration as "a metadata + bookkeeping
+shell with no geometry engine." That has been built out end to end. What exists now:
+
+| Step | Built | Was (original stub) |
+|---|---|---|
+| 1. UUID-keyed removal | `RestorationEvent.remove_element_ids` (UUIDs) + resolver + name→UUID migration; `SectionPolygon`/`ReferenceLine` gained UUIDs | removal keyed by **name** (rename-fragile) |
+| 2. Editable event content | panel event editor sets which elements an event removes (UUIDs), live-resolved | editor set only name/age/description |
+| 3. Interpretation snapshot | `core/restoration_snapshot.py` — faithful, non-destructive, preserved-UUID isolated bundle | `Section.snapshot()` round-tripped only the section line |
+| 4. Balance comparison | `core/balance.py` (Dahlstrom area/line-length/detachment) + deformed-vs-**restored** dialog | read-only single-state measurements |
+| 5. Pin/datum role | `ReferenceLine.restoration_role` + UUID; events reference pin/datum lines, resolved live | reference-line primitive only, no role |
+| 6. Kinematic engine | `core/kinematics.py` — rigid / flexural-slip / simple-shear / fault-parallel-flow; ghost overlay; **anchors-under-restoration** | no engine — hide-by-name only |
+| 7. Construction-rule reversal | `restore_by_construction_rule` proposes the algorithm from the construction kind (defaults the user confirms) | construction rules were write-only metadata |
+| 8. Wire + provenance | capture-baseline action; balance uses the restored state; restored geometry carries `restoration_provenance`; Restoration Stack shows per-event algorithm/assumptions; docstring sweep | — |
+
+**Anchors-under-restoration seam (the one genuinely new question).** A restored copy
+is a pre-deformation frame, NOT tied to the present seismic. `restore_snapshot`
+clears each restored pick's `twt_anchor` and drops `seismic_tied` (so `tie_kind`
+reads `depth_native`); the **original's anchors are never touched** (deep-copy +
+in-place deform on the copy); the snapshot carries `restoration_frame=True`.
+
+**Provenance.** Every restored entity carries `restoration_provenance = {kind:
+"restored", source_uuid, algorithm, params, event_id, event_name}` — display-only
+(the ghost is view-only, never a persisted entity).
+
+**Persistence.** Events (algorithm/params/pin_line_id/datum_line_id), the
+RestorationSequence, and pin/datum reference lines (role + UUID) all survive a
+project reopen. The snapshot itself is in-memory by design (Step 3) — recomputed
+from the persisted base interpretation on the next Capture.
+
+---
+
 ## Construction-rule → restoration-algorithm mapping (Step 7)
 
 `restore_by_construction_rule(entity, event)` (`core/kinematics.py`) reads

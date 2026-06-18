@@ -262,6 +262,23 @@ def resolve_event_params(event, reference_lines) -> dict:
     return params
 
 
+def _stamp_provenance(entity, event, algorithm, params) -> None:
+    """Record how *entity* was restored, as auditable provenance-as-data.
+
+    ``{kind: "restored", source_uuid, algorithm, params, event_id, event_name}`` —
+    so restored geometry can be traced to its origin event + algorithm. Display-only
+    (the ghost is view-only, never a persisted entity).
+    """
+    entity.restoration_provenance = {
+        "kind": "restored",
+        "source_uuid": getattr(entity, "uuid", None),
+        "algorithm": algorithm,
+        "params": dict(params or {}),
+        "event_id": getattr(event, "event_id", None),
+        "event_name": getattr(event, "name", ""),
+    }
+
+
 def _fault_trace(snapshot, fault_uuid, section_name):
     for fp in snapshot.faults:
         if getattr(fp, "uuid", None) == fault_uuid:
@@ -297,10 +314,12 @@ def restore_snapshot(snapshot, event, *, section_name: str, reference_lines=None
 
     for pick in list(out.horizons) + list(out.faults):
         _deform_pick_inplace(pick, algorithm, params, section_name, fault_trace)
+        _stamp_provenance(pick, event, algorithm, params)
     for poly in out.polygons:
         verts = apply_algorithm(algorithm, poly._vertices, params,
                                 fault_trace=fault_trace)
         poly._vertices[:] = verts
         poly.free_points = poly._vertices
+        _stamp_provenance(poly, event, algorithm, params)
     out.restoration_frame = True
     return out

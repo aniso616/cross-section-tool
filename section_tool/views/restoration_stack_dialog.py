@@ -1,6 +1,6 @@
 """Restoration stack dialog.
 
-Accessible via Tools → Restoration Stack. Shows all restoration steps
+Accessible via Model ▸ Restoration Stack. Shows all restoration steps
 in a timeline table: what is removed at each step and what is still
 present, giving a full-sequence audit view.
 """
@@ -50,6 +50,9 @@ class RestorationStackDialog(QDialog):
                 uid = getattr(obj, "uuid", None)
                 if uid:
                     id_to_name[uid] = nm or uid
+        line_names = {rl.uuid: (rl.name or "(unnamed)")
+                      for rl in getattr(proj, "reference_lines", [])
+                      if getattr(rl, "uuid", None)}
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -73,9 +76,10 @@ class RestorationStackDialog(QDialog):
             box_layout.addWidget(QLabel("No restoration events defined.\n"
                                         "Use the Restoration Panel (Ctrl+6) to add events."))
         else:
-            table = QTableWidget(n_events + 1, 5)
+            table = QTableWidget(n_events + 1, 6)
             table.setHorizontalHeaderLabels(
-                ["Step", "Event Name", "Age (Ma)", "Removed at this step", "Cumulative removed"])
+                ["Step", "Event Name", "Age (Ma)", "Removed at this step",
+                 "Cumulative removed", "Algorithm / assumptions"])
             table.horizontalHeader().setStretchLastSection(True)
             table.verticalHeader().setVisible(False)
             table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -90,6 +94,7 @@ class RestorationStackDialog(QDialog):
             table.setItem(0, 2, _cell("—", Qt.AlignCenter | Qt.AlignVCenter))
             table.setItem(0, 3, _cell("—"))
             table.setItem(0, 4, _cell("0 / " + str(len(all_names))))
+            table.setItem(0, 5, _cell("— (present day)"))
             if current == 0:
                 _highlight_row(table, 0)
 
@@ -108,6 +113,7 @@ class RestorationStackDialog(QDialog):
                 table.setItem(row_i, 2, _cell(age_str, Qt.AlignCenter | Qt.AlignVCenter))
                 table.setItem(row_i, 3, _cell(removed_str))
                 table.setItem(row_i, 4, _cell(cum_str, Qt.AlignCenter | Qt.AlignVCenter))
+                table.setItem(row_i, 5, _cell(_algo_summary(ev, line_names)))
                 if current == row_i:
                     _highlight_row(table, row_i)
 
@@ -121,6 +127,29 @@ class RestorationStackDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+def _algo_summary(ev, line_names: dict) -> str:
+    """Compact, auditable summary of an event's restoration assumptions:
+    algorithm + pin/datum (line name or numeric) + key params."""
+    from section_tool.core.kinematics import ALGORITHM_LABELS
+    algo = getattr(ev, "algorithm", "none")
+    if algo in ("none", None):
+        return "— (remove only)"
+    parts = [ALGORITHM_LABELS.get(algo, algo)]
+    p = getattr(ev, "params", {}) or {}
+    if getattr(ev, "pin_line_id", None):
+        parts.append(f"pin: {line_names.get(ev.pin_line_id, 'line')}")
+    elif "pin_x" in p:
+        parts.append(f"pin x={p['pin_x']:g}")
+    if getattr(ev, "datum_line_id", None):
+        parts.append(f"datum: {line_names.get(ev.datum_line_id, 'line')}")
+    elif "datum_y" in p:
+        parts.append(f"datum={p['datum_y']:g}")
+    for k in ("dx", "dy", "shear_angle", "slip"):
+        if k in p:
+            parts.append(f"{k}={p[k]:g}")
+    return ", ".join(parts)
 
 
 def _cell(text: str, align: Qt.Alignment = Qt.AlignLeft | Qt.AlignVCenter) -> QTableWidgetItem:

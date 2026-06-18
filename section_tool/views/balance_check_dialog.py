@@ -1,6 +1,6 @@
 """Balance check dialog.
 
-Accessible via Tools → Check Section Balance. Reports line lengths of
+Accessible via Model ▸ Check Section Balance. Reports line lengths of
 horizon picks and areas of section polygons for the active section.
 """
 from __future__ import annotations
@@ -151,8 +151,25 @@ class BalanceCheckDialog(QDialog):
             d, z = pick.picks_for_section(sec)
             return np.column_stack([d, z]) if len(d) >= 2 else None
 
-        # Live (deformed) beds + polygons, keyed by UUID; snapshot (restored) too.
-        # Preserved-UUID snapshots (Step 3) pair restored↔deformed by equality.
+        # Compare the LIVE (deformed) section against the RESTORED state — apply the
+        # current restoration step's algorithm to the snapshot. With no algorithm
+        # step active, compare against the raw captured baseline (drift since
+        # capture). Dahlstrom: areas/lengths conserve between deformed and restored.
+        restored = snapshot
+        seq = getattr(app_state, "restoration_sequence", None)
+        if seq is not None and seq.events and seq.current_step >= 1:
+            event = seq.events[seq.current_step - 1]
+            if getattr(event, "algorithm", "none") not in ("none", None):
+                from section_tool.core import kinematics as _K
+                try:
+                    restored = _K.restore_snapshot(
+                        snapshot, event, section_name=sec,
+                        reference_lines=proj.reference_lines)
+                except Exception:
+                    restored = snapshot
+
+        # Beds + polygons keyed by UUID; preserved-UUID snapshots (Step 3) pair
+        # restored↔deformed by equality.
         def_lines, names = {}, {}
         for pick in list(proj.horizon_picks) + list(proj.fault_picks):
             pts = line_pts(pick)
@@ -160,14 +177,14 @@ class BalanceCheckDialog(QDialog):
                 def_lines[pick.uuid] = pts
                 names[pick.uuid] = pick.name or "(unnamed)"
         res_lines = {}
-        for pick in list(snapshot.horizons) + list(snapshot.faults):
+        for pick in list(restored.horizons) + list(restored.faults):
             pts = line_pts(pick)
             if pts is not None:
                 res_lines[pick.uuid] = pts
 
         def_polys = {p.uuid: p.vertices for p in proj.polygons
                      if getattr(p, "section_name", "") in ("", sec)}
-        res_polys = {p.uuid: p.vertices for p in snapshot.polygons}
+        res_polys = {p.uuid: p.vertices for p in restored.polygons}
         poly_names = {p.uuid: (p.name or "(unnamed)") for p in proj.polygons}
 
         line_results = B.line_length_balance(def_lines, res_lines, names)
