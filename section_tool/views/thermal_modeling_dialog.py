@@ -82,7 +82,8 @@ class ThermalModelingDialog(QDialog):
         mode_box = QGroupBox("Mode")
         mode_form = QFormLayout(mode_box)
         self._mode_combo = QComboBox()
-        self._mode_combo.addItems(["Steady-state", "Transient", "Inverse (MC)"])
+        self._mode_combo.addItems(["Steady-state", "Transient", "Inverse (MC)",
+                                   "Forward T–t path"])
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_form.addRow("Model:", self._mode_combo)
         ctrl_layout.addWidget(mode_box)
@@ -93,7 +94,10 @@ class ThermalModelingDialog(QDialog):
 
         self._surf_temp = QDoubleSpinBox()
         self._surf_temp.setRange(-20.0, 50.0)
-        self._surf_temp.setValue(10.0)
+        # Default from setting: ~4 °C seafloor (marine) vs ~10 °C continental — never
+        # hardcoded; the user can override. Detection is best-effort (the marine/
+        # onshore setting lives in the depth-stretch knobs).
+        self._surf_temp.setValue(4.0 if self._detect_marine() else 10.0)
         self._surf_temp.setSuffix(" °C")
         param_form.addRow("Surface T:", self._surf_temp)
 
@@ -194,6 +198,60 @@ class ThermalModelingDialog(QDialog):
         from section_tool.views.measurements_dialog import MeasurementsDialog
         MeasurementsDialog(self._state, parent=self).exec()
 
+    def _detect_marine(self) -> bool:
+        """Best-effort marine detection for the surface-temperature default."""
+        try:
+            if str(self._state.get_meta("setting", "")).lower() == "marine":
+                return True
+        except Exception:
+            pass
+        vm = getattr(self._state.project, "velocity_model", None)
+        cons = getattr(vm, "construction", {}) or {}
+        params = cons.get("params", {}) if isinstance(cons, dict) else {}
+        return str(params.get("setting", "")).lower() == "marine"
+
+    def _sample_measurements(self) -> list:
+        """Measurements on the well nearest the section position (sample point)."""
+        layers_well = self._nearest_well()
+        return list(getattr(layers_well, "measurements", [])) if layers_well else []
+
+    def _run_forward(self) -> None:
+        """Forward T–t path: run the real solver on the real burial history and plot
+        the sample point's temperature history (°C) vs time (Ma)."""
+        from section_tool.core.thermal import forward_temperature_history
+        burial = self._current_burial_history()
+        if burial is None or len(burial.points) < 2:
+            QMessageBox.information(
+                self, "Burial history",
+                "Define a burial history first (Burial history…).")
+            return
+        res = forward_temperature_history(
+            burial,
+            basal_heat_flow_mW=self._heat_flow.value(),
+            conductivity=self._conductivity.value(),
+            surface_temp_C=self._surf_temp.value())
+
+        self._ax.clear()
+        # Present at LEFT, past at RIGHT (geological convention); temperature
+        # increasing DOWNWARD (burial/cooling convention — cooling paths rise).
+        self._ax.plot(res.ages_ma, res.temps_C, "-o", color="#cc3333", lw=2,
+                      label="T–t path (sample point)")
+        for m in self._sample_measurements():
+            if m.measurement_type in ("bht", "dst_temp"):
+                self._ax.errorbar([0.0], [m.value], yerr=[m.uncertainty or 0.0],
+                                  fmt="s", color="#3366cc", capsize=3, zorder=5,
+                                  label="BHT / DST (°C)")
+        self._ax.set_xlabel("Time (Ma) — present at left")
+        self._ax.set_ylabel("Temperature (°C)")
+        self._ax.invert_yaxis()
+        self._ax.set_title(f"Forward T–t — gradient {res.gradient_C_per_km:.0f} °C/km, "
+                           f"surface {res.surface_temp_C:.0f} °C")
+        handles, labels = self._ax.get_legend_handles_labels()
+        if handles:
+            uniq = dict(zip(labels, handles))
+            self._ax.legend(uniq.values(), uniq.keys(), fontsize=7)
+        self._canvas.draw()
+
     def _populate_horizon_combo(self) -> None:
         self._horizon_combo.clear()
         sec = self._section.name
@@ -233,6 +291,8 @@ class ThermalModelingDialog(QDialog):
                 self._run_steady_state()
             elif mode == 1:
                 self._run_transient()
+            elif mode == 3:
+                self._run_forward()
             else:
                 self._run_inverse()
         except Exception as exc:
@@ -364,24 +424,26 @@ class ThermalModelingDialog(QDialog):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _nearest_well(self):
+        """The well nearest the section position (sample point), or None."""
+        dist = self._dist_spin.value()
+        try:
+            mx, my = self._section.section_to_map(dist)
+        except Exception:
+            return None
+        best_well, best_d = None, float("inf")
+        for well in self._state.project.wells:
+            dd = ((well.x - mx) ** 2 + (well.y - my) ** 2) ** 0.5
+            if dd < best_d:
+                best_d, best_well = dd, well
+        return best_well
+
     def _build_layers(self) -> list[dict]:
         """Build a simple formation column from the nearest well to *dist_spin*."""
         from section_tool.core.thermal import effective_conductivity_column
 
-        dist = self._dist_spin.value()
-        project = self._state.project
         k = self._conductivity.value()
-
-        # Find nearest well
-        best_well = None
-        best_d = float("inf")
-        for well in project.wells:
-            dx = well.x - self._section.section_to_map(dist)[0]
-            dy = well.y - self._section.section_to_map(dist)[1]
-            dd = (dx ** 2 + dy ** 2) ** 0.5
-            if dd < best_d:
-                best_d = dd
-                best_well = well
+        best_well = self._nearest_well()
 
         layers: list[dict] = []
         if best_well and hasattr(best_well, "formation_tops"):

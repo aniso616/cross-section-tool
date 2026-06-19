@@ -17,7 +17,25 @@ zhe_age                        — zircon (U-Th)/He apparent age
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+
+# Honest display labels for the kinetic models. A label NEVER claims a model that
+# is not implemented; the *notes* disclaim the simplified proxies (the disclaimer
+# may name the real model it is NOT). Easy%Ro is benchmarked (Sweeney-Burnham 1990).
+KINETIC_MODEL_LABELS = {
+    "easy_ro": "Easy%Ro (Sweeney-Burnham 1990)",
+    "aft":     "AFT age (simplified, single-Arrhenius)",
+    "ahe":     "AHe age (simplified, single-domain)",
+    "zhe":     "ZHe age (simplified, single-domain)",
+}
+KINETIC_MODEL_NOTES = {
+    "easy_ro": "Benchmarked against Sweeney-Burnham (1990).",
+    "aft":     "Simplified proxy — full Ketcham 2007 annealing model not yet implemented.",
+    "ahe":     "Simplified proxy — RDAAM (Flowers 2009) not yet implemented.",
+    "zhe":     "Simplified proxy — ZRDAAM not yet implemented.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -368,13 +386,15 @@ def aft_age(
     thermal_history_C: np.ndarray,
     time_steps_ma: np.ndarray,
     initial_age_ma: float = 100.0,
-    kinetics: str = "Ketcham07",
+    kinetics: str = "arrhenius_simplified",
     composition: str = "Durango",
 ) -> float:
     """Compute apatite fission-track apparent age from a thermal history.
 
-    Uses a first-order Arrhenius annealing model calibrated to Durango
-    apatite (Tc ≈ 110 °C at 10 °C/Ma).
+    SIMPLIFIED model: a single first-order Arrhenius annealing law calibrated so
+    Tc ≈ 110 °C at 10 °C/Ma (Durango-like). This is NOT the full Ketcham (2007)
+    multi-kinetic, c-axis-projected annealing model; the *kinetics* / *composition*
+    arguments are placeholders for that future work.
 
     Parameters
     ----------
@@ -529,10 +549,11 @@ def ahe_age(
     radius_um: float = 60.0,
     ft_correction: bool = True,
 ) -> float:
-    """Apatite (U-Th)/He apparent age.
+    """Apatite (U-Th)/He apparent age — SIMPLIFIED single-domain diffusion.
 
-    Uses Farley (2000) diffusion parameters (D₀ = 50 cm²/s,
-    Ea = 138 kJ/mol; Tc ≈ 65–70 °C at 10 °C/Ma).
+    Single-domain spherical He loss (Tc ≈ 65–70 °C at 10 °C/Ma) with the apatite
+    D₀ = 50 cm²/s, Ea = 138 kJ/mol diffusion constants. This is NOT the full RDAAM
+    (Flowers 2009) radiation-damage model.
 
     Parameters
     ----------
@@ -562,10 +583,11 @@ def zhe_age(
     radius_um: float = 60.0,
     ft_correction: bool = False,
 ) -> float:
-    """Zircon (U-Th)/He apparent age.
+    """Zircon (U-Th)/He apparent age — SIMPLIFIED single-domain diffusion.
 
-    Uses Reiners et al. (2004) diffusion parameters (D₀ = 0.46 cm²/s,
-    Ea = 169 kJ/mol; Tc ≈ 180–200 °C).
+    Single-domain spherical He loss (Tc ≈ 180–200 °C) with the zircon
+    D₀ = 0.46 cm²/s, Ea = 169 kJ/mol diffusion constants. This is NOT the full
+    ZRDAAM radiation-damage model.
 
     Parameters
     ----------
@@ -587,3 +609,54 @@ def zhe_age(
         thermal_history_C, time_steps_ma,
         radius_um, _ZHE_D0, _ZHE_Ea, ft_correction,
     )
+
+
+# ---------------------------------------------------------------------------
+# Forward model: temperature history T(t) at a sample point
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ForwardResult:
+    """Forward thermal model output at the tracked sample point."""
+    ages_ma: np.ndarray              # oldest first (Ma)
+    temps_C: np.ndarray              # sample-point temperature (°C) — never K
+    gradient_C_per_km: float         # derived geothermal gradient (q / k)
+    surface_temp_C: float
+    source: str = ""                 # burial-history provenance, carried through
+
+
+def forward_temperature_history(
+    burial, *, basal_heat_flow_mW: float, conductivity: float,
+    surface_temp_C: float, heat_capacity: float = 2.5e6, n_nodes: int = 40,
+) -> ForwardResult:
+    """Temperature history T(t) at the tracked horizon over its burial history.
+
+    Wires real inputs — *burial* (a BurialHistory: ages Ma, depths m, oldest
+    first), basal heat flow (mW/m²) and conductivity (W/m·K) — to the sample-point
+    temperature through time.
+
+    Model: **quasi-static geotherm** — the sample tracks the steady-state geotherm
+    at its burial depth, ``T = surface + depth·(q/k)``. This is the standard
+    thermochronology forward T–t path and is exact for slow geological burial
+    (the transient lag is negligible at Peclet ≪ 1). The full transient column
+    evolution is exposed separately (the dialog's Transient mode via
+    :func:`transient_1d_heat`); it is not used for the absolute sample temperature
+    here because that solver's single-cell basal BC does not establish the deep
+    geotherm.
+
+    Unit boundary (the only place conversions happen): heat flow mW/m² → W/m²;
+    depth in m; ages in Ma; temperatures in **°C** in and out — K appears only
+    inside the kinetics (``+273.15``), never at the display boundary. The
+    geothermal gradient is **derived** (q / k), returned for display rather than
+    taken as a separate, redundant input.
+    """
+    ages = np.asarray(burial.ages_ma, dtype=float)        # oldest first
+    depths = np.asarray(burial.depths_m, dtype=float)
+    q = float(basal_heat_flow_mW) * 1e-3                   # mW/m² → W/m²
+    k = max(float(conductivity), 1e-6)
+    grad_C_per_m = q / k
+    temps_C = float(surface_temp_C) + depths * grad_C_per_m
+    return ForwardResult(ages_ma=ages, temps_C=temps_C,
+                         gradient_C_per_km=grad_C_per_m * 1000.0,
+                         surface_temp_C=float(surface_temp_C),
+                         source=getattr(burial, "source", ""))
