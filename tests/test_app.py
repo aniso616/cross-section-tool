@@ -910,6 +910,152 @@ class TestThermalBurialSeam:
         assert any(ln.get_linestyle() == "--" for ln in dlg._ax.get_lines())
 
 
+class TestThermalConductivityProfile:
+    """Conductivity is wired from formation picks + effective_conductivity_column,
+    not unconditionally from the single spinbox."""
+
+    def _dialog_with_formations(self, win, state, *, formations):
+        """Build a dialog with a well with formation tops + matching strat column."""
+        from section_tool.core.section import Section
+        from section_tool.core.wells import Well
+        from section_tool.core.formation import StratigraphicColumn
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+
+        strat = StratigraphicColumn()
+        for fm in formations:
+            strat.add_formation(fm)
+        state.project.strat_column = strat
+
+        well = Well("W1", 500.0, 0.0, td=4000.0)
+        # Build formation tops from the strat column entries + a sentinel
+        depth = 0.0
+        for fm in formations:
+            well.add_formation_top(fm.name, depth)
+            depth += 1000.0
+        well.add_formation_top("_base", depth)     # sentinel to close the last interval
+        state.add_well(well)
+
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        dlg._dist_spin.setValue(500.0)
+        dlg._conductivity.setValue(2.5)            # spinbox fallback value
+        return dlg
+
+    def test_layers_use_formation_k_not_spinbox(self, win, state):
+        from section_tool.core.formation import Formation
+        # Salt (k=6.0) and Shale (k=1.5): very different from the spinbox (2.5)
+        dlg = self._dialog_with_formations(win, state, formations=[
+            Formation("Salt",  matrix_thermal_conductivity=6.0,
+                      porosity_surface=0.01, compaction_coeff=0.0),
+            Formation("Shale", matrix_thermal_conductivity=1.5,
+                      porosity_surface=0.63, compaction_coeff=0.00051),
+        ])
+        layers = dlg._build_layers()
+
+        assert len(layers) == 2
+        ks = [lyr["thermal_conductivity"] for lyr in layers]
+        # After porosity correction Salt k ≈ 6.0 (near-zero porosity)
+        # and Shale k is reduced by porosity but still << Salt.
+        assert ks[0] > ks[1], "Salt should have higher effective k than Shale"
+        # Neither should equal the uniform spinbox value (2.5)
+        assert not all(abs(k - 2.5) < 0.05 for k in ks)
+
+    def test_fallback_uniform_when_no_picks(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        dlg._conductivity.setValue(3.7)            # distinctive value
+        layers = dlg._build_layers()
+
+        assert len(layers) == 1
+        assert layers[0]["thermal_conductivity"] == pytest.approx(3.7)
+
+    def test_steady_state_differs_layered_vs_uniform(self, win, state):
+        from section_tool.core.formation import Formation
+        from section_tool.core.thermal import steady_state_geotherm
+
+        dlg = self._dialog_with_formations(win, state, formations=[
+            Formation("Salt",  matrix_thermal_conductivity=6.0,
+                      porosity_surface=0.01, compaction_coeff=0.0),
+            Formation("Shale", matrix_thermal_conductivity=1.5,
+                      porosity_surface=0.63, compaction_coeff=0.00051),
+        ])
+
+        layers_fm = dlg._build_layers()
+        profile_fm = steady_state_geotherm(
+            layers_fm, surface_temp_C=10.0, basal_heat_flow_mW=60.0)
+
+        uniform_k = 2.5
+        layers_uni = [{**lyr, "thermal_conductivity": uniform_k}
+                      for lyr in layers_fm]
+        profile_uni = steady_state_geotherm(
+            layers_uni, surface_temp_C=10.0, basal_heat_flow_mW=60.0)
+
+        T_fm  = max(t for _, t in profile_fm)
+        T_uni = max(t for _, t in profile_uni)
+        assert abs(T_fm - T_uni) > 5.0, "Layered vs uniform k must give different temperatures"
+
+    def test_k_source_label_set_with_formations(self, win, state):
+        from section_tool.core.formation import Formation
+        dlg = self._dialog_with_formations(win, state, formations=[
+            Formation("Sandstone", matrix_thermal_conductivity=3.0),
+            Formation("Shale",     matrix_thermal_conductivity=1.5),
+        ])
+        assert "layer" in dlg._k_source_label.text()
+        assert dlg._k_edit_btn.isEnabled()
+
+    def test_k_source_label_uniform_without_formations(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        assert "Uniform" in dlg._k_source_label.text()
+        assert not dlg._k_edit_btn.isEnabled()
+
+    def test_session_override_applied_to_layers(self, win, state):
+        from section_tool.core.formation import Formation
+        dlg = self._dialog_with_formations(win, state, formations=[
+            Formation("Salt",  matrix_thermal_conductivity=6.0,
+                      porosity_surface=0.01, compaction_coeff=0.0),
+            Formation("Shale", matrix_thermal_conductivity=1.5,
+                      porosity_surface=0.63, compaction_coeff=0.00051),
+        ])
+        dlg._k_overrides["Salt"] = 2.0
+        layers = dlg._build_layers()
+        salt_layer = next(l for l in layers if l["name"] == "Salt")
+        # Overridden to 2.0 (plus Athy correction at ~0 porosity ≈ 2.0)
+        assert salt_layer["thermal_conductivity"] == pytest.approx(2.0, abs=0.1)
+
+    def test_column_mean_conductivity_harmonic(self, win, state):
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+        from section_tool.core.section import Section
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+
+        # Two equal-thickness layers, k=1 and k=3: harmonic mean = 2·1·3/(1+3) = 1.5
+        layers = [
+            {"z_top": 0.0,    "z_bottom": 1000.0, "thermal_conductivity": 1.0,
+             "heat_production": 1.0},
+            {"z_top": 1000.0, "z_bottom": 2000.0, "thermal_conductivity": 3.0,
+             "heat_production": 1.0},
+        ]
+        k_mean = dlg._column_mean_conductivity(layers)
+        assert k_mean == pytest.approx(1.5, rel=1e-6)
+
+
 class TestThermalInverse:
     """Real-MainWindow: the Monte Carlo inverse runs on the REAL measurements at
     the sample point, off the UI thread, and renders the P5–P95 envelope."""

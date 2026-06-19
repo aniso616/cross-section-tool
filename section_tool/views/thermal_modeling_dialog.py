@@ -116,7 +116,24 @@ class ThermalModelingDialog(QDialog):
         self._conductivity.setValue(2.5)
         self._conductivity.setDecimals(2)
         self._conductivity.setSuffix(" W/m·K")
-        param_form.addRow("Conductivity:", self._conductivity)
+        self._conductivity.setToolTip(
+            "Fallback used when no formation picks are available at this position.")
+        param_form.addRow("Fallback k:", self._conductivity)
+
+        self._k_source_label = QLabel("—")
+        self._k_source_label.setWordWrap(True)
+        self._k_source_label.setStyleSheet("font-size:10px; color:#666;")
+        param_form.addRow("k source:", self._k_source_label)
+
+        self._k_edit_btn = QPushButton("Edit formation k…")
+        self._k_edit_btn.setToolTip(
+            "Override the thermal conductivity of individual formations "
+            "(session only — not saved to the project).")
+        self._k_edit_btn.clicked.connect(self._open_k_editor)
+        self._k_edit_btn.setEnabled(False)
+        param_form.addRow(self._k_edit_btn)
+
+        self._k_overrides: dict[str, float] = {}
 
         ctrl_layout.addWidget(param_box)
 
@@ -198,6 +215,7 @@ class ThermalModelingDialog(QDialog):
 
         self._inverse_thread = None
         self.inverse_finished.connect(self._on_inverse_done)
+        self._update_k_source_label()
 
     # ------------------------------------------------------------------
     # Slots
@@ -238,10 +256,11 @@ class ThermalModelingDialog(QDialog):
                 self, "Burial history",
                 "Define a burial history first (Burial history…).")
             return
+        k_eff = self._column_mean_conductivity(self._build_layers())
         res = forward_temperature_history(
             burial,
             basal_heat_flow_mW=self._heat_flow.value(),
-            conductivity=self._conductivity.value(),
+            conductivity=k_eff,
             surface_temp_C=self._surf_temp.value())
 
         self._ax.clear()
@@ -343,6 +362,7 @@ class ThermalModelingDialog(QDialog):
                 self._manual_burial = dlg.result
 
     def _run_model(self) -> None:
+        self._update_k_source_label()
         mode = self._mode_combo.currentIndex()
         try:
             if mode == 0:
@@ -397,10 +417,11 @@ class ThermalModelingDialog(QDialog):
             return
 
         layers = self._build_layers()
+        k_eff = self._column_mean_conductivity(layers)
         node_depths = np.array([lyr["z_top"] for lyr in layers] +
                                [layers[-1]["z_bottom"]])
         T0 = (self._surf_temp.value() +
-              node_depths * self._heat_flow.value() * 1e-3 / self._conductivity.value())
+              node_depths * self._heat_flow.value() * 1e-3 / k_eff)
 
         ages = burial.ages_ma                          # oldest first (Ma)
         depths_curve = burial.depths_m
@@ -411,7 +432,7 @@ class ThermalModelingDialog(QDialog):
 
         T_hist = transient_1d_heat(
             node_depths, T0, burial_grid, ages,
-            thermal_conductivity=self._conductivity.value(),
+            thermal_conductivity=k_eff,
             surface_temp_C=self._surf_temp.value(),
             basal_heat_flow_mW=self._heat_flow.value(),
         )
@@ -585,29 +606,179 @@ class ThermalModelingDialog(QDialog):
         return best_well
 
     def _build_layers(self) -> list[dict]:
-        """Build a simple formation column from the nearest well to *dist_spin*."""
+        """Build the formation column at the sample point with porosity-corrected k.
+
+        For each formation interval (from the nearest well's formation_tops) the
+        thermal conductivity, porosity and compaction coefficient come from the
+        matching Formation in the project's stratigraphic column (or a session-level
+        override via :attr:`_k_overrides`). The effective conductivity is then
+        computed with :func:`~section_tool.core.thermal.effective_conductivity_column`
+        (Athy porosity + geometric-mean mixing). Falls back to the uniform spinbox
+        value when the well has no formation picks."""
         from section_tool.core.thermal import effective_conductivity_column
 
-        k = self._conductivity.value()
-        best_well = self._nearest_well()
+        fallback_k = self._conductivity.value()
+        best_well  = self._nearest_well()
 
         layers: list[dict] = []
-        if best_well and hasattr(best_well, "formation_tops"):
-            tops = sorted(best_well.formation_tops.items(), key=lambda t: t[1])
+        if best_well and best_well.formation_tops:
+            strat = getattr(self._state.project, "strat_column", None)
+            tops  = sorted(best_well.formation_tops.items(), key=lambda t: t[1])
             for i, (name, md) in enumerate(tops[:-1]):
+                fm    = strat.get_formation(name) if strat else None
+                k_ovr = self._k_overrides.get(name)
+                k_mat = float(k_ovr if k_ovr is not None else
+                              (fm.matrix_thermal_conductivity if fm else fallback_k))
+                phi0  = float(fm.porosity_surface       if fm else 0.5)
+                c     = float(fm.compaction_coeff        if fm else 0.0005)
+                A     = float(fm.radiogenic_heat_production if fm else 1.0)
                 layers.append({
+                    "name":                name,
                     "z_top":               float(md),
                     "z_bottom":            float(tops[i + 1][1]),
-                    "thermal_conductivity": k,
-                    "heat_production":      1.0,
+                    "thermal_conductivity": k_mat,
+                    "porosity_surface":    phi0,
+                    "compaction_coeff":    c,
+                    "heat_production":     A,
                 })
 
-        # Fallback: single 5000 m layer
         if not layers:
-            layers = [{
+            return [{
                 "z_top":               0.0,
                 "z_bottom":            5000.0,
-                "thermal_conductivity": k,
+                "thermal_conductivity": fallback_k,
                 "heat_production":      1.0,
             }]
+
+        # Porosity-weighted effective conductivity (Athy + geometric-mean mixing).
+        # The effective_conductivity is written back into thermal_conductivity so
+        # all three solvers (steady-state, transient, forward T–t) consume the same
+        # corrected value without knowing about porosity.
+        eff_layers = effective_conductivity_column(layers)
+        for lyr, e in zip(layers, eff_layers):
+            lyr["thermal_conductivity"] = e["effective_conductivity"]
+            lyr["porosity_at_midpoint"] = e["porosity_at_midpoint"]
         return layers
+
+    @staticmethod
+    def _column_mean_conductivity(layers: list[dict]) -> float:
+        """Harmonic-mean effective conductivity of the column (series resistors).
+
+        Used to produce the scalar k required by the forward T–t and transient
+        solvers, which do not yet support per-layer conductivity arrays.
+        """
+        total_dz = sum(lyr["z_bottom"] - lyr["z_top"] for lyr in layers)
+        if total_dz <= 0 or not layers:
+            return layers[0]["thermal_conductivity"] if layers else 2.5
+        return total_dz / sum(
+            (lyr["z_bottom"] - lyr["z_top"])
+            / max(lyr["thermal_conductivity"], 1e-9)
+            for lyr in layers
+        )
+
+    def _update_k_source_label(self) -> None:
+        """Refresh the conductivity-source label to reflect the sample position."""
+        best_well = self._nearest_well()
+        if not best_well or not best_well.formation_tops:
+            self._k_source_label.setText("Uniform — no formation picks")
+            self._k_edit_btn.setEnabled(False)
+            return
+        strat = getattr(self._state.project, "strat_column", None)
+        tops  = sorted(best_well.formation_tops.items(), key=lambda t: t[1])
+        n_int = max(0, len(tops) - 1)
+        if n_int == 0:
+            self._k_source_label.setText("Uniform — no formation picks")
+            self._k_edit_btn.setEnabled(False)
+            return
+        n_known = sum(1 for nm, _ in tops
+                      if strat and strat.get_formation(nm) is not None)
+        n_ovr   = sum(1 for nm, _ in tops if nm in self._k_overrides)
+        parts   = [f"{n_int} layer(s)", f"{n_known} in strat column"]
+        if n_ovr:
+            parts.append(f"{n_ovr} overridden")
+        self._k_source_label.setText(", ".join(parts))
+        self._k_edit_btn.setEnabled(True)
+
+    def _open_k_editor(self) -> None:
+        """Open the per-formation conductivity editor (session override)."""
+        best_well = self._nearest_well()
+        if not best_well:
+            return
+        strat = getattr(self._state.project, "strat_column", None)
+        tops  = sorted(best_well.formation_tops.items(), key=lambda t: t[1])
+        rows: list[tuple] = []
+        for i, (name, md) in enumerate(tops[:-1]):
+            z_bot = tops[i + 1][1]
+            fm    = strat.get_formation(name) if strat else None
+            dflt  = fm.matrix_thermal_conductivity if fm else self._conductivity.value()
+            cur   = self._k_overrides.get(name, dflt)
+            rows.append((name, float(md), float(z_bot), float(cur)))
+        if not rows:
+            return
+        dlg = _ConductivityProfileDialog(rows, parent=self)
+        if dlg.exec():
+            self._k_overrides.update(dlg.overrides())
+            self._update_k_source_label()
+
+
+# ---------------------------------------------------------------------------
+# Per-formation conductivity editor (session override only)
+# ---------------------------------------------------------------------------
+
+class _ConductivityProfileDialog(QDialog):
+    """Table editor for per-formation thermal conductivity.
+
+    Values are session-only overrides and are NOT persisted to the project.
+    The dialog pre-fills from Formation objects in the strat column; the user
+    can change the k column and confirm with OK.
+    """
+
+    def __init__(self, rows: list[tuple], parent=None) -> None:
+        # rows: list of (formation_name, z_top, z_bottom, k_current)
+        super().__init__(parent)
+        self.setWindowTitle("Formation conductivity — session override")
+        self.setMinimumWidth(440)
+
+        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        self._rows = rows
+        lay = QVBoxLayout(self)
+
+        note = QLabel(
+            "Edit the k (W/m·K) column to override per-formation conductivity. "
+            "These values are session-only and are not saved to the project.")
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size:10px; color:#888;")
+        lay.addWidget(note)
+
+        self._table = QTableWidget(len(rows), 4)
+        self._table.setHorizontalHeaderLabels(
+            ["Formation", "Top (m)", "Base (m)", "k  (W/m·K)"])
+        for i, (name, z_top, z_bot, k) in enumerate(rows):
+            for col, text in enumerate((name, f"{z_top:.1f}", f"{z_bot:.1f}")):
+                it = QTableWidgetItem(text)
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self._table.setItem(i, col, it)
+            self._table.setItem(i, 3, QTableWidgetItem(f"{k:.3f}"))
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        lay.addWidget(self._table)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def overrides(self) -> dict[str, float]:
+        """Return ``{formation_name: k}`` for each row whose k was set."""
+        out: dict[str, float] = {}
+        for i, (name, *_) in enumerate(self._rows):
+            it = self._table.item(i, 3)
+            try:
+                out[name] = float(it.text())
+            except (ValueError, AttributeError):
+                pass
+        return out
