@@ -863,6 +863,51 @@ class TestThermalBurialSeam:
         assert "°C" in dlg._ax.get_ylabel()       # display boundary is °C, never K
         assert dlg._ax.get_lines()                # the T–t path line
         assert len(dlg._ax.containers) >= 1       # the BHT error-bar overlay
+        # no kinetic measurement here → graceful misfit panel, no crash
+        assert "No measurements" in dlg._fit_label.text()
+
+    def test_predicted_vs_observed_overlay_and_misfit(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.wells import Well
+        from section_tool.core.measurements import Measurement
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        for name, depth in (("Top", 500.0), ("Base", 1500.0)):
+            state.project.horizon_picks.append(
+                HorizonPick([0.0, 1000.0], [depth, depth], name=name,
+                            section_names=["L1", "L1"]))
+        state.restoration_snapshot = snapshot_interpretation(sec, state.project)
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "rm Top", age_ma=40.0,
+                                       remove_element_ids=[
+                                           state.project.horizon_picks[0].uuid]))
+        state.set_restoration_sequence(seq)
+        well = Well("W1", 500.0, 0.0, td=2000.0)
+        well.add_measurement(Measurement(depth_m=1500.0, measurement_type="vitrinite_ro",
+                                         value=0.8, uncertainty=0.1, units="%Ro"))
+        well.add_measurement(Measurement(depth_m=1500.0, measurement_type="aft_age",
+                                         value=60.0, uncertainty=5.0, units="Ma"))
+        state.add_well(well)
+
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        dlg._horizon_combo.setCurrentIndex(
+            dlg._horizon_combo.findData(state.project.horizon_picks[1].uuid))
+        dlg._dist_spin.setValue(500.0)
+        dlg._mode_combo.setCurrentIndex(3)        # Forward T–t
+        dlg._run_forward()
+
+        txt = dlg._fit_label.text()
+        assert "Predicted vs observed" in txt and "χ²/obs" in txt
+        assert "Easy%Ro (Sweeney-Burnham 1990)" in txt      # honest Ro label
+        assert "simplified" in txt                          # AFT proxy labelled honestly
+        # predicted AFT age shown as a dashed vertical line on the time axis
+        assert any(ln.get_linestyle() == "--" for ln in dlg._ax.get_lines())
 
 
 class TestRestorationWorkflowEndToEnd:

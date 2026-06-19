@@ -164,6 +164,12 @@ class ThermalModelingDialog(QDialog):
         self._run_btn = QPushButton("Run Model")
         self._run_btn.clicked.connect(self._run_model)
         ctrl_layout.addWidget(self._run_btn)
+
+        # Predicted-vs-observed fit summary (Forward T–t mode)
+        self._fit_label = QLabel("")
+        self._fit_label.setWordWrap(True)
+        self._fit_label.setStyleSheet("font-size:11px;")
+        ctrl_layout.addWidget(self._fit_label)
         ctrl_layout.addStretch()
 
         layout.addWidget(ctrl_panel)
@@ -241,6 +247,27 @@ class ThermalModelingDialog(QDialog):
                 self._ax.errorbar([0.0], [m.value], yerr=[m.uncertainty or 0.0],
                                   fmt="s", color="#3366cc", capsize=3, zorder=5,
                                   label="BHT / DST (°C)")
+        # ── Predicted vs observed (kinetic models) ────────────────────────
+        from section_tool.core.thermochron_fit import goodness_of_fit
+        t_path = list(zip(res.ages_ma.tolist(), res.temps_C.tolist()))
+        fit = goodness_of_fit(t_path, self._sample_measurements())
+        # Age-type observed (solid) vs predicted (dashed) on the time axis — style,
+        # not colour, distinguishes them; the plot never implies false agreement.
+        has_proxy = False
+        for mtype in ("aft_age", "ahe_age", "zhe_age"):
+            tf = fit.per_type.get(mtype)
+            if tf is None:
+                continue
+            has_proxy = True
+            for ov in tf.observed:
+                self._ax.axvline(ov, color="#444", linestyle="-", lw=1.0, alpha=0.7)
+            self._ax.axvline(tf.predicted, color="#444", linestyle="--", lw=1.4,
+                             alpha=0.9)
+        if has_proxy:
+            self._ax.text(0.02, 0.02, "simplified proxy — see fit panel tooltip",
+                          transform=self._ax.transAxes, fontsize=6, color="#888",
+                          va="bottom", ha="left")
+
         self._ax.set_xlabel("Time (Ma) — present at left")
         self._ax.set_ylabel("Temperature (°C)")
         self._ax.invert_yaxis()
@@ -251,6 +278,30 @@ class ThermalModelingDialog(QDialog):
             uniq = dict(zip(labels, handles))
             self._ax.legend(uniq.values(), uniq.keys(), fontsize=7)
         self._canvas.draw()
+        self._update_fit_label(fit)
+
+    def _update_fit_label(self, fit) -> None:
+        """Predicted-vs-observed summary + χ² misfit, with the proxy caveat in the
+        tooltip (the user sees it in context, not buried)."""
+        from section_tool.core.thermal import KINETIC_MODEL_LABELS, KINETIC_MODEL_NOTES
+        if not fit.per_type:
+            self._fit_label.setText("No measurements at this sample point to compare.")
+            self._fit_label.setToolTip("")
+            return
+        lines = ["<b>Predicted vs observed</b>"]
+        notes = []
+        for mtype, tf in fit.per_type.items():
+            unit = "%Ro" if mtype == "vitrinite_ro" else "Ma"
+            label = KINETIC_MODEL_LABELS.get(tf.model_key, mtype)
+            lines.append(
+                f"{label}: predicted {tf.predicted:.2f}, observed "
+                f"{tf.mean_observed:.2f} {unit} (Δ = {tf.discrepancy_pct:+.0f}%)")
+            note = KINETIC_MODEL_NOTES.get(tf.model_key)
+            if note and note not in notes:
+                notes.append(note)
+        lines.append(f"<b>χ²/obs = {fit.reduced_chi2:.2f}</b> ({fit.n_obs} obs)")
+        self._fit_label.setText("<br>".join(lines))
+        self._fit_label.setToolTip("\n".join(notes))
 
     def _populate_horizon_combo(self) -> None:
         self._horizon_combo.clear()
