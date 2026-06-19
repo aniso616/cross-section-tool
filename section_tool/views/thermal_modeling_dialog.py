@@ -57,6 +57,7 @@ class ThermalModelingDialog(QDialog):
 
         self._state   = app_state
         self._section = section
+        self._manual_burial = None    # user-entered burial fallback (Step 2)
 
         layout = QHBoxLayout(self)
 
@@ -135,6 +136,19 @@ class ThermalModelingDialog(QDialog):
         ctrl_layout.addWidget(self._inv_box)
         self._inv_box.setVisible(False)
 
+        # Burial history (restoration↔thermal seam)
+        burial_box = QGroupBox("Burial history")
+        burial_form = QFormLayout(burial_box)
+        self._horizon_combo = QComboBox()
+        self._populate_horizon_combo()
+        burial_form.addRow("Track horizon:", self._horizon_combo)
+        self._burial_btn = QPushButton("Burial history…")
+        self._burial_btn.setToolTip("Derive the burial curve at the section position "
+                                    "from the restoration sequence (or enter manually).")
+        self._burial_btn.clicked.connect(self._open_burial)
+        burial_form.addRow(self._burial_btn)
+        ctrl_layout.addWidget(burial_box)
+
         # Observed data
         self._meas_btn = QPushButton("Measurements…")
         self._meas_btn.setToolTip("Enter or import observed thermal / thermochronometric "
@@ -180,6 +194,38 @@ class ThermalModelingDialog(QDialog):
         from section_tool.views.measurements_dialog import MeasurementsDialog
         MeasurementsDialog(self._state, parent=self).exec()
 
+    def _populate_horizon_combo(self) -> None:
+        self._horizon_combo.clear()
+        sec = self._section.name
+        for hp in self._state.project.horizon_picks:
+            try:
+                if hp.n_picks_for_section(sec) >= 1:
+                    self._horizon_combo.addItem(hp.name or "(unnamed)", hp.uuid)
+            except Exception:
+                pass
+
+    def _current_burial_history(self):
+        """Burial curve at the section position: from the restoration sequence when
+        available (Step 2 seam), else the user-entered fallback. Never a proxy."""
+        from section_tool.core.burial import burial_history_from_restoration
+        snap = getattr(self._state, "restoration_snapshot", None)
+        seq = self._state.restoration_sequence
+        huid = self._horizon_combo.currentData()
+        x = self._dist_spin.value()
+        if snap is not None and seq.events and huid:
+            bh = burial_history_from_restoration(
+                seq, huid, x, snapshot=snap, section_name=self._section.name)
+            if len(bh.points) >= 2:
+                return bh
+        return getattr(self, "_manual_burial", None)
+
+    def _open_burial(self) -> None:
+        from section_tool.views.burial_history_dialog import BurialHistoryDialog
+        dlg = BurialHistoryDialog(self._current_burial_history(), parent=self)
+        if dlg.exec() == QDialog.Accepted and dlg.result is not None:
+            if dlg.result.source == "user-specified":
+                self._manual_burial = dlg.result
+
     def _run_model(self) -> None:
         mode = self._mode_combo.currentIndex()
         try:
@@ -215,47 +261,56 @@ class ThermalModelingDialog(QDialog):
         self._canvas.draw()
 
     def _run_transient(self) -> None:
-        """Run the transient heat solver using the restoration burial history."""
+        """Run the transient heat solver over the REAL burial history.
+
+        Burial comes from the restoration sequence (or a user-specified curve) — see
+        :meth:`_current_burial_history`. The node grid is scaled at each age by the
+        tracked horizon's burial fraction, so the column deepens through time exactly
+        as the burial curve says (no fabricated proxy)."""
         from section_tool.core.thermal import transient_1d_heat
         import numpy as np
 
-        layers = self._build_layers()
-        if not layers:
+        burial = self._current_burial_history()
+        if burial is None or len(burial.points) < 2:
             QMessageBox.information(
-                self, "No stratigraphy",
-                "Add formation tops to a nearby well to define the column.",
-            )
+                self, "Burial history",
+                "Define a burial history first (Burial history…) — from the "
+                "restoration sequence or entered manually.")
             return
 
-        depths = np.array([lyr["z_top"] for lyr in layers] +
-                          [layers[-1]["z_bottom"]])
+        layers = self._build_layers()
+        node_depths = np.array([lyr["z_top"] for lyr in layers] +
+                               [layers[-1]["z_bottom"]])
         T0 = (self._surf_temp.value() +
-               depths * self._heat_flow.value() * 1e-3 / self._conductivity.value())
+              node_depths * self._heat_flow.value() * 1e-3 / self._conductivity.value())
 
-        # Simple 3-step burial: present, 50 Ma, 100 Ma (linear deepening)
-        time_steps = np.array([100.0, 50.0, 0.0])
-        bh = np.zeros((3, len(depths)))
-        bh[0] = depths * 0.5
-        bh[1] = depths * 0.75
-        bh[2] = depths
+        ages = burial.ages_ma                          # oldest first (Ma)
+        depths_curve = burial.depths_m
+        present_depth = depths_curve[-1] if depths_curve[-1] > 0 else max(
+            float(depths_curve.max()), 1.0)
+        scale = depths_curve / present_depth           # burial fraction per age
+        burial_grid = np.outer(scale, node_depths)     # (n_times, N)
 
         T_hist = transient_1d_heat(
-            depths, T0, bh, time_steps,
+            node_depths, T0, burial_grid, ages,
             thermal_conductivity=self._conductivity.value(),
             surface_temp_C=self._surf_temp.value(),
             basal_heat_flow_mW=self._heat_flow.value(),
         )
 
         self._ax.clear()
-        colors = ["#aabbcc", "#6699bb", "#cc4444"]
-        labels = ["100 Ma", "50 Ma", "Present"]
-        for j, (T_row, label, col) in enumerate(zip(T_hist, labels, colors)):
-            self._ax.plot(T_row, depths, color=col, lw=2, label=label)
+        import matplotlib.pyplot as plt
+        cmap = plt.get_cmap("viridis")
+        n = len(ages)
+        for j, (T_row, age) in enumerate(zip(T_hist, ages)):
+            col = cmap(j / max(n - 1, 1))
+            label = "Present" if age == 0 else f"{age:g} Ma"
+            self._ax.plot(T_row, node_depths, color=col, lw=2, label=label)
         self._ax.invert_yaxis()
         self._ax.set_xlabel("Temperature (°C)")
         self._ax.set_ylabel("Depth (m)")
-        self._ax.set_title("Transient thermal history")
-        self._ax.legend()
+        self._ax.set_title(f"Transient thermal history — {burial.source}")
+        self._ax.legend(fontsize=7)
         self._canvas.draw()
 
     def _run_inverse(self) -> None:

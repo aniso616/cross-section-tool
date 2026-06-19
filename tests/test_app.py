@@ -787,6 +787,46 @@ class TestMeasurements:
         assert ms[0].depth_m == 1200.0 and ms[0].well_uuid == state.project.wells[0].uuid
 
 
+class TestThermalBurialSeam:
+    """Real-MainWindow: the thermal dialog derives burial from the restoration
+    sequence and the transient solver runs on it (no hardcoded proxy)."""
+
+    def test_burial_from_restoration_drives_transient(self, win, state):
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        for name, depth in (("Top", 500.0), ("Mid", 1000.0), ("Base", 1500.0)):
+            state.project.horizon_picks.append(
+                HorizonPick([0.0, 1000.0], [depth, depth], name=name,
+                            section_names=["L1", "L1"]))
+        state.restoration_snapshot = snapshot_interpretation(sec, state.project)
+        seq = state.restoration_sequence
+        top, mid = state.project.horizon_picks[0], state.project.horizon_picks[1]
+        seq.add_event(RestorationEvent(1, "rm Top", age_ma=10.0,
+                                       remove_element_ids=[top.uuid]))
+        seq.add_event(RestorationEvent(2, "rm Mid", age_ma=20.0,
+                                       remove_element_ids=[mid.uuid]))
+        state.set_restoration_sequence(seq)
+
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        base_uuid = state.project.horizon_picks[2].uuid
+        dlg._horizon_combo.setCurrentIndex(dlg._horizon_combo.findData(base_uuid))
+
+        bh = dlg._current_burial_history()
+        assert bh is not None and bh.source.startswith("restoration sequence")
+        assert len(bh.points) == 3 and bh.points[0][0] == 20.0   # oldest first
+
+        dlg._mode_combo.setCurrentIndex(1)        # Transient
+        dlg._run_transient()                      # runs on the real burial, no crash
+        assert dlg._ax.get_title().startswith("Transient")
+
+
 class TestRestorationWorkflowEndToEnd:
     """Real-MainWindow: interpretation → pin/datum → event(algorithm) → capture →
     step → ghost overlay → Balance Check measures deformed-vs-RESTORED."""
