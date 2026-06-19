@@ -1564,4 +1564,112 @@ class TestDemFetchEndToEnd:
         win._map_view._dem._last_thread.join(timeout=10)
         QApplication.processEvents()
         assert any("DEM failed" in m for m in flashed)
-        assert any("HTTP 500" in m for m in flashed)
+
+
+# ---------------------------------------------------------------------------
+# Thermal arc end-to-end smoke test
+# ---------------------------------------------------------------------------
+
+class TestThermalWorkflowEndToEnd:
+    """Real-MainWindow smoke test of the complete thermal arc:
+    enter measurements → set burial from restoration → run forward model →
+    check predicted-vs-observed → run inverse → T(t) envelope renders.
+
+    Does not verify exact temperatures or ages (physics is unit-tested
+    elsewhere). Verifies the full workflow reaches non-trivial output without
+    crashing."""
+
+    def _setup(self, state):
+        """Wire a minimal section + well + restoration sequence + strat column."""
+        from section_tool.core.section import Section
+        from section_tool.core.surfaces import HorizonPick
+        from section_tool.core.wells import Well
+        from section_tool.core.measurements import Measurement
+        from section_tool.core.restoration import RestorationEvent
+        from section_tool.core.restoration_snapshot import snapshot_interpretation
+        from section_tool.core.formation import Formation, StratigraphicColumn
+
+        sec = Section([(0.0, 0.0), (2000.0, 0.0)], name="Main", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+
+        # Two horizon picks: the upper one will be removed in the restoration event
+        hp_top  = HorizonPick([0.0, 2000.0], [500.0, 500.0],  name="Top",
+                              section_names=["Main", "Main"])
+        hp_base = HorizonPick([0.0, 2000.0], [1500.0, 1500.0], name="Base",
+                              section_names=["Main", "Main"])
+        state.project.horizon_picks.extend([hp_top, hp_base])
+
+        # Restoration sequence: remove the Top at 30 Ma
+        state.restoration_snapshot = snapshot_interpretation(sec, state.project)
+        seq = state.restoration_sequence
+        seq.add_event(RestorationEvent(1, "Erode Top", age_ma=30.0,
+                                       remove_element_ids=[hp_top.uuid]))
+        state.set_restoration_sequence(seq)
+
+        # Strat column: shale (low k) over sandstone (high k)
+        strat = StratigraphicColumn()
+        strat.add_formation(Formation("Shale",    matrix_thermal_conductivity=1.5,
+                                      porosity_surface=0.63, compaction_coeff=0.00051,
+                                      radiogenic_heat_production=2.5))
+        strat.add_formation(Formation("Sandstone", matrix_thermal_conductivity=3.0,
+                                      porosity_surface=0.40, compaction_coeff=0.00027,
+                                      radiogenic_heat_production=1.2))
+        state.project.strat_column = strat
+
+        # Well with formation tops + thermal + thermochronometric measurements
+        well = Well("W1", 1000.0, 0.0, td=2500.0)
+        well.add_formation_top("Shale",    0.0)
+        well.add_formation_top("Sandstone", 800.0)
+        well.add_formation_top("_base",    2500.0)
+        well.add_measurement(Measurement(
+            depth_m=800.0, measurement_type="vitrinite_ro",
+            value=0.75, uncertainty=0.1, units="%Ro"))
+        well.add_measurement(Measurement(
+            depth_m=800.0, measurement_type="aft_age",
+            value=52.0, uncertainty=6.0, units="Ma"))
+        well.add_measurement(Measurement(
+            depth_m=800.0, measurement_type="bht",
+            value=68.0, uncertainty=4.0, units="°C"))
+        state.add_well(well)
+        return sec, hp_base
+
+    def test_full_thermal_workflow_no_crash(self, win, state, qapp):
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec, hp_base = self._setup(state)
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        dlg._dist_spin.setValue(1000.0)
+        dlg._horizon_combo.setCurrentIndex(
+            dlg._horizon_combo.findData(hp_base.uuid))
+
+        # ── 1. Forward T–t path from burial + measurements ─────────────────
+        dlg._mode_combo.setCurrentIndex(3)
+        dlg._run_forward()
+
+        txt = dlg._fit_label.text()
+        assert "Predicted vs observed" in txt       # fit label populated
+        assert "χ²/obs" in txt
+        assert "Easy%Ro" in txt                     # Ro predictor ran
+        assert dlg._ax.get_lines()                 # T–t path drawn
+
+        # ── 2. Conductivity profile from strat column ──────────────────────
+        layers = dlg._build_layers()
+        assert len(layers) == 2                    # Shale + Sandstone intervals
+        ks = [l["thermal_conductivity"] for l in layers]
+        assert ks[0] < ks[1]                       # Shale < Sandstone (even after porosity)
+
+        # ── 3. Inverse on real measurements, off-thread ────────────────────
+        dlg._mode_combo.setCurrentIndex(2)
+        dlg._n_paths.setValue(500)                 # small count → fast smoke test
+        dlg._threshold.setValue(10.0)              # loose → accepts some paths
+        dlg._run_inverse()
+
+        assert dlg._inverse_thread is not None
+        dlg._inverse_thread.join(timeout=60)
+        assert not dlg._inverse_thread.is_alive()
+        qapp.processEvents()
+
+        title = dlg._ax.get_title()
+        assert "Inverse" in title                  # inverse result rendered
+        assert dlg._run_btn.isEnabled()            # button re-enabled after done

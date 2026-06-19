@@ -1,6 +1,6 @@
 """Attribute table dialog.
 
-Accessible via Tools → Attribute Table. Shows all geological elements
+Accessible via Analysis ▸ Attribute Table. Shows all geological elements
 (horizons, faults, polygons, wells) in sortable per-category tables.
 """
 from __future__ import annotations

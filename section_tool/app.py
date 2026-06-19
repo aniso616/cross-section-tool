@@ -1381,7 +1381,7 @@ class MainWindow(QMainWindow):
         GenerateSurfaceDialog(self._state, self).exec()
 
     def _on_set_aoi(self) -> None:
-        """Tools → Set AOI: define a rectangular area of interest."""
+        """Surfaces & Maps ▸ Set AOI: define a rectangular area of interest."""
         from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
                                          QDoubleSpinBox, QLineEdit)
         from section_tool.core.aoi import AOI
@@ -1475,7 +1475,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_thermal_modeling(self) -> None:
-        """Tools → Thermal Modeling: open the thermal modeling dialog."""
+        """Model ▸ Thermal Modeling: open the thermal modeling dialog."""
         from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
         section = self._state.active_section
         if section is None:
@@ -1530,14 +1530,14 @@ class MainWindow(QMainWindow):
         self._section_view.render()
 
     def _on_attribute_table(self) -> None:
-        """Tools → Attribute Table: tabular view of all geological element attributes."""
+        """Analysis ▸ Attribute Table: tabular view of all geological element attributes."""
         from section_tool.views.attribute_table_dialog import AttributeTableDialog
         dlg = AttributeTableDialog(self._state, parent=self)
         dlg.exec()
 
 
     def _on_view_segy_header(self) -> None:
-        """Tools → View SEG-Y Header: pick a file and show the header inspector."""
+        """Convert ▸ View SEG-Y Header: pick a file and show the header inspector."""
         path, _ = QFileDialog.getOpenFileName(
             self, "View SEG-Y Header",
             "", "SEG-Y Files (*.segy *.sgy *.SGY);;All Files (*)",

@@ -1,141 +1,118 @@
 # Thermal modeling readiness map
 
-*Discovery + annotation only. No code was changed to produce this. Inventory of
-the thermal-modeling code against today's codebase, with an honest real/stubbed/
-missing assessment, the integration seams, and a recommended build order.
-Reviewed before any thermal build prompt is written.*
+*Originally a discovery + annotation map (pre-build). Updated after each build
+step. Current state: Steps 1–7 complete — thermal arc fully wired.*
 
-Evidence is cited as `path:line`. Verified by reading the repo at the current
-`main` (post the restoration arc, Steps 1–8).
+Evidence cited as `path:line`. Verified against the repo at main after each step.
 
 ---
 
-## 0. Headline verdict
+## 0. Headline verdict (updated — arc complete)
 
-**Unlike restoration (which was a bookkeeping shell), the thermal *physics* is
-real and tested — but the *workflow* is a demo with fabricated integration
-seams.**
+The thermal arc is complete as a **75%-solution first arc**: all workflow seams
+are wired with real data (no fabrications); physics is honest (labels never claim
+a model that isn't implemented); the arc is tested end-to-end.
 
-The core compute (`core/thermal.py`, `core/thermal_inverse.py`) is genuine,
-validated 1D heat physics + thermochronometric kinetics, with two real test
-files. What's missing is the wiring: the dialog **fakes the burial history**
-(hardcoded 3-step deepening, not the restoration/decompaction output it claims),
-**fabricates the observed data** (a synthetic AFT age, not the well measurements),
-and the observed-data table is **orphaned** (full DB schema + CRUD, but never
-loaded into the live model, no entry UI, never consumed). Two kinetic models are
-also **simplified proxies mislabeled as the real thing** (`aft_age` advertises
-"Ketcham07" but is a single Arrhenius; AHe/ZHe are single-domain diffusion, not
-RDAAM).
-
-So the gap to a working thermal arc is mostly **plumbing + honesty**, not new
-physics — the inverse of the restoration situation.
+**Pre-build state (for reference):** the core physics was real but the workflow
+had fabricated seams — the dialog faked the burial history, fabricated the observed
+data, and the measurements table was orphaned. Two kinetic models were mislabeled.
 
 ---
 
-## 1. Inventory (what exists → status)
+## 1. BUILD STATUS
 
-Status: **REAL** = implemented + tested + correct · **REAL-SIMPLIFIED** = works,
-but a first-order proxy (sometimes mislabeled) · **DEMO** = runs but on fabricated
-inputs · **ORPHANED** = built but not wired into the workflow · **MISSING**.
-
-| Item | Status | Notes | Evidence |
+| Step | Status | Commit | What was built |
 |---|---|---|---|
-| `steady_state_geotherm` | **REAL** | layered steady-state, radiogenic heat production; physics-validated (gradient = q/k, linear w/o A) | `core/thermal.py:27`; tests `test_thermal.py:98,128` |
-| `thermal_conductivity_with_porosity` / `effective_conductivity_column` | **REAL but UNUSED** | geometric-mean mixing + Athy porosity; tested — **imported by the dialog but never called** (it uses a single spinbox k) | `core/thermal.py:113,143`; `thermal_modeling_dialog.py:302` (imported, unused) |
-| `maturity_easy_ro` (Easy%Ro) | **REAL** (verify calibration) | Sweeney & Burnham 1990, full 20-reaction Ea table; **but `total_reacted = ΣF0 − Σf` with ΣF0≈0.85 (not normalized to 1)** — non-canonical, needs benchmark validation | `core/thermal.py:208,244` |
-| `transient_1d_heat` | **REAL** | implicit backward-Euler FD (scipy sparse); scalar k only (layered = future); approximate bottom Neumann BC | `core/thermal.py:252`; tests `test_thermal_advanced.py:35` |
-| `aft_age` | **REAL-SIMPLIFIED / MISLABELED** | single first-order **Arrhenius** proxy (Tc≈110°C); **docstring + default say "Ketcham07" but it is NOT the Ketcham 2007 multi-kinetic annealing model**; `kinetics`/`composition` args are no-ops | `core/thermal.py:367` |
-| `aft_track_length_distribution` | **REAL-SIMPLIFIED** | MC of the same Arrhenius reduction, not a real track-annealing model | `core/thermal.py:414` |
-| `ahe_age` / `zhe_age` / `_he_age_diffusion` | **REAL-SIMPLIFIED** | single-domain spherical diffusion; Farley(2000)/Reiners(2004) D₀/Ea are correct but the model is **not RDAAM/ZRDAAM**; fixed Ft=0.79 (not grain-size dependent) | `core/thermal.py:470,526,559` |
-| `monte_carlo_search` (inverse) | **REAL but BASIC** | uniform-random piecewise-linear t-T paths + χ²/obs acceptance; **not** a QTQt-style controlled random walk / MCMC | `core/thermal_inverse.py:22` |
-| `good_paths_envelope` | **REAL** | P5/P95 + mean envelope from accepted paths | `core/thermal_inverse.py:113` |
-| `decompaction.burial_history` | **REAL but DISCONNECTED** | proper decompaction burial history (strip + decompact); **not consumed by the thermal solver** | `core/decompaction.py:239` |
-| `measurements` table (observed data) | **REAL schema + CRUD, ORPHANED** | `vitrinite_ro/aft_age/aft_length/ahe_age/zhe_age/bht/dst_temp/…`; add/get/delete + DB-roundtrip tests — **but not loaded into Project/Well, no entry UI, no caller outside tests** | schema `io/database.py:311`; CRUD `:1393,1419,1432`; tests `test_database_schema.py:267`; **absent** from `app_state.py`/`wells.py` |
-| lithology library (`matrix_thermal_conductivity`) | **REAL but DISCONNECTED** | per-lithology k in the strat library; not used by the thermal column | `io/database.py:376-390` |
-| `ThermalModelingDialog` | **DEMO** | steady-state real (crude column); **transient fakes burial** (`bh = depths×[0.5,0.75,1.0]`); **inverse fabricates a synthetic AFT obs**; no measurement-input UI | `thermal_modeling_dialog.py:205-294,300` |
-| Model ▸ Thermal Modeling action | **REAL (opens dialog)** | needs an active section; docstring still says "Tools →" (stale, like restoration) | `app.py:1477` |
-| Kinetics test coverage | **BEHAVIORAL only** | immature/reset/positive/hotter-younger/monotonic/Tc-ordering — **qualitative direction, not benchmark-accurate ages vs HeFTy/published Durango** | `test_thermal_advanced.py:88-345` |
+| Step 1 — Load + enter measurements | **COMPLETE** | 3554d8e | `core/measurements.py` (`Measurement` dataclass, `MEASUREMENT_TYPES`, `validate_measurement`, `parse_measurements_csv`); `Well.measurements`; `MeasurementsDialog`; DB schema + migration; `measurements_of_type`; `section_view` measurement markers |
+| Step 2 — Wire burial history | **COMPLETE** | f8cd2cb | `core/burial.py` (`BurialHistory`, `burial_history_from_restoration`, `manual_burial_history`); `BurialHistoryDialog`; restoration↔thermal seam via `snapshot_interpretation`; no synthetic burial in transient mode |
+| Step 3 — Forward T(t) + Easy%Ro | **COMPLETE** | 91e1b7e | `forward_temperature_history` (quasi-static geotherm; transient solver's basal BC documented as unsuitable for absolute sample T); Easy%Ro benchmark validated (ΣF0≈0.85 weighting reproduces Sweeney-Burnham 1990 canonical curve: immature 0.28%, oil window 0.62%@100°C/1.08%@150°C); `KINETIC_MODEL_LABELS` / `KINETIC_MODEL_NOTES` added; `aft_age` relabeled from false "Ketcham07" to "simplified, single-Arrhenius" |
+| Step 4 — Predicted vs observed | **COMPLETE** | aee439d | `core/thermochron_fit.py` (`predict_ro/aft/ahe/zhe`, `PREDICTORS`, `goodness_of_fit`, `TypeFit`, `FitResult`); dialog `_run_forward` overlays BHT errorbars + predicted/observed age lines + χ²/obs fit label with proxy caveat |
+| Step 5 — Inverse on real data | **COMPLETE** | 3e0f204 | `monte_carlo_search` gains `seed`; `_inverse_observations()` maps real measurements to χ² objective; fabricated `synthetic_aft` deleted; search runs off UI thread (daemon thread + `inverse_finished` Signal); `_plot_inverse_envelope` renders P5–P95 shaded band labeled "P5–P95 range of acceptable T(t) paths" (not "confidence interval") + best-fit (min-χ²) line |
+| Step 6 — Conductivity from lithology | **COMPLETE** | 1879cc9 | `_build_layers` now looks up `strat_column.get_formation(name)` per interval → `effective_conductivity_column` (Athy + geometric-mean mixing) → effective k baked into `thermal_conductivity` field; `_column_mean_conductivity` (harmonic mean) for scalar-k solvers; session-level per-formation k override via `_ConductivityProfileDialog`; `_k_source_label` shows provenance; fallback to spinbox when no picks |
+| Step 7 — Honesty + calibration pass | **COMPLETE** | this commit | "Tools →" → correct menu path in all docstrings; `docs/thermal_readiness.md` updated; full-workflow integration smoke test added |
 
 ---
 
-## 2. Target capability assessment (Section's thermochronology scope)
+## 2. Honesty record
 
-| Target capability | Status | What it needs |
+### Labels that were changed (Step 3)
+
+| Model | Old label (false claim) | New label (honest) |
 |---|---|---|
-| Geothermal gradient / heat-flow model | **REAL** | use it (and feed conductivity from the lithology library) |
-| Burial/exhumation history from the section | **PARTIAL / disconnected** | `decompaction.burial_history` (stratigraphic) and the restoration sequence (structural) both exist; **neither is wired to thermal** — the seam is the work |
-| Forward thermal model T(t) at a point | **ENGINE REAL, fed fake input** | `transient_1d_heat` works; replace the dialog's synthetic burial with real burial → sample-point T(t) |
-| Easy%Ro (vitrinite, Sweeney-Burnham) | **REAL** | benchmark-validate the normalization |
-| AFT (Ketcham 2007) | **SIMPLIFIED / mislabeled** | relabel as an Arrhenius proxy now; real Ketcham07 is a deferred research item |
-| AHe (Farley 2000) | **SIMPLIFIED** | single-domain proxy; RDAAM (Flowers 2009) deferred |
-| ZHe | **SIMPLIFIED** | single-domain; ZRDAAM deferred |
-| Uncertainty / Monte Carlo | **REAL (basic)** | feed it real observations; MCMC is a later upgrade |
-| Display: T-t path | **REAL** (inverse mode) | — |
-| Display: depth-T profile | **REAL** (steady/transient) | — |
-| Display: age-depth | **MISSING** | needs measurements loaded |
-| Display: predicted vs observed | **MISSING** | needs measurements loaded + forward model wired |
+| `aft_age` | `"Ketcham07"` (docstring + default arg) | `"AFT age (simplified, single-Arrhenius)"` |
+| `ahe_age` | "Farley (2000)" in docstring | `"AHe age (simplified, single-domain)"` |
+| `zhe_age` | implied ZRDAAM in docstring | `"ZHe age (simplified, single-domain)"` |
+
+### What the labels now say
+
+```python
+KINETIC_MODEL_LABELS = {
+    "easy_ro": "Easy%Ro (Sweeney-Burnham 1990)",          # benchmarked + verified
+    "aft":     "AFT age (simplified, single-Arrhenius)",   # proxy, NOT Ketcham 2007
+    "ahe":     "AHe age (simplified, single-domain)",      # proxy, NOT RDAAM
+    "zhe":     "ZHe age (simplified, single-domain)",      # proxy, NOT ZRDAAM
+}
+```
+
+`KINETIC_MODEL_NOTES` carries the full disclaimer for tooltip display.
+
+### Test that guards label honesty
+
+`tests/test_thermal_forward.py::test_kinetic_labels_dont_claim_unimplemented_models`
+and `test_no_false_model_claims_in_display_layer` (runs against all `views/*.py`).
+
+### Easy%Ro benchmark result (Step 3)
+
+`maturity_easy_ro` is verified correct against Sweeney & Burnham (1990):
+
+| Condition | Computed %Ro | Expected | Result |
+|---|---|---|---|
+| 50 °C / 100 Ma | 0.28 | immature (< 0.5) | PASS |
+| 100 °C / 100 Ma | 0.62 | oil window (0.5–0.9) | PASS |
+| 150 °C / 100 Ma | 1.08 | late-oil / gas (1.0–1.3) | PASS |
+| 200 °C / 100 Ma | 4.69 | post-mature (> 2) | PASS |
+
+The ΣF0 ≈ 0.85 weighting is correct per the Sweeney-Burnham paper (not a bug).
 
 ---
 
-## 3. Integration seams
+## 3. Integration seams (as implemented)
 
-| Seam | Status | Detail |
+| Seam | Status | Implementation |
 |---|---|---|
-| **Restoration → thermal** (palinspastic burial through time) | **DISCONNECTED** | the transient mode hardcodes burial; no thermal code consumes restoration output |
-| **Decompaction → thermal** (burial history) | **DISCONNECTED** | `burial_history` is real but unused by the solver |
-| **Wells → column** (formation tops) | **CONNECTED (crude)** | nearest-well-by-map-distance → layers (`_build_layers`); fixed k + heat_production=1 |
-| **Wells → observations** (thermochron / BHT) | **MISSING SEAM** | `measurements` table + CRUD exist but are orphaned; dialog fabricates a synthetic obs instead |
-| **Lithology → conductivity** | **DISCONNECTED** | `matrix_thermal_conductivity` library + `effective_conductivity_column` exist but go unused |
-| **Section geometry → point/column** | **CONNECTED (crude)** | distance-along → nearest well; no true column extraction at an arbitrary point |
-| **Units / provenance** | **OK, document** | display in °C, depth m, heat flow mW/m²; kinetics convert to K internally (`+273.15`). No provenance stamping on thermal results yet |
+| **Restoration → thermal** (palinspastic burial) | **WIRED** | `burial_history_from_restoration(seq, horizon_uuid, x, snapshot=snap)` in `core/burial.py`; `_current_burial_history()` in dialog consumes restoration sequence or manual fallback |
+| **Wells → observations** | **WIRED** | `Well.measurements`; `_sample_measurements()` → nearest well; `goodness_of_fit(t_path, measurements)` for chi-squared |
+| **Wells → observations → inverse** | **WIRED** | `_inverse_observations()` maps `vitrinite_ro→Ro`, `aft_age→AFT`, `ahe_age→AHe`, `zhe_age→ZHe`; BHT/DST skipped (not t-T constraints) |
+| **Lithology → conductivity** | **WIRED** | `_build_layers()` calls `strat_column.get_formation(name)` → `effective_conductivity_column`; harmonic mean for scalar-k solvers |
+| **Off-thread work** | **IMPLEMENTED** | inverse search: daemon thread + `inverse_finished = Signal(object)`; pattern mirrors DEM fetch |
 
 ---
 
-## 4. Recommended build order (today → working end-to-end thermal history)
+## 4. Deferred (research-grade, not in scope)
 
-The physics is largely done; the arc is **wiring real inputs/outputs around it**.
-
-1. **Load + enter observed data.** Wire the `measurements` table into the live
-   model (e.g. `Well.measurements`), add a minimal import/entry UI, and
-   load/save through `app_state`. Unblocks every observed-vs-predicted step.
-2. **Wire burial history into the transient solver.** Replace the dialog's
-   fabricated `bh` with `decompaction.burial_history` (stratigraphic) and/or the
-   restoration sequence's palinspastic depths — **the restoration↔thermal seam**.
-3. **Forward T(t) at a sample point.** Compose real burial + geotherm →
-   temperature history at a measurement's depth → drive Easy%Ro / AFT / AHe.
-   End-to-end forward model (Easy%Ro is the simplest, most-trusted start).
-4. **Predicted-vs-observed display.** Overlay modeled Ro/ages against the well's
-   loaded measurements (age-depth + maturity-depth) — the audit moment.
-5. **Inverse with real observations.** Feed the well's measurements into
-   `monte_carlo_search` instead of the synthetic obs; show the t-T envelope
-   against the constraints.
-6. **Conductivity from lithology.** Use `effective_conductivity_column` + the
-   lithology library instead of a single spinbox k.
-7. **Honesty + calibration pass.** Relabel `aft_age` (it is not Ketcham07);
-   benchmark-validate Easy%Ro and the He proxies; fix the "Tools →" docstring.
-
-Each step is independently testable; steps 1–2 are the load-bearing plumbing.
+- **True Ketcham 2007 AFT**: c-axis-projected, Dpar-dependent multi-kinetic annealing (the full HeFTy model). The current `aft_age` is a single first-order Arrhenius (honest label, clearly disclosed).
+- **RDAAM / ZRDAAM**: radiation-damage He diffusion (Flowers 2009 / Reiners). The current `ahe_age`/`zhe_age` are single-domain spherical diffusion with fixed Ft=0.79. Clearly labeled as proxies.
+- **QTQt-style MCMC**: controlled random walk with Bayesian acceptance. The current `monte_carlo_search` is uniform-random uniform sampling with χ²/obs threshold acceptance.
+- **2D/3D thermal (Pecube-like)**: lateral heat flow and 3D topographic effects. All current solvers are 1D vertical.
+- **Grain-size-dependent Ft**: the alpha-ejection correction uses a fixed Ft=0.79 (grain-size independent).
+- **Fluid-saturation / pressure corrections** to thermal conductivity.
 
 ---
 
-## 5. Scope: 75% first arc vs research-grade (deferred)
+## 5. Original pre-build inventory (for historical reference)
 
-**75% first arc (achievable, mostly wiring):** geotherm + Easy%Ro +
-transient-from-*real*-burial + basic MC inverse + predicted-vs-observed display,
-with the simplified AFT/AHe/ZHe proxies **clearly labeled as first-order**. The
-real work is steps 1–5 (measurements wired, burial wired, forward model composed,
-display, inverse-on-real-data) — not new kinetics.
+The pre-build state of each item and why it needed work is preserved below
+for context. Current state as-built is in §1 above.
 
-**Research-grade / deferred (real algorithms, significant effort):**
-- True **Ketcham 2007** c-axis-projected, Dpar-dependent multi-kinetic AFT
-  annealing (the actual HeFTy model) + real track-length annealing.
-- **RDAAM** (Flowers 2009) / **ZRDAAM** radiation-damage He diffusion (replacing
-  the single-domain proxies).
-- **QTQt-style MCMC** inversion (controlled random walk, Bayesian) replacing
-  uniform random sampling.
-- 2D/3D thermal (Pecube-like) and lateral heat flow — currently 1D only.
-
-**Honest flag for the build:** the codebase advertises "Ketcham07" and
-"Farley 2000" as if the full models are present. Two of those are first-order
-proxies. The first build step's relabel (step 7) prevents the interface from
-lying about what the numbers are.
+| Item | Pre-build status | Notes |
+|---|---|---|
+| `steady_state_geotherm` | REAL | unchanged |
+| `effective_conductivity_column` | REAL but UNUSED | now wired (Step 6) |
+| `maturity_easy_ro` | REAL (verify calibration) | verified CORRECT (Step 3) |
+| `transient_1d_heat` | REAL | now fed real burial (Step 2) |
+| `aft_age` | REAL-SIMPLIFIED / MISLABELED | relabeled (Step 3) |
+| `ahe_age` / `zhe_age` | REAL-SIMPLIFIED | relabeled (Step 3) |
+| `monte_carlo_search` | REAL but fed synthetic obs | wired to real data (Step 5) |
+| `measurements` table | REAL schema, ORPHANED | wired (Step 1) |
+| lithology k library | REAL but DISCONNECTED | wired (Step 6) |
+| `ThermalModelingDialog` | DEMO (fabricated burial + obs) | fully wired (Steps 2–6) |

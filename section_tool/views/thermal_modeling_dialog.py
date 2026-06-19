@@ -1,6 +1,6 @@
 """Thermal modeling dialog.
 
-Accessible via Tools → Thermal Modeling.  Runs steady-state, transient,
+Accessible via Model ▸ Thermal Modeling.  Runs steady-state, transient,
 or inverse thermal models at a chosen position along the active section
 and displays the results in a matplotlib canvas.
 

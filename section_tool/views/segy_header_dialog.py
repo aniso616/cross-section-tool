@@ -109,7 +109,7 @@ def _decode_text_header(raw_bytes: bytes) -> str:
 class SEGYHeaderDialog(QDialog):
     """Three-tab SEG-Y header inspector: text header, binary header, trace headers.
 
-    Can be used as a standalone viewer (Tools → View SEG-Y Header) or embedded
+    Can be used as a standalone viewer (Convert ▸ View SEG-Y Header) or embedded
     in the import workflow.
     """
 
