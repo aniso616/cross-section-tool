@@ -26,6 +26,7 @@ def monte_carlo_search(
     n_paths: int = 10_000,
     n_inflection_points: int = 5,
     acceptance_threshold: float = 2.0,
+    seed: int | None = None,
 ) -> list[dict]:
     """Run a Monte Carlo search for acceptable thermal histories.
 
@@ -69,7 +70,7 @@ def monte_carlo_search(
     T_lo,  T_hi    = min(temp_bounds_C),  max(temp_bounds_C)
     n_obs = len(observations)
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
 
     for _ in range(n_paths):
         # Interior inflection points plus oldest endpoint

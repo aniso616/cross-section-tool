@@ -18,7 +18,7 @@ Inverse
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -49,6 +49,10 @@ class ThermalModelingDialog(QDialog):
     parent:
         Qt parent widget.
     """
+
+    # Emitted (cross-thread, queued) when the off-thread Monte Carlo inverse
+    # finishes. Payload: {"paths": [...], "n_obs": int} or {"error": str}.
+    inverse_finished = Signal(object)
 
     def __init__(self, app_state, section, parent=None) -> None:
         super().__init__(parent)
@@ -191,6 +195,9 @@ class ThermalModelingDialog(QDialog):
         self._ax.invert_yaxis()
         self._ax.set_title("Thermal model — press Run to compute")
         self._canvas.draw()
+
+        self._inverse_thread = None
+        self.inverse_finished.connect(self._on_inverse_done)
 
     # ------------------------------------------------------------------
     # Slots
@@ -424,52 +431,140 @@ class ThermalModelingDialog(QDialog):
         self._ax.legend(fontsize=7)
         self._canvas.draw()
 
+    def _inverse_observations(self) -> list[dict]:
+        """Map the REAL measurements at the sample point to inverse observations.
+
+        Each thermochronometric type the forward kinetics can predict (Ro, AFT,
+        AHe, ZHe) becomes a χ² constraint with its 1-σ uncertainty (a typed
+        default when none is recorded). A type with no measurement simply doesn't
+        contribute — graceful, no fabrication. BHT/DST temperatures are not t-T
+        path constraints in this objective, so they're skipped."""
+        from section_tool.core.thermochron_fit import _default_uncertainty
+        type_map = {"vitrinite_ro": "Ro", "aft_age": "AFT",
+                    "ahe_age": "AHe", "zhe_age": "ZHe"}
+        obs: list[dict] = []
+        for m in self._sample_measurements():
+            obs_type = type_map.get(m.measurement_type)
+            if obs_type is None:
+                continue
+            unc = (getattr(m, "uncertainty", None)
+                   or _default_uncertainty(m.measurement_type, m.value))
+            obs.append({"type": obs_type, "value": float(m.value),
+                        "uncertainty": float(unc)})
+        return obs
+
     def _run_inverse(self) -> None:
-        """Run Monte Carlo inverse search."""
-        from section_tool.core.thermal_inverse import good_paths_envelope, monte_carlo_search
-        from section_tool.core.thermal import aft_age
+        """Monte Carlo inverse on the REAL measurements at the sample point.
+
+        The χ² objective is built from the observed Ro / AFT / AHe / ZHe (each
+        with its uncertainty) — no fabricated observation. The search runs OFF
+        the UI thread (same pattern as the DEM fetch); the result is delivered
+        back to the main thread via :attr:`inverse_finished`."""
+        import threading
+
+        observations = self._inverse_observations()
+        if not observations:
+            QMessageBox.information(
+                self, "Inverse model",
+                "No thermochronometric measurements at this sample point.\n\n"
+                "Enter observed Ro, AFT, AHe or ZHe data (Measurements…) on the "
+                "nearest well, then run the inverse.")
+            return
+
+        n_paths   = self._n_paths.value()
+        n_inflect = self._n_inflect.value()
+        threshold = self._threshold.value()
+
+        self._ax.clear()
+        self._ax.text(0.5, 0.5, f"Searching {n_paths} t–T paths…",
+                      transform=self._ax.transAxes, ha="center", va="center",
+                      fontsize=11, color="#666")
+        self._ax.set_title("Inverse t–T — running…")
+        self._canvas.draw()
+        self._run_btn.setEnabled(False)
+        self._flash_status(
+            f"Inverse: searching {n_paths} t–T paths against "
+            f"{len(observations)} observation(s)…")
+
+        def _work():
+            from section_tool.core.thermal_inverse import monte_carlo_search
+            try:
+                paths = monte_carlo_search(
+                    observations,
+                    time_bounds_ma=(100.0, 0.0),
+                    temp_bounds_C=(10.0, 180.0),
+                    n_paths=n_paths,
+                    n_inflection_points=n_inflect,
+                    acceptance_threshold=threshold)
+                self.inverse_finished.emit(
+                    {"paths": paths, "n_obs": len(observations)})
+            except Exception as exc:               # delivered to the UI thread
+                self.inverse_finished.emit({"error": str(exc)})
+
+        t = threading.Thread(target=_work, daemon=True)
+        self._inverse_thread = t
+        t.start()
+
+    def _on_inverse_done(self, result: dict) -> None:
+        """Main-thread slot: render the inverse result (queued from the worker)."""
+        self._run_btn.setEnabled(True)
+        if "error" in result:
+            self._flash_status(f"Inverse failed — {result['error']}")
+            QMessageBox.warning(self, "Inverse model", result["error"])
+            return
+        paths = result["paths"]
+        self._plot_inverse_envelope(paths, result["n_obs"])
+        self._flash_status(
+            f"Inverse: {len(paths)} acceptable t–T path(s) found.")
+
+    def _plot_inverse_envelope(self, paths, n_obs: int) -> None:
+        """Shaded P5–P95 envelope of acceptable T(t) paths + best-fit (min-χ²) line.
+
+        Present at LEFT (0 Ma), past at right; temperature increases downward."""
+        from section_tool.core.thermal_inverse import good_paths_envelope
         import numpy as np
-
-        # Build a simple synthetic observation from the current geotherm
-        # (in a real workflow the user would enter measured ages)
-        synthetic_aft = aft_age(
-            np.array([20.0, 120.0, 20.0]),
-            np.array([100.0, 50.0, 0.0]),
-        )
-
-        observations = [
-            {"type": "AFT", "value": synthetic_aft, "uncertainty": max(synthetic_aft * 0.15, 5.0)},
-        ]
-
-        paths = monte_carlo_search(
-            observations,
-            time_bounds_ma=(100.0, 0.0),
-            temp_bounds_C=(10.0, 180.0),
-            n_paths=self._n_paths.value(),
-            n_inflection_points=self._n_inflect.value(),
-            acceptance_threshold=self._threshold.value(),
-        )
 
         self._ax.clear()
         time_grid = np.linspace(100.0, 0.0, 100)
-
         if paths:
-            t_min, t_max, t_mean = good_paths_envelope(paths, time_grid)
-            self._ax.fill_between(time_grid, t_min, t_max,
-                                  alpha=0.3, color="#4488cc",
-                                  label=f"P5–P95 ({len(paths)} paths)")
-            self._ax.plot(time_grid, t_mean, "b-", lw=2, label="Mean")
+            p5, p95, _mean = good_paths_envelope(paths, time_grid)
+            # Honest label: this is the spread of ACCEPTED paths, not a formal
+            # confidence interval (the proper statement needs full MCMC).
+            self._ax.fill_between(
+                time_grid, p5, p95, alpha=0.30, color="#4488cc",
+                label=f"P5–P95 range of acceptable T(t) paths (N={len(paths)})")
+            best = min(paths, key=lambda p: p["chi_squared"])
+            self._ax.plot(
+                best["ages"], best["temps"], "-", color="#cc3333", lw=2,
+                label=f"Best fit (χ²/obs = {best['chi_squared']:.2f})")
         else:
-            self._ax.text(50, 100, "No acceptable paths found.\nTry loosening the threshold.",
-                          ha="center", va="center", fontsize=11, color="red")
+            self._ax.text(
+                0.5, 0.5,
+                "No acceptable paths found.\nTry loosening the χ²/obs threshold.",
+                transform=self._ax.transAxes, ha="center", va="center",
+                fontsize=11, color="#cc3333")
 
-        self._ax.invert_xaxis()
-        self._ax.set_xlabel("Time (Ma)")
+        self._ax.set_xlim(0.0, time_grid.max())        # present (0 Ma) at left
+        self._ax.set_xlabel("Time (Ma) — present at left")
         self._ax.set_ylabel("Temperature (°C)")
-        self._ax.set_title(f"Inverse model — {len(paths)} accepted paths")
+        if not self._ax.yaxis_inverted():
+            self._ax.invert_yaxis()                    # temperature increases down
+        title = (f"Inverse t–T — {len(paths)} acceptable paths, "
+                 f"{n_obs} observation(s)" if paths
+                 else "Inverse t–T — no acceptable paths")
+        self._ax.set_title(title)
         if paths:
-            self._ax.legend()
+            self._ax.legend(fontsize=8)
         self._canvas.draw()
+
+    def _flash_status(self, msg: str) -> None:
+        """Route progress to the main window's status strip, if reachable."""
+        fn = getattr(self.parent(), "_flash_status", None)
+        if callable(fn):
+            try:
+                fn(msg)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Helpers

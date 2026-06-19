@@ -910,6 +910,76 @@ class TestThermalBurialSeam:
         assert any(ln.get_linestyle() == "--" for ln in dlg._ax.get_lines())
 
 
+class TestThermalInverse:
+    """Real-MainWindow: the Monte Carlo inverse runs on the REAL measurements at
+    the sample point, off the UI thread, and renders the P5–P95 envelope."""
+
+    def _dialog_with_measurements(self, win, state, measurements):
+        from section_tool.core.section import Section
+        from section_tool.core.wells import Well
+        from section_tool.views.thermal_modeling_dialog import ThermalModelingDialog
+
+        sec = Section([(0.0, 0.0), (1000.0, 0.0)], name="L1", crs_epsg=32631)
+        state.add_section(sec)
+        state.set_active_section(sec)
+        well = Well("W1", 500.0, 0.0, td=2000.0)
+        for m in measurements:
+            well.add_measurement(m)
+        state.add_well(well)
+        dlg = ThermalModelingDialog(state, sec, parent=win)
+        dlg._dist_spin.setValue(500.0)
+        dlg._mode_combo.setCurrentIndex(2)        # Inverse (MC)
+        return dlg
+
+    def test_real_measurements_wire_into_observations(self, win, state):
+        from section_tool.core.measurements import Measurement
+        dlg = self._dialog_with_measurements(win, state, [
+            Measurement(depth_m=1500.0, measurement_type="vitrinite_ro",
+                        value=0.8, uncertainty=0.1, units="%Ro"),
+            Measurement(depth_m=1500.0, measurement_type="aft_age",
+                        value=55.0, uncertainty=5.0, units="Ma"),
+            Measurement(depth_m=1500.0, measurement_type="bht",       # not a t-T
+                        value=70.0, uncertainty=5.0, units="°C"),     # constraint
+        ])
+        obs = dlg._inverse_observations()
+        types = {o["type"] for o in obs}
+        assert types == {"Ro", "AFT"}            # BHT skipped, real values mapped
+        ro = next(o for o in obs if o["type"] == "Ro")
+        assert ro["value"] == 0.8 and ro["uncertainty"] == 0.1
+
+    def test_no_measurements_is_graceful(self, win, state, monkeypatch):
+        from section_tool.views import thermal_modeling_dialog as tmd
+        dlg = self._dialog_with_measurements(win, state, [])   # no measurements
+        shown = {}
+        monkeypatch.setattr(tmd.QMessageBox, "information",
+                            lambda *a, **k: shown.setdefault("msg", a[-1]))
+        dlg._run_inverse()
+        assert "No thermochronometric measurements" in shown["msg"]
+        assert dlg._inverse_thread is None       # nothing launched off-thread
+
+    def test_inverse_runs_off_thread_and_plots_envelope(self, win, state, qapp):
+        from section_tool.core.measurements import Measurement
+        dlg = self._dialog_with_measurements(win, state, [
+            Measurement(depth_m=1500.0, measurement_type="aft_age",
+                        value=55.0, uncertainty=8.0, units="Ma"),
+        ])
+        dlg._n_paths.setValue(800)               # keep the smoke test quick
+        dlg._threshold.setValue(5.0)             # loose → some paths accepted
+        dlg._run_inverse()
+
+        assert dlg._inverse_thread is not None    # work dispatched to a worker
+        dlg._inverse_thread.join(timeout=30)
+        assert not dlg._inverse_thread.is_alive()
+        qapp.processEvents()                      # deliver the queued result signal
+
+        assert dlg._run_btn.isEnabled()           # re-enabled by the done slot
+        assert "Inverse t–T" in dlg._ax.get_title()
+        # The envelope is labelled honestly — a range of acceptable paths, not a CI.
+        labels = [t.get_text() for t in dlg._ax.get_legend().get_texts()] \
+            if dlg._ax.get_legend() else []
+        assert any("P5–P95 range of acceptable T(t) paths" in s for s in labels)
+
+
 class TestRestorationWorkflowEndToEnd:
     """Real-MainWindow: interpretation → pin/datum → event(algorithm) → capture →
     step → ghost overlay → Balance Check measures deformed-vs-RESTORED."""
